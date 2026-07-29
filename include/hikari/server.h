@@ -1,3 +1,5 @@
+/* ##Script function and purpose: Defines the main hikari_server struct and lifecycle function prototypes for the Wayland compositor. */
+
 #if !defined(HIKARI_SERVER_H)
 #define HIKARI_SERVER_H
 
@@ -34,7 +36,9 @@ struct wlr_input_device;
 struct hikari_output;
 struct hikari_group;
 
+/* ##Class purpose: Represents the central hikari Wayland compositor server instance, holding display, backend, mode, and view layout state. */
 struct hikari_server {
+
   bool cycling;
 #ifndef NDEBUG
   bool track_damage;

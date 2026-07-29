@@ -1,3 +1,5 @@
+/* ##Script function and purpose: Entrypoint for the hikari Wayland compositor, managing configuration paths, command line options, and server initialization. */
+
 #include <assert.h>
 #include <stdlib.h>
 #include <sys/stat.h>
@@ -11,18 +13,21 @@
 
 #include <wlr/backend.h>
 #include <wlr/render/allocator.h>
-#include <wlr/types/wlr_subcompositor.h>
 #include <wlr/types/wlr_data_device.h>
 #include <wlr/types/wlr_seat.h>
+#include <wlr/types/wlr_subcompositor.h>
 
 #include "version.h"
 
+/* ##Function purpose: Resolves the default configuration or autostart path relative to user environment variables. */
 static char *
 get_default_path(char *path)
 {
+  /* ##Step purpose: Retrieve XDG_CONFIG_HOME or fallback to HOME directory. */
   char *prefix = getenv("XDG_CONFIG_HOME");
   char *subdirectory;
 
+  /* ##Condition purpose: Check if XDG_CONFIG_HOME is set in environment. */
   if (prefix == NULL) {
     prefix = getenv("HOME");
     subdirectory = "/.config/hikari/";
@@ -30,10 +35,12 @@ get_default_path(char *path)
     subdirectory = "/hikari/";
   }
 
+  /* ##Step purpose: Allocate memory for concatenated path string. */
   size_t len = strlen(prefix) + strlen(subdirectory) + strlen(path);
 
   char *ret = malloc(len + 1);
 
+  /* ##Step purpose: Copy prefix, subdirectory, and filename to return buffer. */
   strcpy(ret, prefix);
   strcat(ret, subdirectory);
   strcat(ret, path);
@@ -41,12 +48,14 @@ get_default_path(char *path)
   return ret;
 }
 
+/* ##Function purpose: Gets the user autostart script path. */
 static char *
 get_user_autostart(void)
 {
   return get_default_path("autostart");
 }
 
+/* ##Function purpose: Gets the user configuration file path. */
 static char *
 get_user_config_path(void)
 {
@@ -57,6 +66,7 @@ get_user_config_path(void)
 #define DEFAULT_CONFIG(s) STR(s) "/etc/hikari/hikari.conf"
 #define DEFAULT_CONFIG_FILE DEFAULT_CONFIG(HIKARI_ETC_PREFIX)
 
+/* ##Function purpose: Returns the default system-wide configuration path. */
 static char *
 get_default_config_path(void)
 {
@@ -67,6 +77,7 @@ get_default_config_path(void)
 #undef DEFAULT_CONFIG
 #undef DEFAULT_CONFIG_FILE
 
+/* ##Function purpose: Checks if a regular file exists and has specified access mode. */
 static bool
 check_perms(char *path, int mode)
 {
@@ -74,11 +85,13 @@ check_perms(char *path, int mode)
   return stat(path, &s) == 0 && S_ISREG(s.st_mode) && !access(path, mode);
 }
 
+/* ##Function purpose: Validates path accessibility and frees buffer if inaccessible. */
 static char *
 check_path(char *path, int mode)
 {
   char *check = path;
 
+  /* ##Condition purpose: Verify file permissions against requested mode. */
   if (!check_perms(check, mode)) {
     free(path);
     check = NULL;
@@ -87,11 +100,13 @@ check_path(char *path, int mode)
   return check;
 }
 
+/* ##Function purpose: Resolves the active configuration path from CLI option, user config, or system default. */
 static char *
 get_config_path(char *path)
 {
   char *config;
 
+  /* ##Condition purpose: Select configuration source based on CLI parameter presence. */
   if (path != NULL) {
     char *option_config = check_path(path, R_OK);
 
@@ -99,6 +114,7 @@ get_config_path(char *path)
   } else {
     char *user_config = check_path(get_user_config_path(), R_OK);
 
+    /* ##Condition purpose: Fallback to system default configuration if user configuration is unavailable. */
     if (user_config == NULL) {
       char *default_config = check_path(get_default_config_path(), R_OK);
 
@@ -111,12 +127,14 @@ get_config_path(char *path)
   return config;
 }
 
+/* ##Function purpose: Resolves the executable autostart path. */
 static char *
 get_autostart(char *path)
 {
   char *autostart;
   int mode = R_OK | X_OK;
 
+  /* ##Condition purpose: Check if CLI autostart option was provided. */
   if (path != NULL) {
     char *option_autostart = check_path(path, mode);
 
@@ -139,11 +157,13 @@ const char *usage = "Usage: hikari [options]\n"
                     "  -v              Show version and quit.\n"
                     "\n";
 
+/* ##Class purpose: Holds command line options parsed during invocation. */
 struct options {
   char *config_path;
   char *autostart;
 };
 
+/* ##Function purpose: Parses command line flags and resolves options structure. */
 static void
 parse_options(int argc, char **argv, struct options *options)
 {
@@ -151,7 +171,9 @@ parse_options(int argc, char **argv, struct options *options)
   char *autostart = NULL;
 
   char flag;
+  /* ##Loop purpose: Process CLI flags using getopt. */
   while ((flag = getopt(argc, argv, "vhc:a:")) != -1) {
+    /* ##Condition purpose: Switch on command line flag character. */
     switch (flag) {
       case 'a':
         free(autostart);
@@ -194,6 +216,7 @@ parse_options(int argc, char **argv, struct options *options)
   options->autostart = get_autostart(autostart);
 }
 
+/* ##Function purpose: Main entrypoint for launching hikari Wayland compositor. */
 int
 main(int argc, char **argv)
 {
@@ -203,21 +226,27 @@ main(int argc, char **argv)
   struct options options;
   parse_options(argc, argv, &options);
 
+  /* ##Condition purpose: Check if configuration file path was resolved successfully. */
   if (options.config_path == NULL) {
     free(options.autostart);
 
+    /* ##Error purpose: Report configuration load failure to stderr. */
     fprintf(stderr, "could not load configuration\n");
 
     return EXIT_FAILURE;
   } else {
+    /* ##Action purpose: Prepare backend security context and drop root privileges. */
     hikari_server_prepare_privileged();
 
+    /* ##Error purpose: Assert non-root execution context. */
     assert(geteuid() != 0 && geteuid() == getuid());
     assert(getegid() != 0 && getegid() == getgid());
 
+    /* ##Action purpose: Start hikari Wayland server event loop. */
     hikari_server_start(options.config_path, options.autostart);
     hikari_server_stop();
 
     return EXIT_SUCCESS;
   }
 }
+

@@ -1,11 +1,13 @@
+/* ##Script function and purpose: Abstract view interface definitions and view management operations for windows and surfaces in hikari. */
+
 #if !defined(HIKARI_VIEW_H)
 #define HIKARI_VIEW_H
 
 #include <assert.h>
 
 #include <wayland-util.h>
-#include <wlr/types/wlr_output.h>
 #include <wlr/types/wlr_compositor.h>
+#include <wlr/types/wlr_output.h>
 #include <wlr/util/box.h>
 
 #include <hikari/border.h>
@@ -25,13 +27,16 @@ struct hikari_renderer;
 
 struct hikari_view;
 
+/* ##Class purpose: Manages client-side vs server-side window decoration bindings for a view. */
 struct hikari_view_decoration {
   struct wlr_server_decoration *wlr_decoration;
   struct hikari_view *view;
   struct wl_listener mode;
 };
 
+/* ##Class purpose: Base representation of a managed window view, encapsulating surface state, geometry, sheet, group, mark, and tile associations. */
 struct hikari_view {
+
   struct hikari_node node;
   struct hikari_sheet *sheet;
   struct hikari_group *group;

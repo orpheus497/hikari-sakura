@@ -152,6 +152,11 @@ LIBINPUT_LIBS != ${PKG_CONFIG} --libs libinput
 UCL_CFLAGS != ${PKG_CONFIG} --cflags libucl
 UCL_LIBS != ${PKG_CONFIG} --libs libucl
 
+.if ${OS} == "FreeBSD"
+EPOLL_SHIM_CFLAGS != ${PKG_CONFIG} --cflags epoll-shim 2>/dev/null || true
+EPOLL_SHIM_LIBS != ${PKG_CONFIG} --libs epoll-shim 2>/dev/null || true
+.endif
+
 CFLAGS += \
 	${WLROOTS_CFLAGS} \
 	${PANGO_CFLAGS} \
@@ -160,7 +165,8 @@ CFLAGS += \
 	${XKBCOMMON_CFLAGS} \
 	${WAYLAND_CFLAGS} \
 	${LIBINPUT_CFLAGS} \
-	${UCL_CFLAGS}
+	${UCL_CFLAGS} \
+	${EPOLL_SHIM_CFLAGS}
 
 LIBS = \
 	${WLROOTS_LIBS} \
@@ -170,7 +176,8 @@ LIBS = \
 	${XKBCOMMON_LIBS} \
 	${WAYLAND_LIBS} \
 	${LIBINPUT_LIBS} \
-	${UCL_LIBS}
+	${UCL_LIBS} \
+	${EPOLL_SHIM_LIBS}
 
 PROTOCOL_HEADERS = xdg-shell-protocol.h
 
