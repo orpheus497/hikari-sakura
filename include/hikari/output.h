@@ -21,6 +21,7 @@ struct hikari_output {
   struct hikari_server *server;
   struct wlr_output *wlr_output;
   struct wlr_scene_output *scene_output;
+  struct wlr_scene_buffer *lock_indicator_node;
   struct hikari_workspace *workspace;
 
   bool enabled;
@@ -43,7 +44,7 @@ struct hikari_output {
   struct wlr_box geometry;
   struct wlr_box usable_area;
 
-  struct wlr_texture *background;
+  struct wlr_scene_buffer *background;
 };
 
 void

@@ -2,15 +2,35 @@
 
 #include <assert.h>
 
-#include <wlr/render/wlr_renderer.h>
-#include <wlr/types/wlr_matrix.h>
+
+
 #include <wlr/types/wlr_output.h>
 
 #include <hikari/color.h>
 #include <hikari/configuration.h>
 #include <hikari/node.h>
 #include <hikari/output.h>
-#include <hikari/renderer.h>
+
+
+void
+hikari_border_init(struct hikari_border *border, struct wlr_scene_tree *parent)
+{
+  float color[4] = {0, 0, 0, 0}; // Transparent initially
+  border->top = wlr_scene_rect_create(parent, 0, 0, color);
+  border->bottom = wlr_scene_rect_create(parent, 0, 0, color);
+  border->left = wlr_scene_rect_create(parent, 0, 0, color);
+  border->right = wlr_scene_rect_create(parent, 0, 0, color);
+
+  wlr_scene_node_lower_to_bottom(&border->top->node);
+  wlr_scene_node_lower_to_bottom(&border->bottom->node);
+  wlr_scene_node_lower_to_bottom(&border->left->node);
+  wlr_scene_node_lower_to_bottom(&border->right->node);
+
+  wlr_scene_node_set_enabled(&border->top->node, false);
+  wlr_scene_node_set_enabled(&border->bottom->node, false);
+  wlr_scene_node_set_enabled(&border->left->node, false);
+  wlr_scene_node_set_enabled(&border->right->node, false);
+}
 
 void
 hikari_border_refresh_geometry(

@@ -5,7 +5,7 @@
 #include <wlr/types/wlr_pointer.h>
 
 struct hikari_keyboard;
-struct hikari_renderer;
+
 struct hikari_cursor;
 
 struct hikari_mode {
@@ -21,7 +21,7 @@ struct hikari_mode {
 
   void (*cancel)(void);
 
-  void (*render)(struct hikari_renderer *renderer);
+
 };
 
 #endif

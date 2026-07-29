@@ -7,7 +7,7 @@
 #include <hikari/indicator_frame.h>
 #include <hikari/keyboard.h>
 #include <hikari/normal_mode.h>
-#include <hikari/renderer.h>
+
 #include <hikari/sheet.h>
 #include <hikari/view.h>
 #include <hikari/workspace.h>
@@ -213,7 +213,7 @@ hikari_sheet_assign_mode_init(
   sheet_assign_mode->mode.key_handler = key_handler;
   sheet_assign_mode->mode.button_handler = button_handler;
   sheet_assign_mode->mode.modifiers_handler = modifiers_handler;
-  sheet_assign_mode->mode.render = hikari_renderer_sheet_assign_mode;
+
   sheet_assign_mode->mode.cancel = cancel;
   sheet_assign_mode->mode.cursor_move = cursor_move;
   sheet_assign_mode->sheet = NULL;

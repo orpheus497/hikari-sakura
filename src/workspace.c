@@ -4,9 +4,9 @@
 #include <stdlib.h>
 
 #include <wlr/backend.h>
-#include <wlr/render/wlr_renderer.h>
+
 #include <wlr/render/wlr_texture.h>
-#include <wlr/types/wlr_matrix.h>
+
 #ifdef HAVE_XWAYLAND
 #include <wlr/xwayland.h>
 #endif

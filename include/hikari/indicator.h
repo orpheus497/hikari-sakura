@@ -38,7 +38,7 @@ hikari_indicator_update_sheet(struct hikari_indicator *indicator,
     unsigned long flags);
 
 void
-hikari_indicator_damage(
+hikari_indicator_position(
     struct hikari_indicator *indicator, struct hikari_view *view);
 
 #define UPDATE(name)                                                           \

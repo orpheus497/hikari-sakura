@@ -18,7 +18,7 @@
 #include <hikari/keyboard.h>
 #include <hikari/lock_indicator.h>
 #include <hikari/output.h>
-#include <hikari/renderer.h>
+
 #include <hikari/server.h>
 #include <hikari/utf8.h>
 #include <hikari/view.h>
@@ -311,7 +311,7 @@ hikari_lock_mode_init(struct hikari_lock_mode *lock_mode)
   lock_mode->mode.key_handler = key_handler;
   lock_mode->mode.button_handler = button_handler;
   lock_mode->mode.modifiers_handler = modifiers_handler;
-  lock_mode->mode.render = hikari_renderer_lock_mode;
+
   lock_mode->mode.cancel = cancel;
   lock_mode->mode.cursor_move = cursor_move;
 

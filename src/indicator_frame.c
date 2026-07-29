@@ -2,15 +2,15 @@
 
 #include <assert.h>
 
-#include <wlr/render/wlr_renderer.h>
-#include <wlr/types/wlr_matrix.h>
+
+
 #include <wlr/types/wlr_output.h>
 
 #include <hikari/border.h>
 #include <hikari/color.h>
 #include <hikari/configuration.h>
 #include <hikari/output.h>
-#include <hikari/renderer.h>
+
 #include <hikari/view.h>
 
 void

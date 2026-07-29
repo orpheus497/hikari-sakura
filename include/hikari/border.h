@@ -2,6 +2,7 @@
 #define HIKARI_BORDER_H
 
 #include <wlr/util/box.h>
+#include <wlr/types/wlr_scene.h>
 
 #include <hikari/output.h>
 
@@ -17,11 +18,14 @@ struct hikari_border {
   enum hikari_border_state state;
 
   struct wlr_box geometry;
-  struct wlr_box top;
-  struct wlr_box bottom;
-  struct wlr_box left;
-  struct wlr_box right;
+  struct wlr_scene_rect *top;
+  struct wlr_scene_rect *bottom;
+  struct wlr_scene_rect *left;
+  struct wlr_scene_rect *right;
 };
+
+void
+hikari_border_init(struct hikari_border *border, struct wlr_scene_tree *parent);
 
 static inline struct wlr_box *
 hikari_border_geometry(struct hikari_border *border)

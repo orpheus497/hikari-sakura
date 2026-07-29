@@ -6,7 +6,7 @@
 #include <hikari/cursor.h>
 #include <hikari/keyboard.h>
 #include <hikari/mark.h>
-#include <hikari/renderer.h>
+
 #include <hikari/server.h>
 #include <hikari/workspace.h>
 
@@ -65,7 +65,7 @@ hikari_mark_select_mode_init(struct hikari_mark_select_mode *mark_select_mode)
   mark_select_mode->mode.key_handler = key_handler;
   mark_select_mode->mode.button_handler = button_handler;
   mark_select_mode->mode.modifiers_handler = modifiers_handler;
-  mark_select_mode->mode.render = hikari_renderer_mark_select_mode;
+
   mark_select_mode->mode.cancel = cancel;
   mark_select_mode->mode.cursor_move = cursor_move;
 

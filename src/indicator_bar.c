@@ -5,17 +5,20 @@
 #include <pango/pangocairo.h>
 #include <string.h>
 
-#include <wlr/backend.h>
-#include <wlr/render/wlr_renderer.h>
+#include <drm_fourcc.h>
+#include <wlr/render/allocator.h>
+#include <wlr/interfaces/wlr_buffer.h>
+
+#include <hikari/font.h>
 #include <wlr/render/wlr_texture.h>
-#include <wlr/types/wlr_matrix.h>
+
 
 #include <hikari/color.h>
 #include <hikari/configuration.h>
 #include <hikari/font.h>
 #include <hikari/indicator.h>
 #include <hikari/output.h>
-#include <hikari/renderer.h>
+
 #include <hikari/server.h>
 #include <hikari/view.h>
 
@@ -45,21 +48,24 @@ hikari_indicator_bar_set_color(
 void
 hikari_indicator_bar_fini(struct hikari_indicator_bar *indicator_bar)
 {
-  wlr_texture_destroy(indicator_bar->texture);
-  indicator_bar->texture = NULL;
+  if (indicator_bar->scene_buffer != NULL) {
+    wlr_scene_node_destroy(&indicator_bar->scene_buffer->node);
+    indicator_bar->scene_buffer = NULL;
+  }
 }
 
 void
-hikari_indicator_bar_damage(struct hikari_indicator_bar *indicator_bar,
+hikari_indicator_bar_position(struct hikari_indicator_bar *indicator_bar,
     struct hikari_output *output,
     struct wlr_box *view_geometry)
 {
-  struct wlr_box geometry = { .x = view_geometry->x + 5,
-    .y = view_geometry->y + indicator_bar->offset,
-    .width = indicator_bar->width,
-    .height = hikari_configuration->font.height };
+  if (indicator_bar->scene_buffer == NULL) {
+    return;
+  }
 
-  hikari_output_add_damage(output, &geometry);
+  wlr_scene_node_set_position(&indicator_bar->scene_buffer->node, 
+      view_geometry->x + 5, 
+      view_geometry->y + indicator_bar->offset);
 }
 
 void
@@ -119,8 +125,23 @@ hikari_indicator_bar_update(struct hikari_indicator_bar *indicator_bar,
   unsigned char *data = cairo_image_surface_get_data(surface);
   int stride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, width);
 
-  indicator_bar->texture = wlr_texture_from_pixels(
-      wlr_renderer, DRM_FORMAT_ARGB8888, stride, width, height, data);
+  struct wlr_drm_format format = { .format = DRM_FORMAT_ARGB8888, .len = 0, .capacity = 0, .modifiers = NULL };
+  struct wlr_buffer *buffer = wlr_allocator_create_buffer(hikari_server.allocator, width, height, &format);
+  
+  if (buffer != NULL) {
+    void *mapped_data;
+    uint32_t mapped_format;
+    size_t mapped_stride;
+    if (wlr_buffer_begin_data_ptr_access(buffer, WLR_BUFFER_DATA_PTR_ACCESS_WRITE, &mapped_data, &mapped_format, &mapped_stride)) {
+      for (int y = 0; y < height; y++) {
+        memcpy((char*)mapped_data + y * mapped_stride, data + y * stride, width * 4);
+      }
+      wlr_buffer_end_data_ptr_access(buffer);
+    }
+    
+    indicator_bar->scene_buffer = wlr_scene_buffer_create(&hikari_server.scene->tree, buffer);
+    wlr_buffer_drop(buffer);
+  }
 
   cairo_surface_destroy(surface);
   g_object_unref(layout);

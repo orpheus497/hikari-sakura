@@ -10,7 +10,7 @@
 #include <hikari/indicator.h>
 #include <hikari/indicator_frame.h>
 #include <hikari/keyboard.h>
-#include <hikari/renderer.h>
+
 #include <hikari/server.h>
 #include <hikari/view.h>
 
@@ -339,7 +339,7 @@ hikari_normal_mode_init(struct hikari_normal_mode *normal_mode)
   normal_mode->mode.key_handler = key_handler;
   normal_mode->mode.button_handler = button_handler;
   normal_mode->mode.modifiers_handler = modifiers_handler;
-  normal_mode->mode.render = hikari_renderer_normal_mode;
+
   normal_mode->mode.cancel = cancel;
   normal_mode->mode.cursor_move = cursor_move;
   normal_mode->pending_action = NULL;

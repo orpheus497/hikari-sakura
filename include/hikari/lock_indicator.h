@@ -8,12 +8,12 @@
 struct hikari_output;
 
 struct hikari_lock_indicator {
-  struct wlr_texture *wait;
-  struct wlr_texture *type;
-  struct wlr_texture *verify;
-  struct wlr_texture *deny;
+  struct wlr_buffer *wait;
+  struct wlr_buffer *type;
+  struct wlr_buffer *verify;
+  struct wlr_buffer *deny;
 
-  struct wlr_texture *current;
+  struct wlr_buffer *current;
 
   struct wl_event_source *reset_state;
 };

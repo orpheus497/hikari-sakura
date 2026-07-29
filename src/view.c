@@ -118,7 +118,7 @@ move_view_constrained(
 {
   if (!hikari_view_is_hidden(view)) {
     hikari_view_damage_whole(view);
-    hikari_indicator_damage(&hikari_server.indicator, view);
+    hikari_indicator_position(&hikari_server.indicator, view);
   }
 
   hikari_geometry_constrain_relative(
@@ -171,7 +171,7 @@ move_view(struct hikari_view *view, struct wlr_box *geometry, int x, int y)
 
   if (!hikari_view_is_hidden(view)) {
     hikari_view_damage_whole(view);
-    hikari_indicator_damage(&hikari_server.indicator, view);
+    hikari_indicator_position(&hikari_server.indicator, view);
   }
 }
 
@@ -298,7 +298,7 @@ commit_pending_geometry(
 {
   hikari_view_refresh_geometry(view, pending_geometry);
 
-  hikari_indicator_damage(&hikari_server.indicator, view);
+  hikari_indicator_position(&hikari_server.indicator, view);
   hikari_view_damage_whole(view);
 }
 
@@ -346,7 +346,7 @@ commit_pending_operation(
 static void
 commit_reset(struct hikari_view *view, struct hikari_operation *operation)
 {
-  hikari_indicator_damage(&hikari_server.indicator, view);
+  hikari_indicator_position(&hikari_server.indicator, view);
 
   if (hikari_view_is_tiled(view)) {
     assert(!hikari_tile_is_attached(view->tile));
@@ -1424,7 +1424,7 @@ hikari_view_evacuate(struct hikari_view *view, struct hikari_sheet *sheet)
 
     if (hikari_sheet_is_visible(sheet)) {
       hikari_view_damage_whole(view);
-      hikari_indicator_damage(&hikari_server.indicator, view);
+      hikari_indicator_position(&hikari_server.indicator, view);
     } else {
       if (hikari_view_is_forced(view)) {
         move_to_top(view);
@@ -1462,14 +1462,14 @@ hikari_view_pin_to_sheet(struct hikari_view *view, struct hikari_sheet *sheet)
       move_to_top(view);
     } else {
       hikari_view_raise(view);
-      hikari_indicator_damage(&hikari_server.indicator, view);
+      hikari_indicator_position(&hikari_server.indicator, view);
     }
   } else {
     if (hikari_sheet_is_visible(sheet)) {
       place_visibly_above(view, sheet->workspace);
 
       hikari_view_damage_whole(view);
-      hikari_indicator_damage(&hikari_server.indicator, view);
+      hikari_indicator_position(&hikari_server.indicator, view);
     } else {
       hikari_view_hide(view);
       hikari_server_cursor_focus();
@@ -1813,7 +1813,7 @@ hikari_view_commit_pending_operation(
   view->pending_operation.geometry.width = geometry->width;
   view->pending_operation.geometry.height = geometry->height;
 
-  hikari_indicator_damage(&hikari_server.indicator, view);
+  hikari_indicator_position(&hikari_server.indicator, view);
   hikari_view_damage_whole(view);
 
   commit_operation(&view->pending_operation, view);
@@ -1862,7 +1862,7 @@ hikari_view_migrate(struct hikari_view *view,
   struct hikari_output *output = sheet->workspace->output;
   struct wlr_box *view_geometry = hikari_view_geometry(view);
 
-  hikari_indicator_damage(&hikari_server.indicator, view);
+  hikari_indicator_position(&hikari_server.indicator, view);
   hikari_view_damage_whole(view);
 
   // only remove view from lists and do not make it lose focus by calling

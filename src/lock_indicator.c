@@ -3,8 +3,9 @@
 #include <drm_fourcc.h>
 
 #include <wlr/backend.h>
-#include <wlr/render/wlr_renderer.h>
-#include <wlr/types/wlr_matrix.h>
+#include <wlr/render/allocator.h>
+#include <wlr/interfaces/wlr_buffer.h>
+#include <wlr/types/wlr_scene.h>
 
 #include <hikari/configuration.h>
 #include <hikari/geometry.h>
@@ -13,13 +14,12 @@
 
 #define HIKARI_PI 3.14159265358979323846
 
-static struct wlr_texture *
+static struct wlr_buffer *
 init_indicator_circle(float color[static 4])
 {
   const int size = 100;
 
-  struct wlr_texture *texture;
-  struct wlr_renderer *wlr_renderer = hikari_server.renderer;
+  struct wlr_buffer *wlr_buffer;
 
   cairo_surface_t *surface =
       cairo_image_surface_create(CAIRO_FORMAT_ARGB32, size, size);
@@ -45,14 +45,26 @@ init_indicator_circle(float color[static 4])
   unsigned char *data = cairo_image_surface_get_data(surface);
   int stride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, size);
 
-  texture = wlr_texture_from_pixels(
-      wlr_renderer, DRM_FORMAT_ARGB8888, stride, size, size, data);
+  struct wlr_drm_format format = { .format = DRM_FORMAT_ARGB8888, .len = 0, .capacity = 0, .modifiers = NULL };
+  wlr_buffer = wlr_allocator_create_buffer(hikari_server.allocator, size, size, &format);
+  
+  if (wlr_buffer != NULL) {
+    void *mapped_data;
+    uint32_t mapped_format;
+    size_t mapped_stride;
+    if (wlr_buffer_begin_data_ptr_access(wlr_buffer, WLR_BUFFER_DATA_PTR_ACCESS_WRITE, &mapped_data, &mapped_format, &mapped_stride)) {
+      for (int y = 0; y < size; y++) {
+        memcpy((char*)mapped_data + y * mapped_stride, data + y * stride, size * 4);
+      }
+      wlr_buffer_end_data_ptr_access(wlr_buffer);
+    }
+  }
 
   cairo_surface_destroy(surface);
   g_object_unref(layout);
   cairo_destroy(cairo);
 
-  return texture;
+  return wlr_buffer;
 }
 
 static int
@@ -93,10 +105,10 @@ hikari_lock_indicator_fini(struct hikari_lock_indicator *lock_indicator)
 {
   assert(lock_indicator != NULL);
 
-  wlr_texture_destroy(lock_indicator->wait);
-  wlr_texture_destroy(lock_indicator->type);
-  wlr_texture_destroy(lock_indicator->verify);
-  wlr_texture_destroy(lock_indicator->deny);
+  wlr_buffer_drop(lock_indicator->wait);
+  wlr_buffer_drop(lock_indicator->type);
+  wlr_buffer_drop(lock_indicator->verify);
+  wlr_buffer_drop(lock_indicator->deny);
 
   wl_event_source_remove(lock_indicator->reset_state);
 }
@@ -176,7 +188,20 @@ hikari_lock_indicator_damage(struct hikari_lock_indicator *lock_indicator)
 
   struct hikari_output *output;
   wl_list_for_each (output, &hikari_server.outputs, server_outputs) {
-    get_geometry(output, &geometry);
-    hikari_output_add_damage(output, &geometry);
+    if (lock_indicator->current != NULL) {
+      if (output->lock_indicator_node == NULL) {
+         output->lock_indicator_node = wlr_scene_buffer_create(&hikari_server.scene->tree, lock_indicator->current);
+      } else {
+         wlr_scene_buffer_set_buffer(output->lock_indicator_node, lock_indicator->current);
+      }
+      get_geometry(output, &geometry);
+      wlr_scene_node_set_position(&output->lock_indicator_node->node, geometry.x, geometry.y);
+      wlr_scene_node_set_enabled(&output->lock_indicator_node->node, true);
+      wlr_scene_node_raise_to_top(&output->lock_indicator_node->node);
+    } else {
+      if (output->lock_indicator_node != NULL) {
+         wlr_scene_node_set_enabled(&output->lock_indicator_node->node, false);
+      }
+    }
   }
 }

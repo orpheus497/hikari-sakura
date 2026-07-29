@@ -2,13 +2,14 @@
 #define HIKARI_INDICATOR_BAR_H
 
 #include <wlr/types/wlr_compositor.h>
+#include <wlr/types/wlr_scene.h>
 
 struct hikari_indicator;
 struct hikari_renderer;
 struct hikari_output;
 
 struct hikari_indicator_bar {
-  struct wlr_texture *texture;
+  struct wlr_scene_buffer *scene_buffer;
   struct hikari_indicator *indicator;
 
   int width;
@@ -36,7 +37,7 @@ hikari_indicator_bar_update(struct hikari_indicator_bar *indicator_bar,
     const char *text);
 
 void
-hikari_indicator_bar_damage(struct hikari_indicator_bar *indicator_bar,
+hikari_indicator_bar_position(struct hikari_indicator_bar *indicator_bar,
     struct hikari_output *output,
     struct wlr_box *view_geometry);
 

@@ -1,11 +1,11 @@
 #include <hikari/indicator.h>
 
-#include <wlr/render/wlr_renderer.h>
-#include <wlr/types/wlr_matrix.h>
+
+
 
 #include <hikari/configuration.h>
 #include <hikari/mark.h>
-#include <hikari/renderer.h>
+
 #include <hikari/sheet.h>
 #include <hikari/view.h>
 
@@ -117,7 +117,7 @@ hikari_indicator_update_sheet(struct hikari_indicator *indicator,
 }
 
 void
-hikari_indicator_damage(
+hikari_indicator_position(
     struct hikari_indicator *indicator, struct hikari_view *view)
 {
   assert(indicator != NULL);
@@ -126,8 +126,8 @@ hikari_indicator_damage(
   struct wlr_box *geometry = hikari_view_border_geometry(view);
   struct hikari_output *output = view->output;
 
-  hikari_indicator_bar_damage(&indicator->title, output, geometry);
-  hikari_indicator_bar_damage(&indicator->sheet, output, geometry);
-  hikari_indicator_bar_damage(&indicator->group, output, geometry);
-  hikari_indicator_bar_damage(&indicator->mark, output, geometry);
+  hikari_indicator_bar_position(&indicator->title, output, geometry);
+  hikari_indicator_bar_position(&indicator->sheet, output, geometry);
+  hikari_indicator_bar_position(&indicator->group, output, geometry);
+  hikari_indicator_bar_position(&indicator->mark, output, geometry);
 }

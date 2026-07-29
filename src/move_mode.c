@@ -6,7 +6,7 @@
 #include <hikari/binding.h>
 #include <hikari/configuration.h>
 #include <hikari/keyboard.h>
-#include <hikari/renderer.h>
+
 #include <hikari/server.h>
 #include <hikari/view.h>
 
@@ -86,7 +86,7 @@ hikari_move_mode_init(struct hikari_move_mode *move_mode)
   move_mode->mode.key_handler = key_handler;
   move_mode->mode.button_handler = button_handler;
   move_mode->mode.modifiers_handler = modifiers_handler;
-  move_mode->mode.render = hikari_renderer_move_mode;
+
   move_mode->mode.cancel = cancel;
   move_mode->mode.cursor_move = cursor_move;
 }

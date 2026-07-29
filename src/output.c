@@ -6,10 +6,13 @@
 #include <drm_fourcc.h>
 
 #include <wlr/backend.h>
+#include <wlr/render/allocator.h>
+#include <wlr/interfaces/wlr_buffer.h>
+#include <drm_fourcc.h>
 #include <wlr/types/wlr_scene.h>
 
 #include <hikari/memory.h>
-#include <hikari/renderer.h>
+
 #include <hikari/server.h>
 #ifdef HAVE_XWAYLAND
 #include <hikari/view.h>
@@ -58,7 +61,7 @@ hikari_output_load_background(struct hikari_output *output,
     enum hikari_background_fit background_fit)
 {
   if (output->background != NULL) {
-    wlr_texture_destroy(output->background);
+    wlr_scene_node_destroy(&output->background->node);
     output->background = NULL;
   }
 
@@ -88,10 +91,26 @@ hikari_output_load_background(struct hikari_output *output,
   unsigned char *data = cairo_image_surface_get_data(output_surface);
   int stride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, output_width);
 
-  struct wlr_renderer *renderer = output->wlr_output->renderer;
-
-  output->background = wlr_texture_from_pixels(
-      renderer, DRM_FORMAT_ARGB8888, stride, output_width, output_height, data);
+  struct wlr_drm_format format = { .format = DRM_FORMAT_ARGB8888, .len = 0, .capacity = 0, .modifiers = NULL };
+  struct wlr_buffer *buffer = wlr_allocator_create_buffer(hikari_server.allocator, output_width, output_height, &format);
+  
+  if (buffer != NULL) {
+    void *mapped_data;
+    uint32_t mapped_format;
+    size_t mapped_stride;
+    if (wlr_buffer_begin_data_ptr_access(buffer, WLR_BUFFER_DATA_PTR_ACCESS_WRITE, &mapped_data, &mapped_format, &mapped_stride)) {
+      for (int y = 0; y < output_height; y++) {
+        memcpy((char*)mapped_data + y * mapped_stride, data + y * stride, output_width * 4);
+      }
+      wlr_buffer_end_data_ptr_access(buffer);
+    }
+    
+    output->background = wlr_scene_buffer_create(&hikari_server.scene->tree, buffer);
+    wlr_scene_node_set_position(&output->background->node, output->geometry.x, output->geometry.y);
+    wlr_scene_node_lower_to_bottom(&output->background->node);
+    
+    wlr_buffer_drop(buffer);
+  }
 
   cairo_surface_destroy(image);
   cairo_surface_destroy(output_surface);
@@ -250,6 +269,8 @@ hikari_output_init(struct hikari_output *output, struct wlr_output *wlr_output)
   bool noop = wlr_output->backend == hikari_server.noop_backend;
 
   output->wlr_output = wlr_output;
+  output->scene_output = NULL;
+  output->lock_indicator_node = NULL;
   output->background = NULL;
   output->enabled = false;
   output->workspace = hikari_malloc(sizeof(struct hikari_workspace));
@@ -361,7 +382,10 @@ hikari_output_fini(struct hikari_output *output)
     struct hikari_workspace *merge_workspace;
     struct hikari_workspace *next_workspace = hikari_workspace_next(workspace);
 
-    wlr_texture_destroy(output->background);
+    if (output->background != NULL) {
+      wlr_scene_node_destroy(&output->background->node);
+      output->background = NULL;
+    }
 
     if (workspace != next_workspace) {
       merge_workspace = next_workspace;
