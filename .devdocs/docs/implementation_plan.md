@@ -1,1 +1,1 @@
-<!-- This file was moved to .devdocs/PLANS.md to comply with AGENTS.md. -->
+[See Canonical Implementation Plan](../PLANS.md)
