@@ -153,8 +153,8 @@ UCL_CFLAGS != ${PKG_CONFIG} --cflags libucl
 UCL_LIBS != ${PKG_CONFIG} --libs libucl
 
 .if ${OS} == "FreeBSD"
-EPOLL_SHIM_CFLAGS != ${PKG_CONFIG} --cflags epoll-shim 2>/dev/null || true
-EPOLL_SHIM_LIBS != ${PKG_CONFIG} --libs epoll-shim 2>/dev/null || true
+EPOLL_SHIM_CFLAGS != ${PKG_CONFIG} --cflags epoll-shim
+EPOLL_SHIM_LIBS != ${PKG_CONFIG} --libs epoll-shim
 .endif
 
 CFLAGS += \

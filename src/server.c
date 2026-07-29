@@ -358,8 +358,8 @@ node_at(double lx,
 
 #ifdef HAVE_LAYERSHELL
   if (topmost_of(&output->layers[ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY],
-          ox,
-          oy,
+          lx,
+          ly,
           surface,
           sx,
           sy,
@@ -375,7 +375,7 @@ node_at(double lx,
       unmanaged_output_views) {
     node = (struct hikari_node *)xwayland_unmanaged_view;
 
-    if (surface_at(node, ox, oy, surface, sx, sy)) {
+    if (surface_at(node, lx, ly, surface, sx, sy)) {
       return node;
     }
   }
@@ -383,8 +383,8 @@ node_at(double lx,
 
 #ifdef HAVE_LAYERSHELL
   if (topmost_of(&output->layers[ZWLR_LAYER_SHELL_V1_LAYER_TOP],
-          ox,
-          oy,
+          lx,
+          ly,
           surface,
           sx,
           sy,
@@ -535,6 +535,11 @@ server_decoration_handler(struct wl_listener *listener, void *data)
       wl_container_of(wlr_decoration->surface, view, surface);
   struct wlr_xdg_surface *xdg_surface =
       wlr_xdg_surface_try_from_wlr_surface(wlr_decoration->surface);
+      
+  if (xdg_surface == NULL) {
+    return;
+  }
+
   struct hikari_xdg_view *xdg_view = xdg_surface->data;
 
   if (xdg_view == NULL) {
@@ -1051,15 +1056,15 @@ hikari_server_stop(void)
   hikari_cursor_fini(&server->cursor);
   hikari_indicator_fini(&server->indicator);
 
-  hikari_pool_destroy(&server->view_pool);
-  hikari_pool_destroy(&server->sheet_pool);
-  hikari_pool_destroy(&server->workspace_pool);
-  hikari_pool_destroy(&server->tile_pool);
-
   hikari_lock_mode_fini(&server->lock_mode);
   hikari_mark_assign_mode_fini(&server->mark_assign_mode);
 
   wl_display_destroy_clients(server->display);
+
+  hikari_pool_destroy(&server->view_pool);
+  hikari_pool_destroy(&server->sheet_pool);
+  hikari_pool_destroy(&server->workspace_pool);
+  hikari_pool_destroy(&server->tile_pool);
 
 #if HAVE_XWAYLAND
   wlr_xwayland_destroy(server->xwayland);

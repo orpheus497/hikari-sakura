@@ -31,6 +31,6 @@
 
 ### Test Protocol 3: PAM Unlocker Security (`hikari-unlocker`)
 1. Verify `/usr/local/etc/pam.d/hikari-unlocker` exists.
-2. Identify the canonical absolute path for the `hikari-unlocker` binary, verify trusted package provenance, then confirm it has root ownership and apply mode 4555 (e.g. `chown root:wheel /usr/local/bin/hikari-unlocker`, `chmod 4555 /usr/local/bin/hikari-unlocker`).
+2. Identify the canonical absolute path for the `hikari-unlocker` binary. Verify that this exact binary has trusted package provenance, root ownership (e.g., `root:wheel`), and the expected permissions. Only apply mode 4555 (e.g. `chmod 4555 /usr/local/bin/hikari-unlocker`) after all these checks pass.
 3. Trigger lock mode (`Meta+L`) in `hikari`.
 4. Input user password and verify session unlocks cleanly upon PAM authentication success.

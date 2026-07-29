@@ -7,7 +7,7 @@
 
 ## 1. High-Level Component Architecture
 
-```
+```text
                                   +-----------------------+
                                   |     main() Entry      |
                                   +-----------+-----------+

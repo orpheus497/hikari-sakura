@@ -195,6 +195,9 @@ frame_handler(struct wl_listener *listener, void *data)
 
   struct wlr_scene_output *scene_output = wlr_scene_get_scene_output(
     scene, output->wlr_output);
+  if (scene_output == NULL) {
+    return;
+  }
 
   wlr_scene_output_commit(scene_output, NULL);
 

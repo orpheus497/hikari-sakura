@@ -30,6 +30,10 @@ get_default_path(char *path)
   /* ##Condition purpose: Check if XDG_CONFIG_HOME is set in environment. */
   if (prefix == NULL) {
     prefix = getenv("HOME");
+    if (prefix == NULL) {
+      fprintf(stderr, "Error: Both XDG_CONFIG_HOME and HOME are unset.\n");
+      exit(EXIT_FAILURE);
+    }
     subdirectory = "/.config/hikari/";
   } else {
     subdirectory = "/hikari/";
@@ -39,11 +43,17 @@ get_default_path(char *path)
   size_t len = strlen(prefix) + strlen(subdirectory) + strlen(path);
 
   char *ret = malloc(len + 1);
+  if (ret == NULL) {
+    fprintf(stderr, "Error: Memory allocation failed for config path.\n");
+    exit(EXIT_FAILURE);
+  }
 
-  /* ##Step purpose: Copy prefix, subdirectory, and filename to return buffer. */
-  strcpy(ret, prefix);
-  strcat(ret, subdirectory);
-  strcat(ret, path);
+  /* ##Step purpose: Construct prefix, subdirectory, and filename to return buffer. */
+  if (snprintf(ret, len + 1, "%s%s%s", prefix, subdirectory, path) >= len + 1) {
+    fprintf(stderr, "Error: Path construction truncated.\n");
+    free(ret);
+    exit(EXIT_FAILURE);
+  }
 
   return ret;
 }

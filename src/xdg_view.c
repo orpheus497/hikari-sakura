@@ -149,7 +149,9 @@ surface_at(
 {
   struct hikari_xdg_view *xdg_view = (struct hikari_xdg_view *)node;
 
-  return wlr_xdg_surface_surface_at(xdg_view->surface, ox, oy, sx, sy);
+  struct wlr_box *geometry = hikari_view_geometry(&xdg_view->view);
+
+  return wlr_xdg_surface_surface_at(xdg_view->surface, ox - geometry->x, oy - geometry->y, sx, sy);
 }
 
 static void
@@ -474,10 +476,10 @@ hikari_xdg_view_init(struct hikari_xdg_view *xdg_view,
   xdg_surface->data = xdg_view->scene_tree;
 
   xdg_view->map.notify = map_handler;
-  wl_signal_add(&xdg_surface->surface->events.map, &xdg_view->map);
+  wl_signal_add(&xdg_surface->events.map, &xdg_view->map);
 
   xdg_view->unmap.notify = unmap_handler;
-  wl_signal_add(&xdg_surface->surface->events.unmap, &xdg_view->unmap);
+  wl_signal_add(&xdg_surface->events.unmap, &xdg_view->unmap);
 
   xdg_view->destroy.notify = destroy_handler;
   wl_signal_add(&xdg_surface->surface->events.destroy, &xdg_view->destroy);

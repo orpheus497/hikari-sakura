@@ -9,6 +9,7 @@
 #include <strings.h>
 #include <sys/mman.h>
 #include <unistd.h>
+#include <errno.h>
 
 static char *input_buffer = NULL;
 
@@ -41,6 +42,11 @@ conversation_handler(int num_msg,
         /* ##Condition purpose: Check if password string duplication succeeded. */
         if (pam_reply[i].resp == NULL) {
           /* ##Error purpose: Abort PAM handler on strdup failure. */
+          for (int j = 0; j < i; ++j) {
+            free(pam_reply[j].resp);
+          }
+          free(pam_reply);
+          *resp = NULL;
           return PAM_ABORT;
         }
         break;
@@ -54,7 +60,7 @@ conversation_handler(int num_msg,
 }
 
 /* ##Function purpose: Authenticates input password against PAM subsystem for given username. */
-bool
+int
 check_password(const char *username)
 {
   const struct pam_conv conv = {
@@ -68,24 +74,41 @@ check_password(const char *username)
   /* ##Condition purpose: Initialize PAM authentication context. */
   if (pam_start("hikari-unlocker", username, &conv, &auth_handle) !=
       PAM_SUCCESS) {
-    /* ##Error purpose: Return false if PAM initialization fails. */
-    return false;
+    /* ##Error purpose: Return -1 if PAM initialization fails fatally. */
+    return -1;
   }
 
   /* ##Action purpose: Read password string from stdin into locked buffer. */
-  read(0, input_buffer, INPUT_BUFFER_SIZE - 1);
+  ssize_t nread;
+  do {
+    nread = read(0, input_buffer, INPUT_BUFFER_SIZE - 1);
+  } while (nread == -1 && errno == EINTR);
+
+  if (nread == -1) {
+    pam_end(auth_handle, PAM_ABORT);
+    return -1;
+  }
+
+  if (nread == INPUT_BUFFER_SIZE - 1 && input_buffer[INPUT_BUFFER_SIZE - 2] != '\n' && input_buffer[INPUT_BUFFER_SIZE - 2] != '\0') {
+    char c;
+    while (read(0, &c, 1) == 1 && c != '\n');
+    explicit_bzero(input_buffer, INPUT_BUFFER_SIZE);
+    pam_end(auth_handle, PAM_ABORT);
+    return 0;
+  }
+
   int pam_status = pam_authenticate(auth_handle, 0);
 
   /* ##Step purpose: Zero out sensitive password buffer immediately after authentication attempt. */
-  memset(input_buffer, 0, INPUT_BUFFER_SIZE);
-  success = pam_status == PAM_SUCCESS;
+  explicit_bzero(input_buffer, INPUT_BUFFER_SIZE);
+  success = (pam_status == PAM_SUCCESS);
 
   /* ##Action purpose: Write authentication success boolean result to stdout fd 1. */
   write(1, &success, sizeof(bool));
 
   pam_end(auth_handle, pam_status);
 
-  return success;
+  return success ? 1 : 0;
 }
 
 /* ##Function purpose: Main entry point for PAM screen unlock helper executable. */
@@ -95,18 +118,33 @@ main(int argc, char **argv)
   char input;
   bool success = false;
   struct passwd *passwd = getpwuid(getuid());
+  if (passwd == NULL) {
+    return 1;
+  }
 
   /* ##Step purpose: Allocate and lock password memory buffer in RAM to prevent swapping. */
   input_buffer = malloc(INPUT_BUFFER_SIZE);
-  memset(input_buffer, 0, INPUT_BUFFER_SIZE);
-  mlock(input_buffer, INPUT_BUFFER_SIZE);
+  if (input_buffer == NULL) {
+    return 1;
+  }
+  explicit_bzero(input_buffer, INPUT_BUFFER_SIZE);
+  if (mlock(input_buffer, INPUT_BUFFER_SIZE) != 0) {
+    free(input_buffer);
+    return 1;
+  }
 
-  /* ##Loop purpose: Loop until valid authentication password is provided. */
+  /* ##Loop purpose: Loop until valid authentication password is provided or fatal error. */
   while (!success) {
-    success = check_password(passwd->pw_name);
+    int result = check_password(passwd->pw_name);
+    if (result == -1) {
+      break;
+    } else if (result == 1) {
+      success = true;
+    }
   }
 
   /* ##Step purpose: Unlock and free secure password memory buffer prior to exit. */
+  explicit_bzero(input_buffer, INPUT_BUFFER_SIZE);
   munlock(input_buffer, INPUT_BUFFER_SIZE);
   free(input_buffer);
 

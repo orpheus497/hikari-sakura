@@ -21,6 +21,7 @@ Legacy C compositors frequently store objects (views, tiles, outputs, seats) as 
 Instead of an Array-of-Structures (AoS) or linked list of individual heap allocations, view spatial geometry, visibility state, and sheet memberships are transformed into flat, cache-aligned Struct-of-Arrays (SoA):
 
 ### Legacy AoS Pointer Structure (Before):
+
 ```c
 struct hikari_view {
   struct wlr_surface *surface;
@@ -35,6 +36,7 @@ struct hikari_view {
 ```
 
 ### Modern DOD Struct-of-Arrays Layout (After):
+
 ```c
 #define HIKARI_MAX_VIEWS 512
 

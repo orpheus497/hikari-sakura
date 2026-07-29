@@ -57,11 +57,10 @@ hikari_switch_init(struct hikari_switch *swtch, struct wlr_input_device *device)
   swtch->state = WLR_SWITCH_STATE_OFF;
   swtch->action = NULL;
 
-  // TODO: How to destroy switch?
   swtch->destroy.notify = destroy_handler;
-  // wl_signal_add(&wlr_switch->events.destroy, &swtch->destroy);
+  wl_signal_add(&wlr_switch->events.destroy, &swtch->destroy);
 
-  // wl_list_init(&wlr_switch->events.toggle);
+  wl_list_init(&swtch->toggle.link);
 
   wl_list_insert(&hikari_server.switches, &swtch->server_switches);
 }

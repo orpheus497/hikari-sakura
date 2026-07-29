@@ -87,3 +87,4 @@ _Alignas(64) struct hikari_view_state_table view_state;
 * **Item 3 Completed:** Removed legacy Linux evdev headers across all source files in favor of native FreeBSD endpoints.
 * **Item 4/5 Completed:** Designed and deployed a contiguous Slab object allocator (`hikari_pool_alloc`), adapting all dynamic allocations across the `hikari_server` into contiguous memory blocks while preserving `wl_list` invariants.
 * **Item 6 Completed:** Implemented DOD Struct-of-Arrays (SoA) view geometry table / Slab allocator object pools in core headers and source.
+* **Item 7 Completed:** Synchronized DOD Struct-of-Arrays refactoring status. Vectorized geometry calculations and routed visibility flags.

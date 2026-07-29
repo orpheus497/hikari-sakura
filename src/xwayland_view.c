@@ -362,7 +362,7 @@ constraints(struct hikari_view *view,
   struct hikari_output *output = view->output;
   struct wlr_xwayland_surface *surface = xwayland_view->surface;
 
-  xcb_size_hints_t *size_hints = surface->size_hints;
+  struct wlr_xwayland_surface_size_hints *size_hints = surface->size_hints;
 
   if (size_hints != NULL) {
     *min_width = size_hints->min_width > 0 ? size_hints->min_width : 0;
@@ -398,8 +398,13 @@ hikari_xwayland_view_init(struct hikari_xwayland_view *xwayland_view,
 #if !defined(NDEBUG)
   printf("XWAYLAND NEW %p\n", xwayland_view);
 #endif
-
   xwayland_view->surface = xwayland_surface;
+
+  xwayland_view->map.notify = map_handler;
+  wl_signal_add(&xwayland_surface->events.map, &xwayland_view->map);
+
+  xwayland_view->unmap.notify = unmap_handler;
+  wl_signal_add(&xwayland_surface->events.unmap, &xwayland_view->unmap);
 
   xwayland_view->destroy.notify = destroy_handler;
   wl_signal_add(&xwayland_surface->events.destroy, &xwayland_view->destroy);

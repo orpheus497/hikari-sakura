@@ -48,6 +48,16 @@ VIEW(first, next)
 VIEW(last, prev)
 #undef VIEW
 
+static inline void
+assign_view_sheet_mask(struct hikari_view *view, struct hikari_sheet *sheet)
+{
+  if (sheet != NULL) {
+    hikari_server.view_state.sheet_mask[view->dod_id] = (1 << sheet->nr);
+  } else {
+    hikari_server.view_state.sheet_mask[view->dod_id] = 0;
+  }
+}
+
 static void
 move_to_top(struct hikari_view *view)
 {
@@ -1402,11 +1412,7 @@ hikari_view_evacuate(struct hikari_view *view, struct hikari_sheet *sheet)
 
   view->output = sheet->workspace->output;
   view->sheet = sheet;
-  if (sheet != NULL) {
-    hikari_server.view_state.sheet_mask[view->dod_id] = (1 << sheet->nr);
-  } else {
-    hikari_server.view_state.sheet_mask[view->dod_id] = 0;
-  }
+  assign_view_sheet_mask(view, sheet);
 
   if (!hikari_view_is_hidden(view)) {
     if (hikari_view_is_forced(view)) {
@@ -1469,11 +1475,7 @@ hikari_view_pin_to_sheet(struct hikari_view *view, struct hikari_sheet *sheet)
     }
 
     view->sheet = sheet;
-    if (sheet != NULL) {
-      hikari_server.view_state.sheet_mask[view->dod_id] = (1 << sheet->nr);
-    } else {
-      hikari_server.view_state.sheet_mask[view->dod_id] = 0;
-    }
+    assign_view_sheet_mask(view, sheet);
 
     if (hikari_view_is_tiled(view)) {
       queue_reset(view, true);
@@ -1923,11 +1925,7 @@ hikari_view_configure(struct hikari_view *view,
   }
 
   view->sheet = sheet;
-  if (sheet != NULL) {
-    hikari_server.view_state.sheet_mask[view->dod_id] = (1 << sheet->nr);
-  } else {
-    hikari_server.view_state.sheet_mask[view->dod_id] = 0;
-  }
+  assign_view_sheet_mask(view, sheet);
   view->output = output;
 
   wl_list_init(&view->workspace_views);

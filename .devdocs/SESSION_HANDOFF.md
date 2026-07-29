@@ -4,6 +4,26 @@
 
 ---
 
+## Session Date: 2026-07-29 11:13
+* **Phase:** User Audit Requests & Wlroots 0.18+ / 0.20 API Migration (Continued)
+* **Accomplishments:**
+  * Completed the implementation plan for the final audit fixes.
+  * Replaced output->damage->damage with wlroots 0.18 damage ring coordinates in `src/renderer.c`.
+  * Fixed hit-testing layout coordinates in `src/server.c` `node_at()`.
+  * Handled NULL returns from `wlr_xdg_surface_try_from_wlr_surface` in `src/server.c` and relocated object pool destruction until after `wl_display_destroy_clients`.
+  * Initialized `toggle.link` and reinstated the missing destroy listener for switches in `src/switch.c`.
+  * De-duplicated view sheet-mask assignment via a unified inline helper `assign_view_sheet_mask` in `src/view.c`.
+  * Compensated layout coordinates against view geometry boundaries for accurate mapping in `src/xdg_view.c` `surface_at`.
+  * Re-wired map and unmap lifecycle events cleanly to `events.map`/`events.unmap` for `wlr_xdg_surface` and `wlr_xwayland_surface`.
+  * Updated XWayland size constraint hints structure format.
+* **Modified / Created Files:**
+  * `.devdocs/task.md`, `.devdocs/walkthrough.md`
+  * `src/renderer.c`, `src/server.c`, `src/switch.c`, `src/view.c`, `src/xdg_view.c`, `src/xwayland_view.c`
+* **Next Steps:**
+  * Await user testing on FreeBSD environment to finalize Phase 6 (FreeBSD Build Verification & Integration Testing).
+
+---
+
 ## Session Date: 2026-07-29 10:57
 * **Phase:** User Audit Requests & Wlroots 0.18+ / 0.20 API Migration (Continued)
 * **Accomplishments:**
@@ -84,7 +104,7 @@
   * `include/hikari/server.h`, `include/hikari/output.h`, `include/hikari/layout.h`, `include/hikari/view.h`, `include/hikari/sheet.h`
   * `fix_comments.py`
   * `.devdocs/BRIEFING.md`, `.devdocs/PROGRESS.md`, `.devdocs/SESSION_HANDOFF.md`
-  * `.devdocs/task.md`, `.devdocs/implementation_plan.md`
+  * `.devdocs/task.md`, `.devdocs/implementation_plan.md` (Product tracking artifacts reclassified to `.devdocs/`)
 * **Next Steps:**
   * Resume Phase 6 (FreeBSD Build Verification) once environment issues are resolved to compile via `bmake`.
 
@@ -102,7 +122,7 @@
   * `src/renderer.c`
   * `.devdocs/PROGRESS.md`, `.devdocs/SESSION_HANDOFF.md`
 * **Next Steps:**
-  * Complete build verification is blocked until the environment supports compiling FreeBSD targets.
+  * Complete build verification is blocked until the environment supports compiling FreeBSD targets. Preserve FreeBSD as the exclusive target.
 
 ---
 

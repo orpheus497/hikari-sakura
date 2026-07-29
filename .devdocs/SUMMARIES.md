@@ -4,6 +4,19 @@
 
 ---
 
+## Session Summary: 2026-07-29 11:13
+* **Phase:** User Audit Requests & Wlroots 0.18+ / 0.20 API Migration (Continued)
+* **Status:** Completed all implementation tasks.
+* **Summary:**
+  * Executed the approved implementation plan.
+  * Updated `src/renderer.c` to use `wlr_damage_ring`.
+  * Resolved undefined coordinate usage in `src/server.c` `node_at` and `src/xdg_view.c` `surface_at`.
+  * Ensured safety of lifecycle event handlers (map/unmap/destroy) in `src/xdg_view.c`, `src/xwayland_view.c`, and `src/switch.c`.
+  * Improved object pool teardown sequencing to prevent use-after-free on shutdown.
+  * Extracted sheet assignment logic in `src/view.c` to a deduplicated inline function.
+
+---
+
 ## Session Summary: 2026-07-29 10:57
 * **Phase:** User Audit Requests & Wlroots 0.18+ / 0.20 API Migration (Continued)
 * **Status:** Completed all inline audit requests.

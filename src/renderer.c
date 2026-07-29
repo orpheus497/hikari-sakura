@@ -280,7 +280,7 @@ renderer_end(struct hikari_output *output, struct hikari_renderer *renderer)
   enum wl_output_transform transform =
       wlr_output_transform_invert(wlr_output->transform);
   wlr_region_transform(
-      &frame_damage, output->damage->damage, transform, width, height);
+      &frame_damage, &output->scene_output->damage_ring.current, transform, width, height);
 
   wlr_output_set_damage(wlr_output, &frame_damage);
   pixman_region32_fini(&frame_damage);
