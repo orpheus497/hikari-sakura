@@ -1,5 +1,8 @@
 #include <hikari/output.h>
 
+#include <wayland-server-core.h>
+#include <cairo/cairo.h>
+
 #include <drm_fourcc.h>
 
 #include <wlr/backend.h>
