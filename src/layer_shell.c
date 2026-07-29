@@ -309,9 +309,8 @@ damage_popup(struct hikari_layer_popup *layer_popup, bool whole)
   struct wlr_xdg_popup *popup = layer_popup->popup;
   struct wlr_surface *surface = popup->base->surface;
 
-  int popup_sx = popup->geometry.x - popup->base->current.geometry.x;
-  int popup_sy = popup->geometry.y - popup->base->current.geometry.y;
-  int ox = popup_sx, oy = popup_sy;
+  int ox = popup->geometry.x - popup->base->current.geometry.x;
+  int oy = popup->geometry.y - popup->base->current.geometry.y;
 
   struct hikari_layer *layer;
   struct hikari_layer_popup *current = layer_popup;
@@ -325,8 +324,8 @@ damage_popup(struct hikari_layer_popup *layer_popup, bool whole)
 
       case HIKARI_LAYER_NODE_TYPE_POPUP:
         current = current->parent.node.popup;
-        ox += current->popup->geometry.x;
-        oy += current->popup->geometry.y;
+        ox += current->popup->geometry.x - current->popup->base->current.geometry.x;
+        oy += current->popup->geometry.y - current->popup->base->current.geometry.y;
         break;
     }
   }
@@ -345,8 +344,18 @@ done:
 
     hikari_output_add_damage(output, &geometry);
   } else {
+    if (layer_popup->geometry.width > 0 && layer_popup->geometry.height > 0) {
+      hikari_output_add_damage(output, &layer_popup->geometry);
+    }
     hikari_output_add_effective_surface_damage(layer->output, surface, ox, oy);
   }
+
+  layer_popup->geometry = (struct wlr_box){
+    .x = ox,
+    .y = oy,
+    .width = surface->current.width,
+    .height = surface->current.height
+  };
 }
 
 static void

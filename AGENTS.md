@@ -20,7 +20,10 @@ Maintain the following files to manage state and continuity:
 * `PLANS.md`: Forward-looking strategy documents.
 * `TESTS.md`: Test specifications and results.
 * `SUMMARIES.md`: Historical session summaries (Reverse-chronological order).
-* `BLUEPRINT.md`: Design or structure clarity requirements then add as questions tabled under each specific design implementation request and move the backlog to the active and when completed to the implementation registry.
+* `BLUEPRINT.md`: Design or structure clarity requirements.
+  1. Add as questions tabled under each specific design implementation request.
+  2. Move the backlog to the active list.
+  3. When completed, move to the implementation registry.
 
 **CODE DOCUMENTATION STANDARDS**
 Documentation precedes code. All files must be reviewed and updated to meet this standard. Use the following exact prefixes directly above the relevant code blocks to ensure immediate legibility for developers and agents:

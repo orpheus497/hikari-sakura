@@ -358,8 +358,8 @@ node_at(double lx,
 
 #ifdef HAVE_LAYERSHELL
   if (topmost_of(&output->layers[ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY],
-          lx,
-          ly,
+          lx - output->geometry.x,
+          ly - output->geometry.y,
           surface,
           sx,
           sy,
@@ -368,14 +368,14 @@ node_at(double lx,
   }
 #endif
 
-#ifdef have_xwayland
-  struct hikari_xwayland_unmanaged_view *xwayland_unmanaged_view = null;
+#ifdef HAVE_XWAYLAND
+  struct hikari_xwayland_unmanaged_view *xwayland_unmanaged_view = NULL;
   wl_list_for_each (xwayland_unmanaged_view,
       &output->unmanaged_xwayland_views,
       unmanaged_output_views) {
     node = (struct hikari_node *)xwayland_unmanaged_view;
 
-    if (surface_at(node, lx, ly, surface, sx, sy)) {
+    if (surface_at(node, lx - output->geometry.x, ly - output->geometry.y, surface, sx, sy)) {
       return node;
     }
   }
@@ -383,8 +383,8 @@ node_at(double lx,
 
 #ifdef HAVE_LAYERSHELL
   if (topmost_of(&output->layers[ZWLR_LAYER_SHELL_V1_LAYER_TOP],
-          lx,
-          ly,
+          lx - output->geometry.x,
+          ly - output->geometry.y,
           surface,
           sx,
           sy,
@@ -397,15 +397,15 @@ node_at(double lx,
   wl_list_for_each (view, &output_workspace->views, workspace_views) {
     node = (struct hikari_node *)view;
 
-    if (surface_at(node, lx, ly, surface, sx, sy)) {
+    if (surface_at(node, lx - output->geometry.x, ly - output->geometry.y, surface, sx, sy)) {
       return node;
     }
   }
 
 #ifdef HAVE_LAYERSHELL
   if (layer_at(&output->layers[ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM],
-          ox,
-          oy,
+          lx - output->geometry.x,
+          ly - output->geometry.y,
           surface,
           sx,
           sy,
@@ -479,7 +479,9 @@ new_xwayland_surface_handler(struct wl_listener *listener, void *data)
   } else {
     struct hikari_xwayland_view *xwayland_view =
         hikari_pool_alloc(&server->view_pool);
-    assert(xwayland_view != NULL);
+    if (xwayland_view == NULL) {
+      return;
+    }
 
     hikari_xwayland_view_init(xwayland_view, wlr_xwayland_surface, workspace);
   }
@@ -536,6 +538,7 @@ server_decoration_handler(struct wl_listener *listener, void *data)
   struct wlr_xdg_surface *xdg_surface =
       wlr_xdg_surface_try_from_wlr_surface(wlr_decoration->surface);
       
+  /* ##Condition purpose: Guard against non-XDG surfaces before accessing XDG-specific data. */
   if (xdg_surface == NULL) {
     return;
   }
@@ -659,7 +662,9 @@ new_xdg_surface_handler(struct wl_listener *listener, void *data)
 
   struct hikari_xdg_view *xdg_view =
       hikari_pool_alloc(&server->view_pool);
-  assert(xdg_view != NULL);
+  if (xdg_view == NULL) {
+    return;
+  }
 
   hikari_xdg_view_init(xdg_view, xdg_surface, server->workspace);
 }
@@ -1061,14 +1066,14 @@ hikari_server_stop(void)
 
   wl_display_destroy_clients(server->display);
 
+#if HAVE_XWAYLAND
+  wlr_xwayland_destroy(server->xwayland);
+#endif
+
   hikari_pool_destroy(&server->view_pool);
   hikari_pool_destroy(&server->sheet_pool);
   hikari_pool_destroy(&server->workspace_pool);
   hikari_pool_destroy(&server->tile_pool);
-
-#if HAVE_XWAYLAND
-  wlr_xwayland_destroy(server->xwayland);
-#endif
 
   wlr_seat_destroy(server->seat);
   wl_display_destroy(server->display);

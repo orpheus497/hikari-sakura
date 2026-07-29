@@ -437,6 +437,7 @@ hikari_view_init(
   view->output = NULL;
   view->group = NULL;
   view->title = NULL;
+  view->id = NULL;
   view->tile = NULL;
   view->use_csd = false;
   view->child = child;

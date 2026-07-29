@@ -4,6 +4,20 @@
 
 ---
 
+## Session Date: 2026-07-29 13:10
+* **Phase:** Phase 5 & User Audit Requests (Continued)
+* **Accomplishments:**
+  * Fixed `wlr_xwayland_destroy` pool destruction order and XWayland hit-testing macro capitalization in `src/server.c`.
+  * Updated PAM unlocker read error handling, explicit null-termination, and fallback stdout writes in `hikari_unlocker.c`.
+  * Corrected output commit-state error handling and automatic layout placement coordinates in `src/output.c`.
+  * Implemented layer-shell popup damage region accumulation based on ancestor geometries in `src/layer_shell.c` and added geometry storage to `struct hikari_layer_popup`.
+  * Guarded `wlr_xdg_surface_get_geometry` in `src/xdg_view.c` to prevent unmapped dimension crashes.
+  * Initialized `view->id` to `NULL` to fix pool reassignment assertions in `src/view.c`.
+* **Modified / Created Files:**
+  * `src/server.c`, `hikari_unlocker.c`, `src/output.c`, `src/layer_shell.c`, `include/hikari/layer_shell.h`, `src/view.c`, `src/xdg_view.c`
+* **Next Steps:**
+  * Await user testing on FreeBSD environment to finalize Phase 6 (FreeBSD Build Verification & Integration Testing) and execute `bmake`.
+
 ## Session Date: 2026-07-29 11:13
 * **Phase:** User Audit Requests & Wlroots 0.18+ / 0.20 API Migration (Continued)
 * **Accomplishments:**

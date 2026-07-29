@@ -13,7 +13,7 @@ WITH_VIRTUAL_INPUT = YES
 OS != uname
 VERSION ?= "CURRENT"
 PREFIX ?= /usr/local
-PKG_CONFIG ?= pkg-config
+PKG_CONFIG ?= pkgconf
 ETC_PREFIX ?= ${PREFIX}
 
 OBJS = \

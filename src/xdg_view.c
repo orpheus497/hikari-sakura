@@ -126,7 +126,14 @@ first_map(struct hikari_xdg_view *xdg_view, bool *focus)
   struct hikari_view *view = (struct hikari_view *)xdg_view;
   struct wlr_box *geometry = &xdg_view->view.geometry;
 
-  wlr_xdg_surface_get_geometry(xdg_surface, geometry);
+  if (xdg_surface->surface->mapped) {
+    wlr_xdg_surface_get_geometry(xdg_surface, geometry);
+    if (geometry->width <= 0 || geometry->height <= 0) {
+      *geometry = (struct wlr_box){0, 0, 1, 1};
+    }
+  } else {
+    *geometry = (struct wlr_box){0, 0, 1, 1};
+  }
   hikari_view_refresh_geometry(view, geometry);
 
   const char *app_id = get_app_id(xdg_view);
@@ -459,6 +466,18 @@ hikari_xdg_view_init(struct hikari_xdg_view *xdg_view,
   bool child = xdg_surface->toplevel->parent != NULL;
 
   hikari_view_init(&xdg_view->view, child, workspace);
+
+  if (xdg_surface->surface->mapped) {
+    struct wlr_box new_geometry;
+    wlr_xdg_surface_get_geometry(xdg_surface, &new_geometry);
+    if (new_geometry.width > 0 && new_geometry.height > 0) {
+      xdg_view->view.geometry = new_geometry;
+    } else {
+      xdg_view->view.geometry = (struct wlr_box){0, 0, 1, 1};
+    }
+  } else {
+    xdg_view->view.geometry = (struct wlr_box){0, 0, 1, 1};
+  }
 
 #if !defined(NDEBUG)
   printf("NEW XDG %p\n", xdg_view);

@@ -53,6 +53,8 @@ struct hikari_layer_popup {
   struct wl_listener map;
   struct wl_listener unmap;
   struct wl_listener new_popup;
+
+  struct wlr_box geometry;
 };
 
 void

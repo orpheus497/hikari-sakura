@@ -74,7 +74,8 @@ check_password(const char *username)
   /* ##Condition purpose: Initialize PAM authentication context. */
   if (pam_start("hikari-unlocker", username, &conv, &auth_handle) !=
       PAM_SUCCESS) {
-    /* ##Error purpose: Return -1 if PAM initialization fails fatally. */
+    /* ##Error purpose: Return -1 and write false if PAM initialization fails fatally. */
+    write(1, &success, sizeof(bool));
     return -1;
   }
 
@@ -84,15 +85,23 @@ check_password(const char *username)
     nread = read(0, input_buffer, INPUT_BUFFER_SIZE - 1);
   } while (nread == -1 && errno == EINTR);
 
-  if (nread == -1) {
+  /* ##Condition purpose: Check if nread failed or returned EOF. */
+  if (nread <= 0) {
+    /* ##Error purpose: Abort PAM initialization and write false to stdout on read failure. */
+    write(1, &success, sizeof(bool));
     pam_end(auth_handle, PAM_ABORT);
     return -1;
   }
 
+  input_buffer[nread] = '\0';
+
+  /* ##Condition purpose: Detect overlong input exceeding buffer size. */
   if (nread == INPUT_BUFFER_SIZE - 1 && input_buffer[INPUT_BUFFER_SIZE - 2] != '\n' && input_buffer[INPUT_BUFFER_SIZE - 2] != '\0') {
+    /* ##Error purpose: Drain remaining input, abort PAM, and write false on overlong password. */
     char c;
     while (read(0, &c, 1) == 1 && c != '\n');
     explicit_bzero(input_buffer, INPUT_BUFFER_SIZE);
+    write(1, &success, sizeof(bool));
     pam_end(auth_handle, PAM_ABORT);
     return 0;
   }
@@ -118,17 +127,23 @@ main(int argc, char **argv)
   char input;
   bool success = false;
   struct passwd *passwd = getpwuid(getuid());
+  /* ##Condition purpose: Verify password entry is found. */
   if (passwd == NULL) {
+    /* ##Error purpose: Return 1 on missing password entry. */
     return 1;
   }
 
   /* ##Step purpose: Allocate and lock password memory buffer in RAM to prevent swapping. */
   input_buffer = malloc(INPUT_BUFFER_SIZE);
+  /* ##Condition purpose: Verify input buffer allocation succeeded. */
   if (input_buffer == NULL) {
+    /* ##Error purpose: Return 1 on allocation failure. */
     return 1;
   }
   explicit_bzero(input_buffer, INPUT_BUFFER_SIZE);
+  /* ##Condition purpose: Verify memory lock succeeded to prevent swapping. */
   if (mlock(input_buffer, INPUT_BUFFER_SIZE) != 0) {
+    /* ##Error purpose: Free buffer and return 1 on mlock failure. */
     free(input_buffer);
     return 1;
   }
@@ -136,7 +151,9 @@ main(int argc, char **argv)
   /* ##Loop purpose: Loop until valid authentication password is provided or fatal error. */
   while (!success) {
     int result = check_password(passwd->pw_name);
+    /* ##Condition purpose: Check if authentication failed fatally. */
     if (result == -1) {
+      /* ##Error purpose: Break authentication loop on fatal error. */
       break;
     } else if (result == 1) {
       success = true;

@@ -106,6 +106,7 @@ hikari_output_damage_whole(struct hikari_output *output)
 
   if (output->scene_output != NULL) {
     wlr_damage_ring_add_whole(&output->scene_output->damage_ring);
+    wlr_output_schedule_frame(output->wlr_output);
   }
 }
 
@@ -138,7 +139,17 @@ hikari_output_enable(struct hikari_output *output)
     return;
   }
 
-  struct wlr_output *wlr_output = output->wlr_output;
+  struct wlr_output_state state;
+  wlr_output_state_init(&state);
+  wlr_output_state_set_enabled(&state, true);
+  if (!wlr_output_commit_state(wlr_output, &state)) {
+    wlr_output_state_finish(&state);
+    return;
+  }
+  wlr_output_state_finish(&state);
+
+  wl_signal_add(&wlr_output->events.frame, &output->frame);
+  wl_signal_add(&wlr_output->events.request_state, &output->request_state);
 
   output->enabled = true;
 }
@@ -268,7 +279,7 @@ hikari_output_init(struct hikari_output *output, struct wlr_output *wlr_output)
   if (!noop) {
     bool first = wl_list_empty(&hikari_server.outputs);
 
-    wl_list_insert(&hikari_server.outputs, &output->server_outputs);
+    wl_list_init(&output->server_outputs);
 
     struct wlr_output_state state;
     wlr_output_state_init(&state);
@@ -280,8 +291,13 @@ hikari_output_init(struct hikari_output *output, struct wlr_output *wlr_output)
       wlr_output_state_set_mode(&state, mode);
     }
 
-    wlr_output_commit_state(wlr_output, &state);
+    if (!wlr_output_commit_state(wlr_output, &state)) {
+      wlr_output_state_finish(&state);
+      return;
+    }
     wlr_output_state_finish(&state);
+
+    wl_list_insert(&hikari_server.outputs, &output->server_outputs);
 
     if (!hikari_server_in_lock_mode()) {
       hikari_output_enable(output);
@@ -304,7 +320,7 @@ hikari_output_init(struct hikari_output *output, struct wlr_output *wlr_output)
     } else {
       struct wlr_box extents;
       wlr_output_layout_get_box(hikari_server.output_layout, NULL, &extents);
-      l_output = wlr_output_layout_add(hikari_server.output_layout, wlr_output, extents.width, 0);
+      l_output = wlr_output_layout_add(hikari_server.output_layout, wlr_output, extents.x + extents.width, 0);
     }
     struct wlr_scene_output *scene_output = wlr_scene_output_create(hikari_server.scene, wlr_output);
     output->scene_output = scene_output;
