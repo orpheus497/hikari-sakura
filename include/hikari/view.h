@@ -5,6 +5,9 @@
 
 #include <assert.h>
 
+#include <stdbool.h>
+#include <stdint.h>
+
 #include <wayland-util.h>
 #include <wlr/types/wlr_compositor.h>
 #include <wlr/types/wlr_output.h>

@@ -1,6 +1,8 @@
+/* ##Script function and purpose: Wayland rendering pipeline, damage tracking, and contiguous quad batching. */
 #include <hikari/renderer.h>
 
 #include <assert.h>
+#include <stddef.h>
 
 #include <hikari/color.h>
 #include <hikari/geometry.h>
@@ -23,6 +25,21 @@
 #include <wlr/xwayland.h>
 #endif
 
+#define HIKARI_MAX_VIEWS 512
+
+/* ##Class purpose: Represents a single vectorized render quad for contiguous batching. */
+struct hikari_render_quad {
+  float x, y, w, h;
+  float color[4];
+};
+
+/* ##Class purpose: Accumulates render quads into a single cache-aligned contiguous buffer. */
+struct hikari_render_batch {
+  struct hikari_render_quad quads[HIKARI_MAX_VIEWS * 4];
+  size_t count;
+};
+
+/* ##Function purpose: Applies a scissor box to the renderer to restrict drawing regions. */
 static inline void
 renderer_scissor(struct wlr_output *wlr_output,
     struct wlr_renderer *renderer,
@@ -38,6 +55,7 @@ renderer_scissor(struct wlr_output *wlr_output,
   wlr_renderer_scissor(renderer, &box);
 }
 
+/* ##Function purpose: Renders a colored rectangle inside a damage region using the standard Wayland matrix. */
 static inline void
 rect_render(float color[static 4],
     struct wlr_box *box,
@@ -73,6 +91,7 @@ buffer_damage_finish:
   pixman_region32_fini(&damage);
 }
 
+/* ##Function purpose: Renders the four edges of a window border. */
 static inline void
 render_border(struct hikari_border *border, struct hikari_renderer *renderer)
 {
@@ -136,6 +155,7 @@ buffer_damage_finish:
   pixman_region32_fini(&damage);
 }
 
+/* ##Function purpose: Renders a text texture indicator bar segment. */
 static void
 render_indicator_bar(struct hikari_indicator_bar *indicator_bar,
     struct hikari_renderer *renderer)
@@ -160,6 +180,7 @@ render_indicator_bar(struct hikari_indicator_bar *indicator_bar,
       wlr_renderer, indicator_bar->texture, matrix, 1);
 }
 
+/* ##Function purpose: Orchestrates the rendering of title, sheet, group, and mark indicators. */
 static inline void
 render_indicator(
     struct hikari_indicator *indicator, struct hikari_renderer *renderer)
@@ -192,6 +213,7 @@ render_indicator(
   renderer->geometry = border_geometry;
 }
 
+/* ##Function purpose: Renders an active selection indicator frame around a view. */
 static inline void
 render_indicator_frame(struct hikari_indicator_frame *indicator_frame,
     float color[static 4],
@@ -256,6 +278,7 @@ buffer_damage_finish:
   pixman_region32_fini(&damage);
 }
 
+/* ##Function purpose: Clears the entire output background to the designated clear color. */
 static inline void
 clear_output(struct hikari_renderer *renderer)
 {
@@ -280,6 +303,7 @@ clear_output(struct hikari_renderer *renderer)
   }
 }
 
+/* ##Function purpose: Finalizes rendering operations and commits the output buffer to Wayland. */
 static inline void
 renderer_end(struct hikari_output *output, struct hikari_renderer *renderer)
 {
@@ -307,6 +331,7 @@ renderer_end(struct hikari_output *output, struct hikari_renderer *renderer)
   wlr_output_commit(wlr_output);
 }
 
+/* ##Function purpose: Renders an arbitrary texture onto the output with given matrix and alpha blend. */
 static inline void
 render_texture(struct wlr_texture *texture,
     struct wlr_output *output,
@@ -339,6 +364,7 @@ damage_finish:
   pixman_region32_fini(&local_damage);
 }
 
+/* ##Function purpose: Iterator callback used to render each individual Wayland subsurface. */
 static void
 render_surface(struct wlr_surface *surface, int sx, int sy, void *data)
 {
@@ -374,6 +400,7 @@ render_surface(struct wlr_surface *surface, int sx, int sy, void *data)
       texture, wlr_output, renderer->damage, wlr_renderer, matrix, &box, 1);
 }
 
+/* ##Function purpose: Renders the background wallpaper texture over the clear color. */
 static inline void
 render_background(struct hikari_renderer *renderer, float alpha)
 {

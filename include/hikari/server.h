@@ -3,6 +3,9 @@
 #if !defined(HIKARI_SERVER_H)
 #define HIKARI_SERVER_H
 
+#include <stdbool.h>
+#include <stdint.h>
+
 #include <wayland-server-core.h>
 #include <wayland-util.h>
 

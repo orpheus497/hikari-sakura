@@ -1,6 +1,7 @@
 /* ##Script function and purpose: Implementation of the contiguous object pool allocator for DOD architectures. */
 #include <hikari/pool.h>
 #include <hikari/memory.h>
+#include <stddef.h>
 #include <assert.h>
 
 /* ##Function purpose: Initializes a memory pool with specified capacity and item size. */

@@ -2,6 +2,8 @@
 
 *Last Updated:* 2026-07-29 03:19
 
+this is a freebsd exc;lusive absolutelyt no intention ot make this cross compatible with linux and absolutely no permission to subvert the freebsd target 
+
 ---
 
 ## 1. Subsystem Architecture & Execution Flow
