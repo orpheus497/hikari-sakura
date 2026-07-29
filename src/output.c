@@ -104,7 +104,9 @@ hikari_output_damage_whole(struct hikari_output *output)
 {
   assert(output != NULL);
 
-  // wlr_output_damage_add_whole(output->damage);
+  if (output->scene_output != NULL) {
+    wlr_damage_ring_add_whole(&output->scene_output->damage_ring);
+  }
 }
 
 void
@@ -234,6 +236,7 @@ hikari_output_init(struct hikari_output *output, struct wlr_output *wlr_output)
   output->background = NULL;
   output->enabled = false;
   output->workspace = hikari_pool_alloc(&hikari_server.workspace_pool);
+  assert(output->workspace != NULL);
 
 #ifdef HAVE_XWAYLAND
   wl_list_init(&output->unmanaged_xwayland_views);
@@ -301,6 +304,7 @@ hikari_output_init(struct hikari_output *output, struct wlr_output *wlr_output)
       l_output = wlr_output_layout_add(hikari_server.output_layout, wlr_output, extents.width, 0);
     }
     struct wlr_scene_output *scene_output = wlr_scene_output_create(hikari_server.scene, wlr_output);
+    output->scene_output = scene_output;
     wlr_scene_output_layout_add_output(hikari_server.scene_layout, l_output, scene_output);
 
     output_geometry(output);

@@ -2,7 +2,7 @@
 
 *Last Updated:* 2026-07-29 03:19
 
-this is a freebsd exc;lusive absolutelyt no intention ot make this cross compatible with linux and absolutely no permission to subvert the freebsd target 
+This project is exclusively targeted at FreeBSD. There is no Linux cross-compatibility, and no changes shall undermine the FreeBSD target.
 
 ---
 
@@ -54,19 +54,21 @@ this is a freebsd exc;lusive absolutelyt no intention ot make this cross compati
 
 ```c
 /* SIMD 64-byte aligned spatial layout table */
-struct alignas(64) hikari_view_geometry_table {
+struct hikari_view_geometry_table {
   int x[HIKARI_MAX_VIEWS];
   int y[HIKARI_MAX_VIEWS];
   int width[HIKARI_MAX_VIEWS];
   int height[HIKARI_MAX_VIEWS];
 };
+_Alignas(64) struct hikari_view_geometry_table view_geometry;
 
 /* Packed bitfield visibility table for O(1) cache line checks */
-struct alignas(64) hikari_view_state_table {
+struct hikari_view_state_table {
   uint16_t sheet_mask[HIKARI_MAX_VIEWS];
   uint8_t flags[HIKARI_MAX_VIEWS];
   uint16_t group_id[HIKARI_MAX_VIEWS];
 };
+_Alignas(64) struct hikari_view_state_table view_state;
 ```
 
 ---
@@ -78,10 +80,10 @@ struct alignas(64) hikari_view_state_table {
 * [x] **Item 2:** Modernize `Makefile` with FreeBSD `epoll-shim` flags via `pkg-config`.
 * [x] **Item 3:** Add evdev header compatibility (`<dev/evdev/input-event-codes.h>`) for FreeBSD builds.
 * [x] **Item 4:** Complete `AGENTS.md` line-by-line documentation prefixes across remaining `src/` modules.
-* [x] **Item 5:** Implement DOD Struct-of-Arrays (SoA) view geometry table / Slab allocator object pools in core headers and source.
 
 ### Implementation Registry:
 * **Item 1 Completed:** Created full `docs/` directory with 4 technical manuals (2026-07-29).
 * **Item 2 Completed:** Updated `Makefile` with FreeBSD `epoll-shim` conditional check (2026-07-29).
 * **Item 3 Completed:** Removed legacy Linux evdev headers across all source files in favor of native FreeBSD endpoints.
 * **Item 4/5 Completed:** Designed and deployed a contiguous Slab object allocator (`hikari_pool_alloc`), adapting all dynamic allocations across the `hikari_server` into contiguous memory blocks while preserving `wl_list` invariants.
+* **Item 6 Completed:** Implemented DOD Struct-of-Arrays (SoA) view geometry table / Slab allocator object pools in core headers and source.

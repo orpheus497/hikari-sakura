@@ -39,16 +39,16 @@ struct hikari_view {
 #define HIKARI_MAX_VIEWS 512
 
 /* 64-byte aligned spatial bounds array for SIMD/Vectorized geometry operations */
-struct alignas(64) hikari_view_geometry_table {
-  int x[HIKARI_MAX_VIEWS];
+struct hikari_view_geometry_table {
+  _Alignas(64) int x[HIKARI_MAX_VIEWS];
   int y[HIKARI_MAX_VIEWS];
   int width[HIKARI_MAX_VIEWS];
   int height[HIKARI_MAX_VIEWS];
 };
 
-/* Packed bitfield visibility table fits entirely inside 2 L1 cache lines (128 bytes) */
-struct alignas(64) hikari_view_state_table {
-  uint16_t sheet_mask[HIKARI_MAX_VIEWS]; /* Bitmask for sheets 0-9 */
+/* Packed bitfield visibility table fits in a minimal cache footprint (2560 bytes) */
+struct hikari_view_state_table {
+  _Alignas(64) uint16_t sheet_mask[HIKARI_MAX_VIEWS]; /* Bitmask for sheets 0-9 */
   uint8_t flags[HIKARI_MAX_VIEWS];      /* 0x1: hidden, 0x2: floating, 0x4: max, 0x8: pinned */
   uint16_t group_id[HIKARI_MAX_VIEWS];
 };
@@ -56,12 +56,12 @@ struct alignas(64) hikari_view_state_table {
 
 ---
 
-## 3. O(1) Sheet Bitmask Filtering
+## 3. Constant-Time Visibility Checking
 
-Sheet evaluation (determining which views are visible when switching between Sheets **1** through **9**) is optimized from linear list traversal to 64-bit vector bitmask operations:
+Visibility checking for a single view against the active sheet mask is optimized to a bitmask operation:
 
 ```c
-/* Checks visibility of all views in a single SIMD / cache-friendly pass */
+/* Checks visibility of a single view in a constant-time operation. Evaluating all views still requires iterating the collection unless a packed index is used. */
 static inline bool
 hikari_view_is_visible_dod(uint16_t view_sheet_mask, uint16_t active_sheet_mask)
 {
@@ -91,7 +91,7 @@ struct hikari_render_batch {
 ### Benefits of Contiguous Render Batching:
 1. Eliminates per-view rendering context state changes.
 2. Enables single-pass GPU/Pixman buffer updates.
-3. Reduces rendering overhead by up to 60% on low-power FreeBSD embedded or integrated GPU platforms.
+3. Reduces rendering overhead on low-power FreeBSD embedded or integrated GPU platforms by minimizing draw calls.
 
 ---
 

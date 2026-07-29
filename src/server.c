@@ -479,6 +479,7 @@ new_xwayland_surface_handler(struct wl_listener *listener, void *data)
   } else {
     struct hikari_xwayland_view *xwayland_view =
         hikari_pool_alloc(&server->view_pool);
+    assert(xwayland_view != NULL);
 
     hikari_xwayland_view_init(xwayland_view, wlr_xwayland_surface, workspace);
   }
@@ -653,6 +654,7 @@ new_xdg_surface_handler(struct wl_listener *listener, void *data)
 
   struct hikari_xdg_view *xdg_view =
       hikari_pool_alloc(&server->view_pool);
+  assert(xdg_view != NULL);
 
   hikari_xdg_view_init(xdg_view, xdg_surface, server->workspace);
 }
@@ -923,6 +925,7 @@ server_init(struct hikari_server *server, char *config_path)
   wl_list_init(&server->groups);
   wl_list_init(&server->visible_groups);
   wl_list_init(&server->visible_views);
+  wl_list_init(&server->toplevels);
 
   hikari_dnd_mode_init(&server->dnd_mode);
   hikari_group_assign_mode_init(&server->group_assign_mode);

@@ -1107,6 +1107,7 @@ hikari_view_tile(
   struct hikari_layout *layout = view->sheet->workspace->sheet->layout;
 
   struct hikari_tile *tile = hikari_pool_alloc(&hikari_server.tile_pool);
+  assert(tile != NULL);
   hikari_tile_init(tile, view, layout, geometry, geometry);
 
   queue_tile(view, layout, tile, center);
@@ -1580,6 +1581,8 @@ hikari_view_exchange(struct hikari_view *from, struct hikari_view *to)
 
   struct hikari_tile *from_tile = hikari_pool_alloc(&hikari_server.tile_pool);
   struct hikari_tile *to_tile = hikari_pool_alloc(&hikari_server.tile_pool);
+  assert(from_tile != NULL);
+  assert(to_tile != NULL);
 
   hikari_tile_init(from_tile, from, layout, to_geometry, to_geometry);
   hikari_tile_init(to_tile, to, layout, from_geometry, from_geometry);

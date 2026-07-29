@@ -44,12 +44,12 @@
 ---
 
 ## 5. Phase D: DOD Struct-of-Arrays (SoA) View Table Refactoring
-- [ ] Create `include/hikari/dod.h` for SIMD 64-byte aligned SoA tables (`hikari_view_geometry_table` and `hikari_view_state_table`).
-- [ ] Update `struct hikari_server` in `include/hikari/server.h` to embed instances of the SoA tables.
-- [ ] Refactor `struct hikari_view` in `include/hikari/view.h` to use a `uint16_t id` index and remove legacy `flags` bitfields.
-- [ ] Route all visibility/flag checks through `hikari_server.view_state.flags[view->id]`.
-- [ ] Route all geometry macros/functions through `hikari_server.view_geometry`.
-- [ ] Vectorize geometry calculations in `src/sheet.c` and `src/renderer.c`.
+- [x] Create `include/hikari/dod.h` for SIMD 64-byte aligned SoA tables (`hikari_view_geometry_table` and `hikari_view_state_table`).
+- [x] Update `struct hikari_server` in `include/hikari/server.h` to embed instances of the SoA tables.
+- [x] Refactor `struct hikari_view` in `include/hikari/view.h` to use a `uint16_t id` index and remove legacy `flags` bitfields.
+- [x] Route all visibility/flag checks through `hikari_server.view_state.flags[view->id]`.
+- [x] Route all geometry macros/functions through `hikari_server.view_geometry`.
+- [x] Vectorize geometry calculations in `src/sheet.c` and `src/renderer.c`.
 
 ---
 

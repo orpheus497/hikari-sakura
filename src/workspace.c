@@ -46,6 +46,7 @@ hikari_workspace_init(
   workspace->focus_view = NULL;
   workspace->sheets =
       hikari_pool_alloc(&hikari_server.sheet_pool);
+  assert(workspace->sheets != NULL);
 
   for (int i = 0; i < HIKARI_NR_OF_SHEETS; i++) {
     hikari_sheet_init(&workspace->sheets[i], i, workspace);

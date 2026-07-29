@@ -173,6 +173,7 @@ enable_outputs(void)
   mode->outputs_disabled = false;
 }
 
+/* ##Function purpose: Handles keyboard events for lock mode authentication. */
 static void
 key_handler(
     struct hikari_keyboard *keyboard, struct wlr_keyboard_key_event *event)
@@ -241,6 +242,7 @@ static void
 modifiers_handler(struct hikari_keyboard *keyboard)
 {}
 
+/* ##Function purpose: Ignores pointer button events during lock mode. */
 static void
 button_handler(
     struct hikari_cursor *cursor, struct wlr_pointer_button_event *event)

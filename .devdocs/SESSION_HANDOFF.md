@@ -4,6 +4,27 @@
 
 ---
 
+## Session Date: 2026-07-29 10:57
+* **Phase:** User Audit Requests & Wlroots 0.18+ / 0.20 API Migration (Continued)
+* **Accomplishments:**
+  * Updated C declarations in `BLUEPRINT.md` for `hikari_view_geometry_table` and `hikari_view_state_table` to apply `_Alignas(64)` directly to the objects rather than struct fields.
+  * Migrated `hikari_output_damage` to `wlr_scene_output->damage_ring` in `src/output.c` and `include/hikari/output.h`.
+  * Initialized `server->toplevels` in `src/server.c`.
+  * Restored functional damage handling and layer-shell map/unmap listeners in `src/layer_shell.c`.
+  * Added mandatory `##Function purpose:` documentation prefixes to `src/move_mode.c` and `src/lock_mode.c`.
+  * Added `assert(item != NULL)` to handle `hikari_pool_alloc` NULL returns at call sites in `src/output.c`, `src/server.c`, `src/view.c`, and `src/workspace.c`.
+* **Modified / Created Files:**
+  * `.devdocs/BLUEPRINT.md`
+  * `include/hikari/output.h`, `src/output.c`
+  * `src/server.c`
+  * `src/layer_shell.c`
+  * `src/move_mode.c`, `src/lock_mode.c`
+  * `src/view.c`, `src/workspace.c`
+* **Next Steps:**
+  * We have completed all inline audit requests. Await user confirmation for next phase or further verification.
+
+---
+
 ## Session Date: 2026-07-29 10:46
 * **Phase:** Phase 5 Wlroots 0.18+ / 0.20 API Migration
 * **Accomplishments:**
@@ -30,7 +51,7 @@
 * **Modified / Created Files:**
   * `src/workspace.c`, `src/renderer.c`, `src/sheet.c`, `include/hikari/dod.h`
   * `.devdocs/PROGRESS.md`, `.devdocs/DECISIONS_LOG.md`, `.devdocs/BRIEFING.md`
-  * `task.md`, `walkthrough.md`
+  * `.devdocs/task.md`, `.devdocs/walkthrough.md`
 * **Next Steps:**
   * The codebase is heavily structured around FreeBSD paradigms. With structural DOD completed, we wait for native FreeBSD deployment or new instructions from the user to start a new Phase.
 
@@ -44,7 +65,7 @@
   * Generated detailed `implementation_plan.md` outlining the creation of `include/hikari/dod.h` and the massive refactoring required to route view geometry and visibility flags through central `hikari_server.view_state` and `hikari_server.view_geometry` arrays.
   * Updated `.devdocs/TODOS.md`, `.devdocs/PROGRESS.md`, and `.devdocs/BRIEFING.md` with Phase 8 details.
 * **Modified / Created Files:**
-  * `implementation_plan.md` (Artifact created and pending user approval).
+  * `.devdocs/implementation_plan.md` (Artifact created and pending user approval).
   * `.devdocs/TODOS.md`, `.devdocs/PROGRESS.md`, `.devdocs/BRIEFING.md`, `.devdocs/SESSION_HANDOFF.md`
 * **Next Steps:**
   * Await user approval on `implementation_plan.md` and answers to open questions regarding geometry pointers, ID allocation, and new header creation.
@@ -63,7 +84,7 @@
   * `include/hikari/server.h`, `include/hikari/output.h`, `include/hikari/layout.h`, `include/hikari/view.h`, `include/hikari/sheet.h`
   * `fix_comments.py`
   * `.devdocs/BRIEFING.md`, `.devdocs/PROGRESS.md`, `.devdocs/SESSION_HANDOFF.md`
-  * `task.md`, `implementation_plan.md`
+  * `.devdocs/task.md`, `.devdocs/implementation_plan.md`
 * **Next Steps:**
   * Resume Phase 6 (FreeBSD Build Verification) once environment issues are resolved to compile via `bmake`.
 
@@ -81,7 +102,7 @@
   * `src/renderer.c`
   * `.devdocs/PROGRESS.md`, `.devdocs/SESSION_HANDOFF.md`
 * **Next Steps:**
-  * Attempt complete build verification once environment allows compiling FreeBSD targets, or transition project back to Linux build targets.
+  * Complete build verification is blocked until the environment supports compiling FreeBSD targets.
 
 ---
 
@@ -96,8 +117,8 @@
 * **Modified / Created Files:**
   * `Makefile`, `include/hikari/server.h`, `src/server.c`
   * `.devdocs/PROGRESS.md`, `.devdocs/SESSION_HANDOFF.md`, `.devdocs/SUMMARIES.md`
-  * `brain/116ff41d-34d1-4656-ae67-93fd2a4a40b1/implementation_plan.md`
-  * `brain/116ff41d-34d1-4656-ae67-93fd2a4a40b1/walkthrough.md`
+  * `.devdocs/brain/116ff41d-34d1-4656-ae67-93fd2a4a40b1/implementation_plan.md`
+  * `.devdocs/brain/116ff41d-34d1-4656-ae67-93fd2a4a40b1/walkthrough.md`
 * **Next Steps:**
   * Since `run_command` currently fails in the environment sandbox, we must rely on manual verification. Phase 6 (Build Verification) awaits environment restoration or explicit approval to continue manual DOD refactoring.
 
@@ -113,8 +134,8 @@
 * **Modified / Created Files:**
   * `src/output.c`
   * `.devdocs/PROGRESS.md`, `.devdocs/SESSION_HANDOFF.md`, `.devdocs/SUMMARIES.md`
-  * `brain/116ff41d-34d1-4656-ae67-93fd2a4a40b1/implementation_plan.md`
-  * `brain/116ff41d-34d1-4656-ae67-93fd2a4a40b1/walkthrough.md`
+  * `.devdocs/brain/116ff41d-34d1-4656-ae67-93fd2a4a40b1/implementation_plan.md`
+  * `.devdocs/brain/116ff41d-34d1-4656-ae67-93fd2a4a40b1/walkthrough.md`
 * **Next Steps:**
   * Since `run_command` currently fails in the environment sandbox, we must rely on manual verification. Phase 6 (Build Verification) awaits environment restoration or explicit approval to continue manual DOD refactoring.
 

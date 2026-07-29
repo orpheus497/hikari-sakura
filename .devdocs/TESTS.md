@@ -23,13 +23,14 @@
 3. Launch `hikari` and confirm single mouse pointer movement without duplicate cursor offset drift.
 
 ### Test Protocol 2: Shared Memory & `XDG_RUNTIME_DIR` Allocation
-1. Verify `/tmp` is mounted as `tmpfs` (`mount -t tmpfs tmpfs /tmp`).
-2. Set `export XDG_RUNTIME_DIR=/tmp/runtime-${USER}`.
+1. Mount `tmpfs` at a dedicated test mountpoint (e.g. `mount -t tmpfs tmpfs /mnt/test-tmpfs`).
+2. Set `export XDG_RUNTIME_DIR=/mnt/test-tmpfs/runtime-${USER}` and create the directory with restrictive permissions (`mkdir -p -m 0700 $XDG_RUNTIME_DIR`).
 3. Launch Wayland client (e.g. `alacritty` or `firefox`).
 4. Confirm surface buffer allocations succeed via `posix_fallocate`.
+5. Add explicit cleanup to unmount the temporary filesystem after testing (`umount /mnt/test-tmpfs`).
 
 ### Test Protocol 3: PAM Unlocker Security (`hikari-unlocker`)
 1. Verify `/usr/local/etc/pam.d/hikari-unlocker` exists.
-2. Confirm `hikari-unlocker` binary permissions: `chown root:wheel`, `chmod 4555`.
+2. Identify the canonical absolute path for the `hikari-unlocker` binary, verify trusted package provenance, then confirm it has root ownership and apply mode 4555 (e.g. `chown root:wheel /usr/local/bin/hikari-unlocker`, `chmod 4555 /usr/local/bin/hikari-unlocker`).
 3. Trigger lock mode (`Meta+L`) in `hikari`.
 4. Input user password and verify session unlocks cleanly upon PAM authentication success.

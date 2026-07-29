@@ -44,8 +44,8 @@ tmpfs   /tmp    tmpfs   rw,mode=1777   0   0
 In your user shell profile (`~/.profile`, `~/.zshrc`, or `~/.cshrc`):
 
 ```sh
-export XDG_RUNTIME_DIR=/tmp/runtime-${USER}
-mkdir -p -m 0700 "${XDG_RUNTIME_DIR}"
+export XDG_RUNTIME_DIR=$(mktemp -d /tmp/runtime-${USER}.XXXXXX)
+chmod 0700 "${XDG_RUNTIME_DIR}"
 ```
 
 ---

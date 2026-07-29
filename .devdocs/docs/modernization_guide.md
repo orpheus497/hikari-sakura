@@ -7,9 +7,9 @@ This guide documents the step-by-step modernization strategy for `hikari`. It co
 
 ## 1. `wlroots` API Modernization Plan
 
-`hikari` was originally authored against `wlroots` 0.10.x - 0.17.x. Modern `wlroots` releases (0.17.x, 0.18.x+) introduced several breaking header refactorings and struct migrations:
+`hikari` was originally authored against `wlroots` 0.10.x - 0.17.x. The supported target is `wlroots` 0.18.0 or newer, which introduced several breaking API changes:
 
-### Key Migration Patterns:
+### Key Migration Patterns for 0.18+:
 
 1. **Allocators & Renderers:**
    * Modern `wlroots` requires `wlr_allocator_autocreate(backend, renderer)` during backend startup.

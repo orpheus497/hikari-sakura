@@ -36,14 +36,14 @@
    * Parses CLI flags (`-c <config>`, `-a <autostart>`, `-v`, `-h`).
    * Evaluates `$XDG_CONFIG_HOME/hikari/hikari.conf` or `/usr/local/etc/hikari/hikari.conf`.
    * Invokes `hikari_server_prepare_privileged()` to initialize backend security and drops root permissions.
-   * Asserts `geteuid() != 0` (prohibits unprivileged execution under root account).
+   * Asserts `geteuid() != 0` as a diagnostic assertion. If strict enforcement is required, an explicit runtime check with a safe failure path should be used.
    * Calls `hikari_server_start(config_path, autostart)`.
 
 2. **Server Setup (`src/server.c`):**
    * Initializes `wl_display`, `wlr_backend`, `wlr_renderer`, and `wlr_allocator`.
    * Initializes input subsystems: `wlr_compositor`, `wlr_subcompositor`, `wlr_data_device_manager`, `wlr_seat`, `wlr_output_layout`.
    * Configures shell protocols: XDG Shell (`wlr_xdg_shell`), Layer Shell (`wlr_layer_shell_v1`), Gamma Control, Screencopy, Virtual Input.
-   * Loads user configuration via LibUCL parser ([src/configuration.c](file:///home/droid/Documents/Projects/hikari/src/configuration.c)).
+   * Loads user configuration via LibUCL parser ([src/configuration.c](../src/configuration.c)).
    * Executes autostart binary/script if specified.
    * Starts Wayland event loop (`wl_display_run`).
 
@@ -108,6 +108,6 @@ Rendering is managed by `src/renderer.c` using `cairo`, `pango`, and `wlroots`:
 4. **View Surface Stack:**
    * Renders Sheet 0 views (sticky).
    * Renders active Sheet (1-9) views from bottom-to-top of stacking order.
-   * Renders tiled window borders, focus indicators, title indicators ([src/indicator.c](file:///home/droid/Documents/Projects/hikari/src/indicator.c)), and client subsurfaces.
+   * Renders tiled window borders, focus indicators, title indicators ([src/indicator.c](../src/indicator.c)), and client subsurfaces.
 5. **Layer Shell (Top/Overlay):** Renders status bars (`waybar`), notification popups (`mako`), and launcher menus (`wofi`).
-6. **Lockscreen / UI Overlays:** Renders lock indicator ring ([src/lock_indicator.c](file:///home/droid/Documents/Projects/hikari/src/lock_indicator.c)) and mode indicators when active.
+6. **Lockscreen / UI Overlays:** Renders lock indicator ring ([src/lock_indicator.c](../src/lock_indicator.c)) and mode indicators when active.

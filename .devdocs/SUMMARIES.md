@@ -4,6 +4,19 @@
 
 ---
 
+## Session Summary: 2026-07-29 10:57
+* **Phase:** User Audit Requests & Wlroots 0.18+ / 0.20 API Migration (Continued)
+* **Status:** Completed all inline audit requests.
+* **Summary:**
+  * Addressed user inline feedback across `.devdocs/` and `src/`.
+  * Fixed C11 `_Alignas(64)` syntax in `BLUEPRINT.md` applying directly to objects.
+  * Adapted `wlr_scene_output->damage_ring` in `output.c` and `output.h`.
+  * Re-enabled popup damage and layer-shell surface map/unmap listeners in `layer_shell.c`.
+  * Added mandatory documentation blocks to modes (`move_mode.c`, `lock_mode.c`).
+  * Secured `hikari_pool_alloc` invocations with explicit assertions to gracefully handle NULL allocation failures.
+
+---
+
 ## Session Summary: 2026-07-29 06:00
 * **Phase:** Phase 8 DOD Struct-of-Arrays (SoA) View Table Refactoring & Phase 6 Build Verification
 * **Status:** Completed Phase 8 and syntax-verification portion of Phase 6.

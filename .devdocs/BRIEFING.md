@@ -5,8 +5,8 @@
 ---
 
 ## 1. Project Phase & Status
-* **Current Phase:** Phase 5 (Wlroots 0.18+ / 0.20 API Migration & FreeBSD Dependencies) - *Incomplete/Rolled Back*
-* **Overall Progress:** 50%
+* **Current Phase:** Phase 6 (FreeBSD Build Verification & Integration Testing)
+* **Overall Progress:** 80%
 * **Target Operating System:** FreeBSD 13.x / 14.x+ (Strictly Exclusive)
 
 ---
@@ -47,9 +47,9 @@
 ---
 
 1. **Step 1: Code Verification & Build Testing (Phase 6)**
-   * *Action:* We must execute `bmake` against the FreeBSD ports tree to flush out syntax missing headers, verify our Hybrid DOD and `hikari_render_batch` optimizations compile, and confirm the Slab Allocator offsets.
+   * *Action:* We must execute `bmake` against the FreeBSD ports tree to flush out syntax missing headers, verify our Hybrid DOD, Wlroots 0.18+, and `hikari_render_batch` optimizations compile, and confirm the Slab Allocator offsets. (Blocked on FreeBSD environment).
    * *Time Estimate:* ~15 mins.
 
-2. **Step 2: Session Wrap-up**
-   * *Action:* Run full documentation consistency validation and close the session correctly according to `AGENTS.md`.
-   * *Time Estimate:* ~5 mins.
+2. **Step 2: Deployment and End-to-End Validation**
+   * *Action:* Validate functionality in a real FreeBSD Wayland environment.
+   * *Time Estimate:* ~30 mins.

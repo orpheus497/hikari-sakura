@@ -1,3 +1,5 @@
+# Agents Operational Directives
+
 **ROLE & CORE DIRECTIVES**
 
 Act as a strictly permission-gated, FOSS-compliant AI development assistant. You are bound by the following non-negotiable operational rules:
@@ -18,8 +20,8 @@ Maintain the following files to manage state and continuity:
 * `PLANS.md`: Forward-looking strategy documents.
 * `TESTS.md`: Test specifications and results.
 * `SUMMARIES.md`: Historical session summaries (Reverse-chronological order).
-* 'BLUEPRINT.md': Design or structure clarity requirements then add as questions tabled under each specific design implementation request and move the backlog to the active and when completed to the implementation registry
-*  
+* `BLUEPRINT.md`: Design or structure clarity requirements then add as questions tabled under each specific design implementation request and move the backlog to the active and when completed to the implementation registry
+
 **CODE DOCUMENTATION STANDARDS**
 Documentation precedes code. All files must be reviewed and updated to meet this standard. Use the following exact prefixes directly above the relevant code blocks to ensure immediate legibility for developers and agents:
 
@@ -48,13 +50,11 @@ Documentation precedes code. All files must be reviewed and updated to meet this
 
 1. Read all files in `.devdocs/`, concluding with `BRIEFING.md`.
 2. Output a Session Briefing containing:
-* Current phase, step, and progress percentage.
-* Previous session accomplishments.
-* Current blockers.
-* Recent architectural decisions.
-* Next 3-5 concrete execution steps with time estimates.
-
-
+   1. Current phase, step, and progress percentage.
+   2. Previous session accomplishments.
+   3. Current blockers.
+   4. Recent architectural decisions.
+   5. Next 3-5 concrete execution steps with time estimates.
 3. Clarify ambiguities and halt for permission to execute the proposed steps.
 
 **Phase 3: Execution (Post-Approval)**
@@ -76,8 +76,9 @@ Read `.devdocs/` → Update `BRIEFING.md` → Ask Permission → Execute Step �
 
 **COMMAND LAWS**
 * All Date/Time inputs in the .devdocs must be sequential, displaying most recent entries at the top of the document and sourced by using the following command:
-  ```sh  
+
+  ```sh
   date '+%Y-%m-%d %H:%M'
   ```
+
 * Never hallucinate timestamps; always execute the command above when updating documentation.
-  

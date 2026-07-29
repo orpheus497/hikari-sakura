@@ -10,6 +10,7 @@
 
 #include <wlr/types/wlr_output.h>
 #include <wlr/types/wlr_compositor.h>
+#include <wlr/types/wlr_scene.h>
 
 #include <hikari/server.h>
 #include <hikari/output_config.h>
@@ -19,7 +20,7 @@ struct hikari_renderer;
 struct hikari_output {
   struct hikari_server *server;
   struct wlr_output *wlr_output;
-  struct wlr_output_event_damage *damage;
+  struct wlr_scene_output *scene_output;
   struct hikari_workspace *workspace;
 
   bool enabled;
@@ -85,8 +86,8 @@ hikari_output_add_damage(struct hikari_output *output, struct wlr_box *region)
   assert(output != NULL);
   assert(region != NULL);
 
-  if (output->enabled) {
-    // wlr_output_damage_add_box(output->damage, region);
+  if (output->enabled && output->scene_output != NULL) {
+    wlr_damage_ring_add_box(&output->scene_output->damage_ring, region);
   }
 }
 
@@ -110,7 +111,9 @@ hikari_output_add_effective_surface_damage(
   pixman_region32_init(&damage);
   wlr_surface_get_effective_damage(surface, &damage);
   pixman_region32_translate(&damage, x, y);
-  // wlr_output_damage_add(output->damage, &damage);
+  if (output->scene_output != NULL) {
+    wlr_damage_ring_add(&output->scene_output->damage_ring, &damage);
+  }
   pixman_region32_fini(&damage);
 }
 
