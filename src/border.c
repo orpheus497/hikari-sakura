@@ -36,8 +36,16 @@ void
 hikari_border_refresh_geometry(
     struct hikari_border *border, struct wlr_box *geometry)
 {
+  if (border->top == NULL) {
+    return;
+  }
+
   if (border->state == HIKARI_BORDER_NONE) {
     border->geometry = *geometry;
+    wlr_scene_node_set_enabled(&border->top->node, false);
+    wlr_scene_node_set_enabled(&border->bottom->node, false);
+    wlr_scene_node_set_enabled(&border->left->node, false);
+    wlr_scene_node_set_enabled(&border->right->node, false);
     return;
   }
 
@@ -48,24 +56,29 @@ hikari_border_refresh_geometry(
   border->geometry.width = geometry->width + border_width * 2;
   border->geometry.height = geometry->height + border_width * 2;
 
-  border->top.x = border->geometry.x;
-  border->top.y = border->geometry.y;
-  border->top.width = border->geometry.width;
-  border->top.height = border_width;
+  wlr_scene_node_set_position(&border->top->node, border->geometry.x, border->geometry.y);
+  wlr_scene_rect_set_size(border->top, border->geometry.width, border_width);
 
-  border->bottom.x = border->geometry.x;
-  border->bottom.y =
-      border->geometry.y + border->geometry.height - border_width;
-  border->bottom.width = border->geometry.width;
-  border->bottom.height = border_width;
+  wlr_scene_node_set_position(&border->bottom->node, border->geometry.x, border->geometry.y + border->geometry.height - border_width);
+  wlr_scene_rect_set_size(border->bottom, border->geometry.width, border_width);
 
-  border->left.x = border->geometry.x;
-  border->left.y = border->geometry.y;
-  border->left.width = border_width;
-  border->left.height = border->geometry.height;
+  wlr_scene_node_set_position(&border->left->node, border->geometry.x, border->geometry.y);
+  wlr_scene_rect_set_size(border->left, border_width, border->geometry.height);
 
-  border->right.x = border->geometry.x + border->geometry.width - border_width;
-  border->right.y = border->geometry.y;
-  border->right.width = border_width;
-  border->right.height = border->geometry.height;
+  wlr_scene_node_set_position(&border->right->node, border->geometry.x + border->geometry.width - border_width, border->geometry.y);
+  wlr_scene_rect_set_size(border->right, border_width, border->geometry.height);
+
+  wlr_scene_node_set_enabled(&border->top->node, true);
+  wlr_scene_node_set_enabled(&border->bottom->node, true);
+  wlr_scene_node_set_enabled(&border->left->node, true);
+  wlr_scene_node_set_enabled(&border->right->node, true);
+
+  float *color = border->state == HIKARI_BORDER_ACTIVE 
+    ? hikari_configuration->border_active 
+    : hikari_configuration->border_inactive;
+    
+  wlr_scene_rect_set_color(border->top, color);
+  wlr_scene_rect_set_color(border->bottom, color);
+  wlr_scene_rect_set_color(border->left, color);
+  wlr_scene_rect_set_color(border->right, color);
 }

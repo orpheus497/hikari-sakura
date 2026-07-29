@@ -493,6 +493,8 @@ hikari_xdg_view_init(struct hikari_xdg_view *xdg_view,
   xdg_view->scene_tree = wlr_scene_xdg_surface_create(&hikari_server.scene->tree, xdg_view->xdg_toplevel->base);
   xdg_view->scene_tree->node.data = xdg_view;
   xdg_surface->data = xdg_view->scene_tree;
+  
+  hikari_border_init(&xdg_view->view.border, xdg_view->scene_tree);
 
   xdg_view->map.notify = map_handler;
   wl_signal_add(&xdg_surface->events.map, &xdg_view->map);

@@ -429,6 +429,7 @@ hikari_view_init(
   hikari_server.view_state.flags[view->dod_id] = 0;
   hikari_server.view_state.sheet_mask[view->dod_id] = 0;
   hikari_view_set_hidden(view);
+  memset(&view->border, 0, sizeof(struct hikari_border));
   view->border.state = HIKARI_BORDER_INACTIVE;
   view->sheet = NULL;
   view->mark = NULL;

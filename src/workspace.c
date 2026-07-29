@@ -5,7 +5,6 @@
 
 #include <wlr/backend.h>
 
-#include <wlr/render/wlr_texture.h>
 
 #ifdef HAVE_XWAYLAND
 #include <wlr/xwayland.h>
@@ -157,15 +156,11 @@ display_sheet(struct hikari_workspace *workspace, struct hikari_sheet *sheet)
     workspace->sheet = sheet;
   }
 
-  uint16_t active_sheet_mask = (1 << sheet->nr);
   struct hikari_view *view, *view_tmp;
 
   wl_list_for_each_reverse_safe (
       view, view_tmp, &(workspace->views), workspace_views) {
-    uint16_t view_sheet_mask = hikari_server.view_state.sheet_mask[view->dod_id];
-
-    /* Evaluate sheet bitmask DOD function */
-    if (hikari_view_is_visible_dod(view_sheet_mask, active_sheet_mask)) {
+    if (view->sheet == sheet || view->sheet == &workspace->sheets[0]) {
       if (!hikari_view_is_invisible(view) && hikari_view_is_hidden(view)) {
         hikari_view_show(view);
       }

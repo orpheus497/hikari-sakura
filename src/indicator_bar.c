@@ -10,7 +10,6 @@
 #include <wlr/interfaces/wlr_buffer.h>
 
 #include <hikari/font.h>
-#include <wlr/render/wlr_texture.h>
 
 
 #include <hikari/color.h>
