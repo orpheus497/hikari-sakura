@@ -415,7 +415,10 @@ hikari_view_init(
 #if !defined(NDEBUG)
   printf("VIEW INIT %p\n", view);
 #endif
-  view->flags = hikari_view_hidden_flag;
+  view->dod_id = (uint16_t)(((uintptr_t)view - (uintptr_t)hikari_server.view_pool.buffer) / hikari_server.view_pool.item_size);
+  hikari_server.view_state.flags[view->dod_id] = 0;
+  hikari_server.view_state.sheet_mask[view->dod_id] = 0;
+  hikari_view_set_hidden(view);
   view->border.state = HIKARI_BORDER_INACTIVE;
   view->sheet = NULL;
   view->mark = NULL;
@@ -425,7 +428,6 @@ hikari_view_init(
   view->group = NULL;
   view->title = NULL;
   view->tile = NULL;
-  view->id = NULL;
   view->use_csd = false;
   view->child = child;
   view->current_geometry = &view->geometry;
@@ -1399,6 +1401,11 @@ hikari_view_evacuate(struct hikari_view *view, struct hikari_sheet *sheet)
 
   view->output = sheet->workspace->output;
   view->sheet = sheet;
+  if (sheet != NULL) {
+    hikari_server.view_state.sheet_mask[view->dod_id] = (1 << sheet->nr);
+  } else {
+    hikari_server.view_state.sheet_mask[view->dod_id] = 0;
+  }
 
   if (!hikari_view_is_hidden(view)) {
     if (hikari_view_is_forced(view)) {
@@ -1461,6 +1468,11 @@ hikari_view_pin_to_sheet(struct hikari_view *view, struct hikari_sheet *sheet)
     }
 
     view->sheet = sheet;
+    if (sheet != NULL) {
+      hikari_server.view_state.sheet_mask[view->dod_id] = (1 << sheet->nr);
+    } else {
+      hikari_server.view_state.sheet_mask[view->dod_id] = 0;
+    }
 
     if (hikari_view_is_tiled(view)) {
       queue_reset(view, true);
@@ -1742,6 +1754,11 @@ hikari_view_refresh_geometry(struct hikari_view *view, struct wlr_box *geometry)
 
   view->current_geometry = new_geometry;
   view->current_unmaximized_geometry = refresh_unmaximized_geometry(view);
+  
+  hikari_server.view_geometry.x[view->dod_id] = new_geometry->x;
+  hikari_server.view_geometry.y[view->dod_id] = new_geometry->y;
+  hikari_server.view_geometry.width[view->dod_id] = new_geometry->width;
+  hikari_server.view_geometry.height[view->dod_id] = new_geometry->height;
 
   refresh_border_geometry(view);
 }
@@ -1818,6 +1835,11 @@ migrate_view(struct hikari_view *view, struct hikari_sheet *sheet, bool center)
 
   view->output = sheet->workspace->output;
   view->sheet = sheet;
+  if (sheet != NULL) {
+    hikari_server.view_state.sheet_mask[view->dod_id] = (1 << sheet->nr);
+  } else {
+    hikari_server.view_state.sheet_mask[view->dod_id] = 0;
+  }
 
   move_to_top(view);
 
@@ -1898,6 +1920,11 @@ hikari_view_configure(struct hikari_view *view,
   }
 
   view->sheet = sheet;
+  if (sheet != NULL) {
+    hikari_server.view_state.sheet_mask[view->dod_id] = (1 << sheet->nr);
+  } else {
+    hikari_server.view_state.sheet_mask[view->dod_id] = 0;
+  }
   view->output = output;
 
   wl_list_init(&view->workspace_views);

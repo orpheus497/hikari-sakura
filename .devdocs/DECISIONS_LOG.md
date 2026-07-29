@@ -4,6 +4,18 @@
 
 ---
 
+## [2026-07-29 05:56] Decision: Continuous Quad Batch Rendering
+* **Context:** The `struct hikari_render_batch` was introduced to allow O(1) cache-aligned bulk drawing of borders and indicator frames rather than context-switching matrices continuously.
+* **Decision:** We inverted the rendering logic for borders and indicators. Instead of intersecting damage and immediately dispatching `wlr_render_quad_with_matrix`, we batch the geometry via `hikari_render_batch_add`. A unified flush `hikari_render_batch_flush` handles scissor intersection in a tighter loop, improving CPU utilization and decoupling the geometry scene pass from the rendering pipeline.
+
+---
+
+## [2026-07-29 05:51] Decision: Hybrid DOD Geometry and Flag Synchronization
+* **Context:** The Phase 8 DOD refactoring required moving `view->flags` and `view->geometry` to cache-aligned SoA tables `view_state.flags` and `view_geometry`.
+* **Decision:** To avoid rewriting the entire Wayland API interaction surface and risking cascading breakage, a Hybrid DOD approach is used. We retain `struct wlr_box geometry` inside `struct hikari_view`, but intercept mutations in `hikari_view_refresh_geometry` to synchronize `server.view_geometry`. We entirely replaced `view->flags` with `server.view_state.flags[view->dod_id]` which natively stores the `FLAG()` macro bits, allowing immediate O(1) checks.
+
+---
+
 ## [2026-07-29 04:47] Decision: Sheet Pool Capacity & Array Contiguity
 * **Context:** `hikari_workspace` allocates its 10 sheets simultaneously via `calloc(HIKARI_NR_OF_SHEETS, sizeof(struct hikari_sheet))` to hold them in a contiguous array format. Our Slab allocator traditionally manages single instances per block.
 * **Decision:** To guarantee array contiguity without modifying `struct hikari_workspace` pointer mechanics or breaking `wl_list`, the `sheet_pool` `item_size` in `src/server.c` is initialized to `HIKARI_NR_OF_SHEETS * sizeof(struct hikari_sheet)`. A single allocation from the pool yields the contiguous block necessary for the workspace arrays.

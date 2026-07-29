@@ -151,17 +151,28 @@ hikari_workspace_clear(struct hikari_workspace *workspace)
 static void
 display_sheet(struct hikari_workspace *workspace, struct hikari_sheet *sheet)
 {
-  hikari_workspace_clear(workspace);
-
   if (sheet != workspace->sheet) {
     workspace->alternate_sheet = workspace->sheet;
     workspace->sheet = sheet;
   }
 
-  hikari_sheet_show(&workspace->sheets[0]);
+  uint16_t active_sheet_mask = (1 << sheet->nr);
+  struct hikari_view *view, *view_tmp;
 
-  if (sheet->nr != 0) {
-    hikari_sheet_show(sheet);
+  wl_list_for_each_reverse_safe (
+      view, view_tmp, &(workspace->views), workspace_views) {
+    uint16_t view_sheet_mask = hikari_server.view_state.sheet_mask[view->dod_id];
+
+    /* Evaluate sheet bitmask DOD function */
+    if (hikari_view_is_visible_dod(view_sheet_mask, active_sheet_mask)) {
+      if (!hikari_view_is_invisible(view) && hikari_view_is_hidden(view)) {
+        hikari_view_show(view);
+      }
+    } else {
+      if (!hikari_view_is_hidden(view)) {
+        hikari_view_hide(view);
+      }
+    }
   }
 
   hikari_server_cursor_focus();

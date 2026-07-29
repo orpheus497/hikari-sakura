@@ -43,7 +43,17 @@
 
 ---
 
-## 5. Phase D: Build System & Compilation Verification
+## 5. Phase D: DOD Struct-of-Arrays (SoA) View Table Refactoring
+- [ ] Create `include/hikari/dod.h` for SIMD 64-byte aligned SoA tables (`hikari_view_geometry_table` and `hikari_view_state_table`).
+- [ ] Update `struct hikari_server` in `include/hikari/server.h` to embed instances of the SoA tables.
+- [ ] Refactor `struct hikari_view` in `include/hikari/view.h` to use a `uint16_t id` index and remove legacy `flags` bitfields.
+- [ ] Route all visibility/flag checks through `hikari_server.view_state.flags[view->id]`.
+- [ ] Route all geometry macros/functions through `hikari_server.view_geometry`.
+- [ ] Vectorize geometry calculations in `src/sheet.c` and `src/renderer.c`.
+
+---
+
+## 6. Phase E: Build System & Compilation Verification
 - [ ] Validate `Makefile` build output strictly with FreeBSD `bmake`.
 - [ ] Execute runtime memory address audits to mathematically prove perfect contiguous memory alignment (DOD) inside the `wl_list` nodes.
 - [ ] Test `hikari-unlocker` PAM authentication under production FreeBSD configurations.

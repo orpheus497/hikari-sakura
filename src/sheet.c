@@ -3,6 +3,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <assert.h>
 #include <stdint.h>
 #include <stdbool.h>
 
@@ -462,13 +463,7 @@ hikari_sheet_is_visible(struct hikari_sheet *sheet)
     }                                                                          \
   }
 
-/* ##Function purpose: Vector sheet bitmask DOD function for O(1) visibility caching checks. */
-static inline bool
-hikari_view_is_visible_dod(uint16_t view_sheet_mask, uint16_t active_sheet_mask)
-{
-  /* Sheet 0 bit (0x1) is always visible; active sheet bit matches active sheet mask */
-  return (view_sheet_mask & (active_sheet_mask | 0x0001)) != 0;
-}
+
 
 /* ##Function purpose: Makes all views in a sheet visible. */
 void

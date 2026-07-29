@@ -49,7 +49,7 @@ struct hikari_view {
 
   bool use_csd;
   bool child;
-  unsigned int flags;
+  uint16_t dod_id;
   char *title;
   char *id;
   struct hikari_border border;
@@ -121,24 +121,24 @@ void
 hikari_view_subsurface_fini(struct hikari_view_subsurface *view_subsurface);
 
 #define FLAG(name, shift)                                                      \
-  static const unsigned long hikari_view_##name##_flag = 1UL << shift;         \
+  static const uint8_t hikari_view_##name##_flag = 1 << shift;                 \
                                                                                \
   static inline bool hikari_view_is_##name(struct hikari_view *view)           \
   {                                                                            \
     assert(view != NULL);                                                      \
-    return (view->flags & hikari_view_##name##_flag);                          \
+    return (hikari_server.view_state.flags[view->dod_id] & hikari_view_##name##_flag); \
   }                                                                            \
                                                                                \
   static inline void hikari_view_set_##name(struct hikari_view *view)          \
   {                                                                            \
     assert(view != NULL);                                                      \
-    view->flags |= hikari_view_##name##_flag;                                  \
+    hikari_server.view_state.flags[view->dod_id] |= hikari_view_##name##_flag;     \
   }                                                                            \
                                                                                \
   static inline void hikari_view_unset_##name(struct hikari_view *view)        \
   {                                                                            \
     assert(view != NULL);                                                      \
-    view->flags &= ~hikari_view_##name##_flag;                                 \
+    hikari_server.view_state.flags[view->dod_id] &= ~hikari_view_##name##_flag;    \
   }
 
 FLAG(hidden, 0UL)
