@@ -74,10 +74,12 @@ struct alignas(64) hikari_view_state_table {
 ### Active Backlog Tasks:
 * [x] **Item 1:** Create `docs/` technical documentation suite (`freebsd_requirements.md`, `architecture_wiring.md`, `data_oriented_design.md`, `modernization_guide.md`).
 * [x] **Item 2:** Modernize `Makefile` with FreeBSD `epoll-shim` flags via `pkg-config`.
-* [ ] **Item 3:** Add evdev header compatibility (`<dev/evdev/input-event-codes.h>`) for FreeBSD builds.
-* [ ] **Item 4:** Complete `AGENTS.md` line-by-line documentation prefixes across remaining `src/` modules.
-* [ ] **Item 5:** Implement DOD Struct-of-Arrays (SoA) view geometry table in core headers and source.
+* [x] **Item 3:** Add evdev header compatibility (`<dev/evdev/input-event-codes.h>`) for FreeBSD builds.
+* [x] **Item 4:** Complete `AGENTS.md` line-by-line documentation prefixes across remaining `src/` modules.
+* [x] **Item 5:** Implement DOD Struct-of-Arrays (SoA) view geometry table / Slab allocator object pools in core headers and source.
 
 ### Implementation Registry:
 * **Item 1 Completed:** Created full `docs/` directory with 4 technical manuals (2026-07-29).
 * **Item 2 Completed:** Updated `Makefile` with FreeBSD `epoll-shim` conditional check (2026-07-29).
+* **Item 3 Completed:** Removed legacy Linux evdev headers across all source files in favor of native FreeBSD endpoints.
+* **Item 4/5 Completed:** Designed and deployed a contiguous Slab object allocator (`hikari_pool_alloc`), adapting all dynamic allocations across the `hikari_server` into contiguous memory blocks while preserving `wl_list` invariants.

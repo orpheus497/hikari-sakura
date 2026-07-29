@@ -296,7 +296,9 @@ hikari_output_init(struct hikari_output *output, struct wlr_output *wlr_output)
 
       l_output = wlr_output_layout_add(hikari_server.output_layout, wlr_output, x, y);
     } else {
-      l_output = wlr_output_layout_add_auto(hikari_server.output_layout, wlr_output);
+      struct wlr_box extents;
+      wlr_output_layout_get_box(hikari_server.output_layout, NULL, &extents);
+      l_output = wlr_output_layout_add(hikari_server.output_layout, wlr_output, extents.width, 0);
     }
     struct wlr_scene_output *scene_output = wlr_scene_output_create(hikari_server.scene, wlr_output);
     wlr_scene_output_layout_add_output(hikari_server.scene_layout, l_output, scene_output);

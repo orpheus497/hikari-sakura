@@ -40,7 +40,17 @@ FreeBSD uses `kqueue` instead of Linux `epoll`. Linux epoll compatibility is pro
 
 ---
 
-## 3. Code Documentation Standards Compliance (`AGENTS.md`)
+## 3. Data-Oriented Design (DOD) Memory Pools
+
+To avoid dynamic heap fragmentation, Hikari utilizes contiguous Object Pools for Wayland entities:
+
+* **Slab Allocator:** Implemented via `include/hikari/pool.h` and `src/pool.c`. Provides $O(1)$ object allocation/deallocation via an embedded intrusive free list.
+* **Wayland Objects:** Allocations for `hikari_xdg_view`, `hikari_xwayland_view`, `hikari_sheet`, `hikari_workspace`, and `hikari_tile` are redirected to `hikari_pool_alloc()` / `hikari_pool_free()`.
+* **Array Contiguity Workaround:** For components like `hikari_workspace` that require multiple `hikari_sheet` instances in a contiguous array, the memory pool's `item_size` is sized to accommodate the entire array as a single block (e.g., `HIKARI_NR_OF_SHEETS * sizeof(struct hikari_sheet)`).
+
+---
+
+## 4. Code Documentation Standards Compliance (`AGENTS.md`)
 
 All modified or new source and header files MUST incorporate exact line-by-line documentation prefixes before function, block, and logic definitions:
 

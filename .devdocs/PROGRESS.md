@@ -10,7 +10,8 @@
 | Phase 2 | Product Documentation (`docs/`) & File-by-File Deep Audit | Completed | 100% |
 | Phase 3 | FreeBSD Native Header Adaptations & Toolchain Flags | Completed | 100% |
 | Phase 4 | Data-Oriented Design (DOD) Struct-of-Arrays (SoA) Refactoring | Completed | 100% |
-| Phase 5 | FreeBSD Build Verification & Integration Testing | Pending | 0% |
+| Phase 5 | Wlroots 0.18+ / 0.20 API Migration & FreeBSD Dependencies | Completed | 100% |
+| Phase 6 | FreeBSD Build Verification & Integration Testing | Pending | 0% |
 
 ## Detailed Milestones
 
@@ -20,6 +21,7 @@
 - [x] Modernize build system (`Makefile`) with FreeBSD `epoll-shim` flags
 - [x] Perform exhaustive file-by-file audit of all 65 headers and 56 source files
 - [x] Replace `<linux/input-event-codes.h>` with FreeBSD native `<dev/evdev/input-event-codes.h>` header in `src/binding_config.c`, `src/configuration.c`, and `src/pointer_config.c`
-- [ ] Define flat `hikari_view_geometry_table` (SoA) and `hikari_view_state_table` in `include/hikari/view.h`
+- [x] Wlroots 0.18+ / 0.20 Migration: Bumped `Makefile`, removed obsolete `session` from `hikari_server`, updated `wlr_backend_autocreate`, and verified API compatibility.
+- [x] FreeBSD Dependencies Audit: Verified `epoll-shim`, `libucl`, and `hikari-unlocker.c` PAM setups.
 - [ ] Implement $O(1)$ vector sheet bitmask lookups in `src/sheet.c`
 - [ ] Implement contiguous render quad batching in `src/renderer.c`

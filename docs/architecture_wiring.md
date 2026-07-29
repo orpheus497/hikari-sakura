@@ -57,6 +57,7 @@
 
 ### `hikari_server`
 Central singleton managing all outputs, views, active modes, keybindings, input devices, dynamic configuration, and workspace sheets.
+**DOD Memory Management:** Contains the pre-allocated contiguous memory pools (`view_pool`, `sheet_pool`, `workspace_pool`, `tile_pool`) initialized at startup to eliminate runtime heap fragmentation.
 
 ### `hikari_workspace`
 Active view visibility container per output. Contains tile trees (`hikari_tile`), focus stacks, sheet mappings, and output layout geometries.

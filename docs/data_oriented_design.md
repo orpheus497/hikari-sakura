@@ -92,3 +92,14 @@ struct hikari_render_batch {
 1. Eliminates per-view rendering context state changes.
 2. Enables single-pass GPU/Pixman buffer updates.
 3. Reduces rendering overhead by up to 60% on low-power FreeBSD embedded or integrated GPU platforms.
+
+---
+
+## 5. Contiguous Object Pool (Slab) Architecture
+
+To complement the SoA structures, all dynamically generated core Wayland objects (`hikari_xdg_view`, `hikari_sheet`, `hikari_workspace`, `hikari_tile`) are allocated from pre-initialized Contiguous Object Pools (`struct hikari_pool`).
+
+### Memory Contiguity & wl_list Integration:
+* Pools (`view_pool`, `sheet_pool`, `workspace_pool`, `tile_pool`) are embedded inside `struct hikari_server`.
+* All dynamic heap `malloc` calls in `src/view.c`, `src/workspace.c`, `src/sheet.c`, etc., are replaced with $O(1)$ `hikari_pool_alloc` lookups.
+* This retains exact pointer references required for Wayland `wlroots` native `wl_list` integration, avoiding breaking signal events while still ensuring cache-friendly memory localization.

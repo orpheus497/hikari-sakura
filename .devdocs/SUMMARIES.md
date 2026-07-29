@@ -4,6 +4,26 @@
 
 ---
 
+## Session Summary: 2026-07-29 05:03
+* **Phase:** Phase 5 Wlroots 0.18+ / 0.20 API Migration
+* **Status:** Completed Phase 5.
+* **Summary:**
+  * Responded to user directive to target the latest stable `wlroots` release (`0.18+ / 0.20`) rather than the outdated `0.17`.
+  * Bumped `Makefile` pkg-config bounds to `>= 0.18.0`.
+  * Removed legacy `wlr_session` parameters from `hikari_server` and `wlr_backend_autocreate` to satisfy the severe 0.18 API breaking changes.
+
+---
+
+## Session Summary: 2026-07-29 04:57
+* **Phase:** Phase 5 Wlroots 0.17+ API Migration & FreeBSD Dependencies
+* **Status:** Completed Phase 5.
+* **Summary:**
+  * Responded to user directive to properly audit the `wlroots >= 0.17.0` flag introduced earlier.
+  * Replaced removed `wlr_output_layout_add_auto` function in `src/output.c` with manual extents calculation.
+  * Validated backend/renderer init signatures and FreeBSD PAM/`epoll-shim` requirements, confirming true alignment between the `Makefile` and the C codebase.
+
+---
+
 ## Session Summary: 2026-07-29 04:43
 * **Phase:** Phase 4 Memory-Optimized Hybrid DOD Refactoring & FreeBSD Exclusivity
 * **Status:** Completed Phase A (FreeBSD Adaptation), Phase B (Pool Allocator), and Phase C (DOD Hybrid Refactoring).

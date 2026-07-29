@@ -1,12 +1,12 @@
 # Session Briefing - Hikari FreeBSD Modernization & Hybrid DOD (Object Pools)
 
-*Timestamp:* 2026-07-29 03:44
+*Timestamp:* 2026-07-29 04:47
 
 ---
 
 ## 1. Project Phase & Status
-* **Current Phase:** Phase 2 (Comprehensive Audit & Strategy Alignment) - **Awaiting Final Approval**
-* **Overall Progress:** 35%
+* **Current Phase:** Phase 5 (FreeBSD Build Verification & Integration Testing)
+* **Overall Progress:** 80%
 * **Target Operating System:** FreeBSD 13.x / 14.x+ (Strictly Exclusive)
 
 ---
@@ -42,20 +42,16 @@
 ---
 
 ## 4. Current Blockers
-* **Awaiting Final User Approval:** The strategic documentation, implementation plan, and tracking files have been expanded to exhaustive detail detailing the massive undertaking of building the Object Pool allocator and FreeBSD exclusivity. I require explicit permission to commence execution.
+* **Pending Compilation:** We must verify syntax, compilation, and `wl_list` invariants under FreeBSD `bmake`.
 
 ---
 
-## 5. Next 3 Concrete Execution Steps (Awaiting User Approval)
+## 5. Next Concrete Execution Steps
 
-1. **Step 1: FreeBSD System Exclusivity Adaptation (Phase A)**
-   * *Action:* Replace `<linux/input-event-codes.h>` in `src/binding_config.c`, `src/configuration.c`, and `src/pointer_config.c` with `<dev/evdev/input-event-codes.h>`. Delete all Linux fallback `#ifdef` paths.
+1. **Step 1: Code Verification & Build Testing (Phase 5)**
+   * *Action:* Execute `bmake` to flush out missing syntax headers, confirm the Slab Allocator offsets, and verify DOD compilation.
+   * *Time Estimate:* ~15 mins.
+
+2. **Step 2: Line-by-Line Document Prefix Verification**
+   * *Action:* Ensure `AGENTS.md` compliance with exact documentation prefixes (`##Script function and purpose: ...`) across all touched C files.
    * *Time Estimate:* ~10 mins.
-
-2. **Step 2: Object Pool Allocator Engineering (Phase B)**
-   * *Action:* Create `include/hikari/pool.h` and `src/pool.c` and implement the slab allocator logic (`buffer`, `free_list`, `hikari_pool_init`, `alloc`, `free`).
-   * *Time Estimate:* ~30 mins.
-
-3. **Step 3: Memory-Optimized Hybrid DOD Refactoring (Phase C)**
-   * *Action:* Embed pools into `hikari_server`, initialize them in `server.c`, and replace all target `hikari_malloc` calls in `src/view.c`, `src/sheet.c`, etc. with `hikari_pool_alloc`.
-   * *Time Estimate:* ~45 mins.
