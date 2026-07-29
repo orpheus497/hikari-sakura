@@ -280,7 +280,7 @@ destroy_handler(struct wl_listener *listener, void *data)
   wl_list_remove(&xdg_view->destroy.link);
 
   hikari_view_fini(view);
-  hikari_pool_free(&hikari_server.view_pool, xdg_view);
+  hikari_free(xdg_view);
 }
 
 static void

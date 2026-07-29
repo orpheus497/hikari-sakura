@@ -1,6 +1,6 @@
 # Macro Progress Tracking
 
-*Last Updated:* 2026-07-29 05:56
+*Last Updated:* 2026-07-29 13:46
 
 ## Overall Project Completion: 87.5% (Based on simple average of 8 phases)
 
@@ -31,3 +31,4 @@
 - [x] Phase A: Header Dependency Verification (standard library types injected)
 - [x] Phase B: Source Implementation Verification
 - [x] Phase C: AGENTS.md Compliance Sweep (checked scripts, conditions, loops comments)
+- [x] Compilation Fixes: Resolved `pkg-config` paths for `wlroots-0.20`, added `wlr_cursor.h` backport header for `wlroots` 0.20, and fixed missing `pool.o` linker object.

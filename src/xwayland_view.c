@@ -255,7 +255,7 @@ destroy_handler(struct wl_listener *listener, void *data)
   wl_list_remove(&xwayland_view->request_configure.link);
   wl_list_remove(&xwayland_view->set_title.link);
 
-  hikari_pool_free(&hikari_server.view_pool, xwayland_view);
+  hikari_free(xwayland_view);
 }
 
 static void

@@ -480,7 +480,7 @@ new_xwayland_surface_handler(struct wl_listener *listener, void *data)
         xwayland_unmanaged_view, wlr_xwayland_surface, workspace);
   } else {
     struct hikari_xwayland_view *xwayland_view =
-        hikari_pool_alloc(&server->view_pool);
+        hikari_malloc(sizeof(struct hikari_xwayland_view));
     if (xwayland_view == NULL) {
       return;
     }
@@ -663,7 +663,7 @@ new_xdg_surface_handler(struct wl_listener *listener, void *data)
   }
 
   struct hikari_xdg_view *xdg_view =
-      hikari_pool_alloc(&server->view_pool);
+      hikari_malloc(sizeof(struct hikari_xdg_view));
   if (xdg_view == NULL) {
     return;
   }
@@ -845,16 +845,7 @@ server_init(struct hikari_server *server, char *config_path)
   server->cycling = false;
   server->workspace = NULL;
 
-#ifdef HAVE_XWAYLAND
-  size_t max_view_size = sizeof(struct hikari_xdg_view) > sizeof(struct hikari_xwayland_view) ? sizeof(struct hikari_xdg_view) : sizeof(struct hikari_xwayland_view);
-#else
-  size_t max_view_size = sizeof(struct hikari_xdg_view);
-#endif
 
-  hikari_pool_init(&server->view_pool, 512, max_view_size);
-  hikari_pool_init(&server->sheet_pool, 100, HIKARI_NR_OF_SHEETS * sizeof(struct hikari_sheet));
-  hikari_pool_init(&server->workspace_pool, 10, sizeof(struct hikari_workspace));
-  hikari_pool_init(&server->tile_pool, 1024, sizeof(struct hikari_tile));
 
   hikari_indicator_init(
       &server->indicator, hikari_configuration->indicator_selected);
@@ -1072,10 +1063,7 @@ hikari_server_stop(void)
   wlr_xwayland_destroy(server->xwayland);
 #endif
 
-  hikari_pool_destroy(&server->view_pool);
-  hikari_pool_destroy(&server->sheet_pool);
-  hikari_pool_destroy(&server->workspace_pool);
-  hikari_pool_destroy(&server->tile_pool);
+
 
   wlr_seat_destroy(server->seat);
   wl_display_destroy(server->display);

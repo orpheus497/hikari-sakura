@@ -1,6 +1,6 @@
 # Session Briefing - Hikari FreeBSD Modernization & Hybrid DOD (Object Pools)
 
-*Timestamp:* 2026-07-29 05:56
+*Timestamp:* 2026-07-29 13:46
 
 ---
 
@@ -47,7 +47,7 @@
 ---
 
 1. **Step 1: Code Verification & Build Testing (Phase 6)**
-   * *Action:* We must execute `bmake` against the FreeBSD ports tree to flush out syntax missing headers, verify our Hybrid DOD, Wlroots 0.18+ (using `wlroots-0.18.pc`), and `hikari_render_batch` optimizations compile, and confirm the Slab Allocator offsets. (Blocked on FreeBSD environment).
+   * *Action:* We must execute `bmake` against the FreeBSD ports tree to flush out syntax missing headers, verify our Hybrid DOD, Wlroots 0.20+ (using `wlroots-0.20.pc`), and `hikari_render_batch` optimizations compile, and confirm the Slab Allocator offsets. (Blocked on FreeBSD environment).
    * *Time Estimate:* ~15 mins.
 
 2. **Step 2: Deployment and End-to-End Validation**

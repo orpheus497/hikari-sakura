@@ -252,7 +252,7 @@ hikari_output_init(struct hikari_output *output, struct wlr_output *wlr_output)
   output->wlr_output = wlr_output;
   output->background = NULL;
   output->enabled = false;
-  output->workspace = hikari_pool_alloc(&hikari_server.workspace_pool);
+  output->workspace = hikari_malloc(sizeof(struct hikari_workspace));
   assert(output->workspace != NULL);
 
 #ifdef HAVE_XWAYLAND
@@ -388,7 +388,7 @@ hikari_output_fini(struct hikari_output *output)
   }
 
   hikari_workspace_fini(workspace);
-  hikari_pool_free(&hikari_server.workspace_pool, workspace);
+  hikari_free(workspace);
 }
 
 void

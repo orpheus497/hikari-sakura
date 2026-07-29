@@ -45,7 +45,7 @@ hikari_workspace_init(
   workspace->output = output;
   workspace->focus_view = NULL;
   workspace->sheets =
-      hikari_pool_alloc(&hikari_server.sheet_pool);
+      hikari_malloc(HIKARI_NR_OF_SHEETS * sizeof(struct hikari_sheet));
   assert(workspace->sheets != NULL);
 
   for (int i = 0; i < HIKARI_NR_OF_SHEETS; i++) {
@@ -63,7 +63,7 @@ hikari_workspace_init(
 void
 hikari_workspace_fini(struct hikari_workspace *workspace)
 {
-  hikari_pool_free(&hikari_server.sheet_pool, workspace->sheets);
+  hikari_free(workspace->sheets);
 }
 
 #define CYCLE_WORKSPACE(name)                                                  \
