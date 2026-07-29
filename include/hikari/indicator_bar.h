@@ -5,7 +5,6 @@
 #include <wlr/types/wlr_scene.h>
 
 struct hikari_indicator;
-struct hikari_renderer;
 struct hikari_output;
 
 struct hikari_indicator_bar {

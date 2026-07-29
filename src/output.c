@@ -8,7 +8,6 @@
 #include <wlr/backend.h>
 #include <wlr/render/allocator.h>
 #include <wlr/interfaces/wlr_buffer.h>
-#include <drm_fourcc.h>
 #include <wlr/types/wlr_scene.h>
 
 #include <hikari/memory.h>
@@ -146,8 +145,11 @@ hikari_output_disable(struct hikari_output *output)
   wl_list_remove(&output->frame.link);
   wl_list_remove(&output->request_state.link);
 
-  wlr_output_rollback(wlr_output);
-  wlr_output_enable(wlr_output, false);
+  struct wlr_output_state state;
+  wlr_output_state_init(&state);
+  wlr_output_state_set_enabled(&state, false);
+  wlr_output_commit_state(wlr_output, &state);
+  wlr_output_state_finish(&state);
 
   output->enabled = false;
 }

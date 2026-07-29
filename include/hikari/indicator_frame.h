@@ -4,7 +4,6 @@
 #include <wlr/util/box.h>
 
 struct hikari_view;
-struct hikari_renderer;
 
 struct hikari_indicator_frame {
   struct wlr_box top;

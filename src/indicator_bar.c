@@ -5,19 +5,14 @@
 #include <pango/pangocairo.h>
 #include <string.h>
 
-#include <drm_fourcc.h>
 #include <wlr/render/allocator.h>
 #include <wlr/interfaces/wlr_buffer.h>
-
-#include <hikari/font.h>
-
 
 #include <hikari/color.h>
 #include <hikari/configuration.h>
 #include <hikari/font.h>
 #include <hikari/indicator.h>
 #include <hikari/output.h>
-
 #include <hikari/server.h>
 #include <hikari/view.h>
 
@@ -27,7 +22,7 @@ hikari_indicator_bar_init(struct hikari_indicator_bar *indicator_bar,
     int offset,
     float color[static 4])
 {
-  indicator_bar->texture = NULL;
+  indicator_bar->scene_buffer = NULL;
   indicator_bar->indicator = indicator;
   indicator_bar->offset = offset;
 
@@ -72,7 +67,7 @@ hikari_indicator_bar_update(struct hikari_indicator_bar *indicator_bar,
     struct hikari_output *output,
     const char *text)
 {
-  if (indicator_bar->texture != NULL) {
+  if (indicator_bar->scene_buffer != NULL) {
     hikari_indicator_bar_fini(indicator_bar);
   }
 
@@ -85,7 +80,7 @@ hikari_indicator_bar_update(struct hikari_indicator_bar *indicator_bar,
   struct hikari_font *font = &hikari_configuration->font;
   int width = hikari_configuration->font.character_width * len + 8;
   int height = hikari_configuration->font.height;
-  struct wlr_renderer *wlr_renderer = output->wlr_output->renderer;
+
 
   indicator_bar->width = width;
 

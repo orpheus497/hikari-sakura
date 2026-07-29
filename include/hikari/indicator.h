@@ -5,7 +5,6 @@
 #include <hikari/indicator_bar.h>
 #include <hikari/sheet.h>
 
-struct hikari_renderer;
 struct hikari_view;
 struct hikari_output;
 
@@ -61,7 +60,7 @@ UPDATE(mark)
       struct hikari_output *output,                                            \
       struct wlr_box *geometry)                                                \
   {                                                                            \
-    hikari_indicator_bar_damage(&indicator->name, output, geometry);           \
+    hikari_indicator_bar_position(&indicator->name, output, geometry);         \
   }
 
 DAMAGE(title)
@@ -69,6 +68,13 @@ DAMAGE(sheet)
 DAMAGE(group)
 DAMAGE(mark)
 #undef DAMAGE
+
+static inline void
+hikari_indicator_damage(
+    struct hikari_indicator *indicator, struct hikari_view *view)
+{
+  hikari_indicator_position(indicator, view);
+}
 
 #define COLOR(name)                                                            \
   static inline void hikari_indicator_set_color_##name(                        \

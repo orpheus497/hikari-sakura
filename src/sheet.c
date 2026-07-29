@@ -1,4 +1,4 @@
-/* ##Script function and purpose: Virtual desktop sheet structures, visibility rules, layout application, and DOD bitmask evaluations. */
+/* ##Script function and purpose: Virtual desktop sheet structures, visibility rules, and layout application. */
 #include <hikari/sheet.h>
 
 #include <stdio.h>

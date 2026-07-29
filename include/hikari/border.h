@@ -6,7 +6,7 @@
 
 #include <hikari/output.h>
 
-struct hikari_renderer;
+
 
 enum hikari_border_state {
   HIKARI_BORDER_NONE,

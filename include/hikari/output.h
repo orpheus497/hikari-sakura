@@ -15,7 +15,7 @@
 #include <hikari/server.h>
 #include <hikari/output_config.h>
 
-struct hikari_renderer;
+
 
 struct hikari_output {
   struct hikari_server *server;
