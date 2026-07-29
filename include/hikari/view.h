@@ -26,7 +26,6 @@
 #include <hikari/workspace.h>
 
 struct hikari_mark;
-struct hikari_renderer;
 
 struct hikari_view;
 

@@ -394,6 +394,8 @@ hikari_workspace_focus_view(
     } else {
       hikari_view_damage_border(focus_view);
     }
+    /* ##Action purpose: Hide the indicator frame on the outgoing focus view. */
+    hikari_indicator_frame_hide(&focus_view->indicator_frame);
     hikari_view_activate(focus_view, false);
   }
 

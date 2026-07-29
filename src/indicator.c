@@ -1,4 +1,5 @@
 #include <hikari/indicator.h>
+#include <hikari/indicator_frame.h>
 
 
 
@@ -31,6 +32,17 @@ hikari_indicator_fini(struct hikari_indicator *indicator)
   hikari_indicator_bar_fini(&indicator->sheet);
   hikari_indicator_bar_fini(&indicator->group);
   hikari_indicator_bar_fini(&indicator->mark);
+}
+
+/* ##Function purpose: Finalize indicator and hide the indicator frame on the associated view. */
+void
+hikari_indicator_fini_for_view(
+    struct hikari_indicator *indicator, struct hikari_view *view)
+{
+  hikari_indicator_fini(indicator);
+  if (view != NULL) {
+    hikari_indicator_frame_hide(&view->indicator_frame);
+  }
 }
 
 void
@@ -72,7 +84,7 @@ void
 hikari_indicator_update_sheet(struct hikari_indicator *indicator,
     struct hikari_output *output,
     struct hikari_sheet *sheet,
-    unsigned long flags)
+    uint16_t flags)
 {
   bool invisible = flags & hikari_view_invisible_flag;
   bool floating = flags & hikari_view_floating_flag;
@@ -130,4 +142,7 @@ hikari_indicator_position(
   hikari_indicator_bar_position(&indicator->sheet, output, geometry);
   hikari_indicator_bar_position(&indicator->group, output, geometry);
   hikari_indicator_bar_position(&indicator->mark, output, geometry);
+
+  /* ##Action purpose: Show the indicator frame overlay around the view when indicators are active. */
+  hikari_indicator_frame_show(&view->indicator_frame, indicator->title.color);
 }

@@ -3,6 +3,8 @@
 
 #include <wayland-server-core.h>
 
+#include <wlr/types/wlr_scene.h>
+
 #include <hikari/view.h>
 
 
@@ -11,6 +13,7 @@ struct hikari_xwayland_view {
   struct hikari_view view;
 
   struct wlr_xwayland_surface *surface;
+  struct wlr_scene_tree *scene_tree;
 
   struct wl_listener map;
   struct wl_listener unmap;

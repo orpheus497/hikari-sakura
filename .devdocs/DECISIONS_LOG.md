@@ -4,6 +4,18 @@
 
 ---
 
+## [2026-07-29 15:16] Decision: Revert DOD SoA Tables and Object Pool Allocator
+* **Context:** The custom object pool allocator and DOD SoA view state/geometry tables added complexity without proven benefit. The wlr_scene migration made the custom renderer (which DOD optimized for) obsolete.
+* **Decision:** Removed pool.c/pool.h, reverted view flags to local struct field, removed all dod_id/view_state indirection.
+
+---
+
+## [2026-07-29 15:16] Decision: Migrate Rendering to wlr_scene Graph
+* **Context:** wlroots 0.18+ provides wlr_scene for automatic damage tracking and composition, eliminating the need for manual renderer passes.
+* **Decision:** Gutted renderer.c, migrated borders to wlr_scene_rect nodes, lock indicator and backgrounds to wlr_scene_buffer nodes. Scene graph handles damage tracking and output composition automatically.
+
+---
+
 ## [2026-07-29 05:56] Decision: Continuous Quad Batch Rendering
 * **Context:** The `struct hikari_render_batch` was introduced to allow O(1) cache-aligned bulk drawing of borders and indicator frames rather than context-switching matrices continuously.
 * **Decision:** We inverted the rendering logic for borders and indicators. Instead of intersecting damage and immediately dispatching `wlr_render_quad_with_matrix`, we batch the geometry via `hikari_render_batch_add`. A unified flush `hikari_render_batch_flush` handles scissor intersection in a tighter loop, improving CPU utilization and decoupling the geometry scene pass from the rendering pipeline.

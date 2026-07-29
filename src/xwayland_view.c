@@ -9,6 +9,7 @@
 
 #include <hikari/configuration.h>
 #include <hikari/geometry.h>
+#include <hikari/indicator_frame.h>
 #include <hikari/output.h>
 #include <hikari/server.h>
 #include <hikari/sheet.h>
@@ -399,6 +400,11 @@ hikari_xwayland_view_init(struct hikari_xwayland_view *xwayland_view,
   printf("XWAYLAND NEW %p\n", xwayland_view);
 #endif
   xwayland_view->surface = xwayland_surface;
+
+  /* ##Step purpose: Create a scene tree for XWayland view border and indicator frame nodes. */
+  xwayland_view->scene_tree = wlr_scene_tree_create(&hikari_server.scene->tree);
+  hikari_border_init(&xwayland_view->view.border, xwayland_view->scene_tree);
+  hikari_indicator_frame_init(&xwayland_view->view.indicator_frame, xwayland_view->scene_tree);
 
   xwayland_view->map.notify = map_handler;
   wl_signal_add(&xwayland_surface->events.map, &xwayland_view->map);

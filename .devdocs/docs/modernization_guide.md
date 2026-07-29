@@ -44,13 +44,9 @@ FreeBSD uses `kqueue` instead of Linux `epoll`. Linux epoll compatibility is pro
 
 ---
 
-## 3. Data-Oriented Design (DOD) Memory Pools
+## 3. Memory Allocation (Updated)
 
-To avoid dynamic heap fragmentation, Hikari utilizes contiguous Object Pools for Wayland entities:
-
-* **Slab Allocator:** Implemented via `include/hikari/pool.h` and `src/pool.c`. Provides $O(1)$ object allocation/deallocation via an embedded intrusive free list.
-* **Wayland Objects:** Allocations for `hikari_xdg_view`, `hikari_xwayland_view`, `hikari_sheet`, `hikari_workspace`, and `hikari_tile` are redirected to `hikari_pool_alloc()` / `hikari_pool_free()`.
-* **Array Contiguity Workaround:** For components like `hikari_workspace` that require multiple `hikari_sheet` instances in a contiguous array, the memory pool's `item_size` is sized to accommodate the entire array as a single block (e.g., `HIKARI_NR_OF_SHEETS * sizeof(struct hikari_sheet)`).
+Hikari now utilizes standard heap allocation (`hikari_malloc`) across the codebase. The previous custom Object Pool slab allocator has been removed in favor of standard system `malloc`/`calloc` calls, simplifying the architecture and improving maintainability.
 
 ---
 

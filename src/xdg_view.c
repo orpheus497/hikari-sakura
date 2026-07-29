@@ -16,6 +16,7 @@
 
 #include <hikari/configuration.h>
 #include <hikari/geometry.h>
+#include <hikari/indicator_frame.h>
 #include <hikari/mark.h>
 #include <hikari/output.h>
 #include <hikari/server.h>
@@ -495,6 +496,7 @@ hikari_xdg_view_init(struct hikari_xdg_view *xdg_view,
   xdg_surface->data = xdg_view->scene_tree;
   
   hikari_border_init(&xdg_view->view.border, xdg_view->scene_tree);
+  hikari_indicator_frame_init(&xdg_view->view.indicator_frame, xdg_view->scene_tree);
 
   xdg_view->map.notify = map_handler;
   wl_signal_add(&xdg_surface->events.map, &xdg_view->map);

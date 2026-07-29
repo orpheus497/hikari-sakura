@@ -57,7 +57,6 @@
 
 ### `hikari_server`
 Central singleton managing all outputs, views, active modes, keybindings, input devices, dynamic configuration, and workspace sheets.
-**DOD Memory Management:** Contains the pre-allocated contiguous memory pools (`view_pool`, `sheet_pool`, `workspace_pool`, `tile_pool`) initialized at startup to eliminate runtime heap fragmentation.
 
 ### `hikari_workspace`
 Active view visibility container per output. Contains tile trees (`hikari_tile`), focus stacks, sheet mappings, and output layout geometries.
@@ -100,14 +99,13 @@ Base view structure for window surfaces. Extended by:
 
 ## 5. Rendering Pipeline
 
-Rendering is managed by `src/renderer.c` using `cairo`, `pango`, and `wlroots`:
+Rendering is managed by the `wlr_scene` graph architecture provided by wlroots:
 
-1. **Damage Tracking:** `wlr_output_damage` tracks modified screen region damage rects to prevent unnecessary full-screen redraws.
-2. **Background Render:** Clears output geometry and draws wallpaper image or solid color background.
-3. **Layer Shell (Bottom/Background):** Renders desktop docks, wallpapers, and desktop widgets (`wlr_layer_shell_v1`).
-4. **View Surface Stack:**
-   * Renders Sheet 0 views (sticky).
-   * Renders active Sheet (1-9) views from bottom-to-top of stacking order.
-   * Renders tiled window borders, focus indicators, title indicators ([src/indicator.c](../src/indicator.c)), and client subsurfaces.
-5. **Layer Shell (Top/Overlay):** Renders status bars (`waybar`), notification popups (`mako`), and launcher menus (`wofi`).
-6. **Lockscreen / UI Overlays:** Renders lock indicator ring ([src/lock_indicator.c](../src/lock_indicator.c)) and mode indicators when active.
+1. **Damage Tracking:** Handled automatically by the scene graph via `wlr_damage_ring` on `scene_output->damage_ring`.
+2. **Scene Composition:** All visual elements are represented as nodes in the `wlr_scene`.
+   * **Borders:** Rendered as `wlr_scene_rect` nodes attached to view surfaces.
+   * **Lock Indicator:** Rendered as a `wlr_scene_buffer` node.
+   * **Backgrounds / Wallpapers:** Rendered as `wlr_scene_buffer` nodes.
+   * **Indicator Bars:** Handled via scene buffers.
+3. **Layer Shell:** Desktop docks, wallpapers, status bars (`waybar`), notification popups (`mako`), and launcher menus (`wofi`) are integrated into the scene graph via appropriate `wlr_scene_layer_tree` integrations.
+4. **Render Execution:** The scene graph automatically manages z-indexing, damage region intersection, and output buffer swapping without manual render passes. The legacy manual `renderer.c` pipeline has been completely removed.

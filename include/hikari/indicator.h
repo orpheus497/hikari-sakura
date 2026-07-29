@@ -23,6 +23,10 @@ void
 hikari_indicator_fini(struct hikari_indicator *indicator);
 
 void
+hikari_indicator_fini_for_view(
+    struct hikari_indicator *indicator, struct hikari_view *view);
+
+void
 hikari_indicator_update(
     struct hikari_indicator *indicator, struct hikari_view *view);
 
@@ -34,7 +38,7 @@ void
 hikari_indicator_update_sheet(struct hikari_indicator *indicator,
     struct hikari_output *output,
     struct hikari_sheet *sheet,
-    unsigned long flags);
+    uint16_t flags);
 
 void
 hikari_indicator_position(

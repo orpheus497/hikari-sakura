@@ -981,6 +981,9 @@ hikari_view_hide(struct hikari_view *view)
   clear_focus(view);
   hide(view);
 
+  /* ##Action purpose: Hide the indicator frame overlay when the view is hidden. */
+  hikari_indicator_frame_hide(&view->indicator_frame);
+
   hikari_view_damage_whole(view);
 }
 
