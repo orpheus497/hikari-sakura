@@ -5,8 +5,8 @@
 ---
 
 ## 1. Project Phase & Status
-* **Current Phase:** Phase 6 (FreeBSD Build Verification & Integration Testing)
-* **Overall Progress:** 55%
+* **Current Phase:** Phase 5 (Wlroots 0.18+ / 0.20 API Migration & FreeBSD Dependencies) - *Incomplete/Rolled Back*
+* **Overall Progress:** 50%
 * **Target Operating System:** FreeBSD 13.x / 14.x+ (Strictly Exclusive)
 
 ---

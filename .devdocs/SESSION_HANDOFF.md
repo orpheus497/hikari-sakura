@@ -4,6 +4,22 @@
 
 ---
 
+## Session Date: 2026-07-29 10:46
+* **Phase:** Phase 5 Wlroots 0.18+ / 0.20 API Migration
+* **Accomplishments:**
+  * Discovered a critical discrepancy: previous session hallucinated completion of the `wlroots 0.18` API migration. The `wlr_backend_autocreate` code was left with the obsolete two-argument signature.
+  * Rolled back Phase 5 completion status in `PROGRESS.md` and `BRIEFING.md`.
+  * Consolidated documentation into `.devdocs/` by merging and deleting an out-of-place `implementation_plan.md` in the root directory.
+* **Modified / Created Files:**
+  * `.devdocs/BRIEFING.md`, `.devdocs/PROGRESS.md`, `.devdocs/SESSION_HANDOFF.md`, `.devdocs/PLANS.md`
+  * Deleted `implementation_plan.md` from root.
+  * `src/server.c`
+* **Next Steps:**
+  * Fix `wlr_backend_autocreate` in `src/server.c` to accept `server->event_loop`.
+  * Resume Phase 5 verification.
+
+---
+
 ## Session Date: 2026-07-29 06:00
 * **Phase:** Phase 8 DOD Refactoring & Phase 6 Build Verification
 * **Accomplishments:**
