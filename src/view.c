@@ -240,7 +240,7 @@ cancel_tile(struct hikari_view *view)
     struct hikari_tile *tile = view->pending_operation.tile;
 
     hikari_tile_detach(tile);
-    hikari_free(tile);
+    hikari_pool_free(&hikari_server.tile_pool, tile);
     view->pending_operation.tile = NULL;
   }
 }
@@ -340,7 +340,7 @@ commit_reset(struct hikari_view *view, struct hikari_operation *operation)
 
   if (hikari_view_is_tiled(view)) {
     assert(!hikari_tile_is_attached(view->tile));
-    hikari_free(view->tile);
+    hikari_pool_free(&hikari_server.tile_pool, view->tile);
     view->tile = NULL;
   }
 
@@ -471,7 +471,7 @@ hikari_view_fini(struct hikari_view *view)
   if (hikari_view_is_tiled(view)) {
     struct hikari_tile *tile = view->tile;
     hikari_tile_detach(tile);
-    hikari_free(tile);
+    hikari_pool_free(&hikari_server.tile_pool, tile);
     view->tile = NULL;
   }
 
@@ -924,7 +924,7 @@ hikari_view_unmap(struct hikari_view *view)
       hikari_tile_detach(tile);
     }
 
-    hikari_free(tile);
+    hikari_pool_free(&hikari_server.tile_pool, tile);
     view->tile = NULL;
 
     hikari_view_refresh_geometry(view, &geometry);
@@ -1048,7 +1048,7 @@ commit_tile(struct hikari_view *view, struct hikari_operation *operation)
     assert(hikari_tile_is_attached(tile));
 
     wl_list_remove(&tile->layout_tiles);
-    hikari_free(tile);
+    hikari_pool_free(&hikari_server.tile_pool, tile);
     view->tile = NULL;
   }
 
@@ -1104,7 +1104,7 @@ hikari_view_tile(
 
   struct hikari_layout *layout = view->sheet->workspace->sheet->layout;
 
-  struct hikari_tile *tile = hikari_malloc(sizeof(struct hikari_tile));
+  struct hikari_tile *tile = hikari_pool_alloc(&hikari_server.tile_pool);
   hikari_tile_init(tile, view, layout, geometry, geometry);
 
   queue_tile(view, layout, tile, center);
@@ -1566,8 +1566,8 @@ hikari_view_exchange(struct hikari_view *from, struct hikari_view *to)
   struct wlr_box *from_geometry = &from->tile->tile_geometry;
   struct wlr_box *to_geometry = &to->tile->tile_geometry;
 
-  struct hikari_tile *from_tile = hikari_malloc(sizeof(struct hikari_tile));
-  struct hikari_tile *to_tile = hikari_malloc(sizeof(struct hikari_tile));
+  struct hikari_tile *from_tile = hikari_pool_alloc(&hikari_server.tile_pool);
+  struct hikari_tile *to_tile = hikari_pool_alloc(&hikari_server.tile_pool);
 
   hikari_tile_init(from_tile, from, layout, to_geometry, to_geometry);
   hikari_tile_init(to_tile, to, layout, from_geometry, from_geometry);

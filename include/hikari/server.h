@@ -26,6 +26,7 @@
 #include <hikari/resize_mode.h>
 #include <hikari/sheet_assign_mode.h>
 #include <hikari/workspace.h>
+#include <hikari/pool.h>
 
 #ifdef HAVE_LAYERSHELL
 #include <hikari/layer_shell.h>
@@ -105,6 +106,11 @@ struct hikari_server {
   struct wlr_seat *seat;
 
   struct hikari_workspace *workspace;
+
+  struct hikari_pool view_pool;
+  struct hikari_pool sheet_pool;
+  struct hikari_pool workspace_pool;
+  struct hikari_pool tile_pool;
 
   struct hikari_cursor cursor;
 

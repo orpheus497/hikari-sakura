@@ -233,7 +233,7 @@ hikari_output_init(struct hikari_output *output, struct wlr_output *wlr_output)
   output->wlr_output = wlr_output;
   output->background = NULL;
   output->enabled = false;
-  output->workspace = hikari_malloc(sizeof(struct hikari_workspace));
+  output->workspace = hikari_pool_alloc(&hikari_server.workspace_pool);
 
 #ifdef HAVE_XWAYLAND
   wl_list_init(&output->unmanaged_xwayland_views);
@@ -360,7 +360,7 @@ hikari_output_fini(struct hikari_output *output)
   }
 
   hikari_workspace_fini(workspace);
-  hikari_free(workspace);
+  hikari_pool_free(&hikari_server.workspace_pool, workspace);
 }
 
 void

@@ -1,6 +1,6 @@
 # Granular Task List (TODOS) & FreeBSD Execution Roadmap
 
-*Last Updated:* 2026-07-29 03:44
+*Last Updated:* 2026-07-29 04:42
 
 ---
 
@@ -15,31 +15,31 @@
 ## 2. Phase A: FreeBSD System Exclusivity Adaptation
 - [x] Update `Makefile` to conditionally detect FreeBSD (`.if ${OS} == "FreeBSD"`) and query `epoll-shim` via `pkg-config`.
 - [ ] Excise all `#ifdef __linux__` and fallback logic globally.
-- [ ] Replace `<linux/input-event-codes.h>` with FreeBSD native `<dev/evdev/input-event-codes.h>` header in `src/binding_config.c`.
-- [ ] Replace `<linux/input-event-codes.h>` with FreeBSD native `<dev/evdev/input-event-codes.h>` header in `src/configuration.c`.
-- [ ] Replace `<linux/input-event-codes.h>` with FreeBSD native `<dev/evdev/input-event-codes.h>` header in `src/pointer_config.c`.
+- [x] Replace `<linux/input-event-codes.h>` with FreeBSD native `<dev/evdev/input-event-codes.h>` header in `src/binding_config.c`.
+- [x] Replace `<linux/input-event-codes.h>` with FreeBSD native `<dev/evdev/input-event-codes.h>` header in `src/configuration.c`.
+- [x] Replace `<linux/input-event-codes.h>` with FreeBSD native `<dev/evdev/input-event-codes.h>` header in `src/pointer_config.c`.
 - [ ] Verify `libucl` UCL parser compatibility strictly against the FreeBSD 13/14 ports tree definitions.
 - [ ] Verify OpenPAM authentication flow in `hikari_unlocker.c` operates securely with setuid `4555`.
 
 ---
 
 ## 3. Phase B: Object Pool Allocator Engineering
-- [ ] Create `include/hikari/pool.h`: Define `struct hikari_pool` with `buffer`, `free_list`, `item_size`, `capacity`, and `count`.
-- [ ] Create `src/pool.c`: Implement `hikari_pool_init`, `hikari_pool_alloc`, `hikari_pool_free`, and `hikari_pool_destroy`.
-- [ ] Write logic in `pool.c` to track free blocks using a bitmask or stack embedded in the `free_list` block.
+- [x] Create `include/hikari/pool.h`: Define `struct hikari_pool` with `buffer`, `free_list`, `item_size`, `capacity`, and `count`.
+- [x] Create `src/pool.c`: Implement `hikari_pool_init`, `hikari_pool_alloc`, `hikari_pool_free`, and `hikari_pool_destroy`.
+- [x] Write logic in `pool.c` to track free blocks using a bitmask or stack embedded in the `free_list` block.
 
 ---
 
 ## 4. Phase C: Memory-Optimized Hybrid DOD Refactoring
-- [ ] Modify `include/hikari/server.h`: Add `view_pool`, `sheet_pool`, `workspace_pool`, and `tile_pool` to `struct hikari_server`.
-- [ ] Modify `src/server.c`: Call `hikari_pool_init()` for all pools in `hikari_server_start()`, ensuring capacities support heavy workloads (e.g., 512 views, 100 sheets).
-- [ ] Refactor `src/xdg_view.c`: Replace `hikari_malloc(sizeof(struct hikari_xdg_view))` with `hikari_pool_alloc(&hikari_server.view_pool)`.
-- [ ] Refactor `src/xwayland_view.c`: Replace `hikari_malloc(sizeof(struct hikari_xwayland_view))` with pool allocation.
-- [ ] Refactor `src/sheet.c`: Replace `hikari_malloc(sizeof(struct hikari_sheet))` with `hikari_pool_alloc(&hikari_server.sheet_pool)`.
-- [ ] Refactor `src/workspace.c`: Replace `hikari_malloc(sizeof(struct hikari_workspace))` with `hikari_pool_alloc(&hikari_server.workspace_pool)`.
-- [ ] Refactor `src/split.c` / `src/tile.c`: Replace `hikari_malloc` calls for tile structures with `hikari_pool_alloc(&hikari_server.tile_pool)`.
-- [ ] Modify destruction logic in `src/view.c`, `src/sheet.c`, etc., to use `hikari_pool_free()` instead of `hikari_free()`.
-- [ ] Ensure `wl_list` macro operations remain entirely untouched so Wayland `wlroots` signals do not segfault.
+- [x] Modify `include/hikari/server.h`: Add `view_pool`, `sheet_pool`, `workspace_pool`, and `tile_pool` to `struct hikari_server`.
+- [x] Modify `src/server.c`: Call `hikari_pool_init()` for all pools in `hikari_server_start()`, ensuring capacities support heavy workloads (e.g., 512 views, 100 sheets).
+- [x] Refactor `src/xdg_view.c`: Replace `hikari_malloc(sizeof(struct hikari_xdg_view))` with `hikari_pool_alloc(&hikari_server.view_pool)`.
+- [x] Refactor `src/xwayland_view.c`: Replace `hikari_malloc(sizeof(struct hikari_xwayland_view))` with pool allocation.
+- [x] Refactor `src/sheet.c`: Replace `hikari_malloc(sizeof(struct hikari_sheet))` with `hikari_pool_alloc(&hikari_server.sheet_pool)`.
+- [x] Refactor `src/workspace.c`: Replace `hikari_malloc(sizeof(struct hikari_workspace))` with `hikari_pool_alloc(&hikari_server.workspace_pool)`.
+- [x] Refactor `src/split.c` / `src/tile.c`: Replace `hikari_malloc` calls for tile structures with `hikari_pool_alloc(&hikari_server.tile_pool)`.
+- [x] Modify destruction logic in `src/view.c`, `src/sheet.c`, etc., to use `hikari_pool_free()` instead of `hikari_free()`.
+- [x] Ensure `wl_list` macro operations remain entirely untouched so Wayland `wlroots` signals do not segfault.
 
 ---
 

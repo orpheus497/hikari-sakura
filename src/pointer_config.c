@@ -2,7 +2,7 @@
 
 #include <string.h>
 
-#include <linux/input-event-codes.h>
+#include <dev/evdev/input-event-codes.h>
 
 #include <hikari/memory.h>
 
