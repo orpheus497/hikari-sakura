@@ -13,7 +13,7 @@ WITH_VIRTUAL_INPUT = YES
 OS != uname
 VERSION ?= "CURRENT"
 PREFIX ?= /usr/local
-PKG_CONFIG ?= pkgconf
+PKG_CONFIG ?= pkg-config
 ETC_PREFIX ?= ${PREFIX}
 
 OBJS = \
@@ -126,8 +126,8 @@ CFLAGS += -DHAVE_VIRTUAL_INPUT=1
 
 CFLAGS += -Wall -I. -Iinclude -DHIKARI_ETC_PREFIX=${ETC_PREFIX}
 
-WLROOTS_CFLAGS != ${PKG_CONFIG} --cflags wlroots-0.18
-WLROOTS_LIBS != ${PKG_CONFIG} --libs wlroots-0.18
+WLROOTS_CFLAGS != ${PKG_CONFIG} --cflags wlroots-0.20
+WLROOTS_LIBS != ${PKG_CONFIG} --libs wlroots-0.20
 
 WLROOTS_CFLAGS += -DWLR_USE_UNSTABLE
 
