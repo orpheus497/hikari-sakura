@@ -1,1 +1,4 @@
 -Wall
+-Iinclude
+-DWLR_USE_UNSTABLE
+-I/usr/include/pixman-1
