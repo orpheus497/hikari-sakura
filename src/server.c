@@ -1050,6 +1050,7 @@ hikari_server_stop(void)
   wl_list_remove(&server->new_input.link);
   wl_list_remove(&server->new_xdg_surface.link);
   wl_list_remove(&server->request_set_primary_selection.link);
+  wl_list_remove(&server->request_set_selection.link);
   wl_list_remove(&server->request_start_drag.link);
   wl_list_remove(&server->start_drag.link);
   wl_list_remove(&server->output_layout_change.link);
