@@ -4,7 +4,8 @@
 
 ---
 
-## Session Date: 2026-07-31 06:10
+## Session Date: 2026-07-31 06:34
+
 * **Phase:** Runtime testing & Debugging (XDG Clients & Wallpaper)
 * **Accomplishments:**
   - Resolved `foot` (and other XDG clients) causing a `Segmentation fault (core dumped)`. In wlroots 0.17+, `new_surface` fires before the surface role is set, which caused a null pointer dereference (`xdg_surface->toplevel`) in `new_xdg_surface_handler`. Replaced `new_surface` with `new_toplevel` listener to ensure the surface is fully initialized as a toplevel.
@@ -14,7 +15,8 @@
 
 ---
 
-## Session Date: 2026-07-31 05:35
+## Session Date: 2026-07-31 06:34
+
 * **Phase:** Runtime testing & Debugging (Client Disconnects)
 * **Accomplishments:**
   - Diagnosed and resolved segfaults occurring when clients crash or close (fixed dangling signal listeners in `xdg_view.c` and missing scene tree cleanup in `xwayland_view.c`).
@@ -27,7 +29,8 @@
 
 ---
 
-## Session Date: 2026-07-31 04:59
+## Session Date: 2026-07-31 06:34
+
 * **Phase:** Runtime testing & Debugging
 * **Accomplishments:**
   - Diagnosed and resolved the black screen and input unresponsiveness bug on compositor startup.
@@ -36,7 +39,8 @@
 * **Modified:** `src/output.c`, `.devdocs/SESSION_HANDOFF.md`, `.devdocs/TODOS.md`, `.devdocs/PROGRESS.md`, `.devdocs/DECISIONS_LOG.md`
 * **Next Steps:** Proceed with Phase 8 (AGENTS.md code documentation compliance) and test PAM unlocker.
 
-## Session Date: 2026-07-31 01:15
+## Session Date: 2026-07-31 06:34
+
 * **Phase:** wlroots 0.20 API Migration — Build Verified
 * **Accomplishments:**
   - Fixed `wlr_seat_pointer_notify_axis` in `src/cursor.c` — added 7th `relative_direction` argument
@@ -54,6 +58,7 @@
 ---
 
 ## Session Date: 2026-07-30 01:28
+
 * **Phase:** Code Review Fixes
 * **Accomplishments:**
   - Triaged 27 review findings, applied 25 fixes (2 skipped with reasons)
@@ -87,22 +92,6 @@
 
 ---
 
-## Session Date: 2026-07-29 14:34 - commit 3cf8f32
-* **Phase:** wlr_scene Rendering Migration
-* **Accomplishments:** Migrated lock indicator and background rendering to wlr_scene buffers. Gutted renderer.c and renderer.h. Removed renderer.o from Makefile. Borders now use wlr_scene_rect nodes. Lock indicator uses wlr_scene_buffer. Mode render callbacks removed.
-* **Modified:** 29 files (see commit 3cf8f32)
-* **Next Steps:** Complete remaining wlr_scene migration, commit working tree changes
-
----
-
-## Session Date: 2026-07-29 14:02 - commit 1fccd9d  
-* **Phase:** Object Pool Removal
-* **Accomplishments:** Removed custom object pool allocator. Reverted all hikari_pool_alloc calls to hikari_malloc. Gutted pool.c and pool.h. Removed pool.o from Makefile. Cleaned server.h of pool struct members.
-* **Modified:** 11 files (see commit 1fccd9d)
-* **Next Steps:** Proceed with wlr_scene migration
-
----
-
 ## Session Date: 2026-07-29 15:04
 
 * **Phase:** DOD Strip + wlr_scene Migration Completion
@@ -120,3 +109,19 @@
   * src/sheet.c, src/workspace.c
 * **Next Steps:**
   * User runs make locally to verify compilation.
+
+---
+
+## Session Date: 2026-07-29 14:34 - commit 3cf8f32
+* **Phase:** wlr_scene Rendering Migration
+* **Accomplishments:** Migrated lock indicator and background rendering to wlr_scene buffers. Gutted renderer.c and renderer.h. Removed renderer.o from Makefile. Borders now use wlr_scene_rect nodes. Lock indicator uses wlr_scene_buffer. Mode render callbacks removed.
+* **Modified:** 29 files (see commit 3cf8f32)
+* **Next Steps:** Complete remaining wlr_scene migration, commit working tree changes
+
+---
+
+## Session Date: 2026-07-29 14:02 - commit 1fccd9d  
+* **Phase:** Object Pool Removal
+* **Accomplishments:** Removed custom object pool allocator. Reverted all hikari_pool_alloc calls to hikari_malloc. Gutted pool.c and pool.h. Removed pool.o from Makefile. Cleaned server.h of pool struct members.
+* **Modified:** 11 files (see commit 1fccd9d)
+* **Next Steps:** Proceed with wlr_scene migration

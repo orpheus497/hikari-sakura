@@ -22,6 +22,7 @@ static char *input_buffer = NULL;
 /* ##Function purpose: Helper to robustly write boolean result to stdout fd 1. */
 static void write_success(bool success) {
   ssize_t nwritten;
+  /* ##Loop purpose: Retry write on EINTR. */
   do {
     nwritten = write(1, &success, sizeof(bool));
   } while (nwritten == -1 && errno == EINTR);
@@ -93,6 +94,7 @@ check_password(const char *username)
 
   /* ##Action purpose: Read password string from stdin into locked buffer. */
   ssize_t nread;
+  /* ##Loop purpose: Retry password read on EINTR. */
   do {
     nread = read(0, input_buffer, INPUT_BUFFER_SIZE - 1);
   } while (nread == -1 && errno == EINTR);
@@ -114,6 +116,7 @@ check_password(const char *username)
     ssize_t res;
     /* ##Loop purpose: Drain remaining stdin bytes until newline to discard overlong input. */
     while ((res = read(0, &c, 1)) == 1 || (res == -1 && errno == EINTR)) {
+      /* ##Condition purpose: Break loop if newline is found. */
       if (res == 1 && c == '\n') break;
     }
     explicit_bzero(input_buffer, INPUT_BUFFER_SIZE);

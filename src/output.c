@@ -95,11 +95,14 @@ hikari_output_load_background(struct hikari_output *output,
   struct wlr_drm_format format = { .format = DRM_FORMAT_ARGB8888, .len = 0, .capacity = 0, .modifiers = NULL };
   struct wlr_buffer *buffer = wlr_allocator_create_buffer(hikari_server.allocator, output_width, output_height, &format);
   
+  /* ##Condition purpose: Check if buffer allocation succeeded. */
   if (buffer != NULL) {
     void *mapped_data;
     uint32_t mapped_format;
     size_t mapped_stride;
+    /* ##Condition purpose: Guard against failed buffer data mapping. */
     if (wlr_buffer_begin_data_ptr_access(buffer, WLR_BUFFER_DATA_PTR_ACCESS_WRITE, &mapped_data, &mapped_format, &mapped_stride)) {
+      /* ##Loop purpose: Copy rendered cairo image data into mapped buffer by row. */
       for (int y = 0; y < output_height; y++) {
         memcpy((char*)mapped_data + y * mapped_stride, data + y * stride, output_width * 4);
       }
@@ -132,6 +135,7 @@ hikari_output_damage_whole(struct hikari_output *output)
   }
 }
 
+/* ##Function purpose: Disable specified output and remove its listeners. */
 void
 hikari_output_disable(struct hikari_output *output)
 {
@@ -189,6 +193,7 @@ hikari_output_enable(struct hikari_output *output)
   output->enabled = true;
 }
 
+/* ##Function purpose: Update internal output geometry tracking from layout box. */
 static void
 output_geometry(struct hikari_output *output)
 {
@@ -280,6 +285,7 @@ destroy_handler(struct wl_listener *listener, void *data)
   hikari_free(output);
 }
 
+/* ##Function purpose: Initialize a new compositor output, allocating workspace and configuring state. */
 void
 hikari_output_init(struct hikari_output *output, struct wlr_output *wlr_output)
 {
@@ -319,6 +325,7 @@ hikari_output_init(struct hikari_output *output, struct wlr_output *wlr_output)
   output->destroy.notify = destroy_handler;
   wl_signal_add(&wlr_output->events.destroy, &output->destroy);
 
+  /* ##Condition purpose: Skip hardware setup for headless/noop backend outputs. */
   if (!noop) {
     bool first = wl_list_empty(&hikari_server.outputs);
 
@@ -340,14 +347,16 @@ hikari_output_init(struct hikari_output *output, struct wlr_output *wlr_output)
     }
     wlr_output_state_finish(&state);
 
+    output->enabled = true;
+    wl_signal_add(&wlr_output->events.frame, &output->frame);
+    wl_signal_add(&wlr_output->events.request_state, &output->request_state);
+
     wl_list_insert(&hikari_server.outputs, &output->server_outputs);
 
-    /* ##Condition purpose: Enable the output unless lock mode requires it disabled. */
+    /* ##Condition purpose: Disable the output if lock mode requires it. */
     if (hikari_server_in_lock_mode() &&
         hikari_lock_mode_are_outputs_disabled(&hikari_server.lock_mode)) {
       hikari_output_disable(output);
-    } else {
-      hikari_output_enable(output);
     }
 
     struct hikari_output_config *output_config =
@@ -381,6 +390,7 @@ hikari_output_init(struct hikari_output *output, struct wlr_output *wlr_output)
   }
 }
 
+/* ##Function purpose: Finalize and teardown an output, merging its workspace to another active output. */
 void
 hikari_output_fini(struct hikari_output *output)
 {
@@ -412,6 +422,11 @@ hikari_output_fini(struct hikari_output *output)
     if (output->background != NULL) {
       wlr_scene_node_destroy(&output->background->node);
       output->background = NULL;
+    }
+
+    if (output->lock_indicator_node != NULL) {
+      wlr_scene_node_destroy(&output->lock_indicator_node->node);
+      output->lock_indicator_node = NULL;
     }
 
     if (workspace != next_workspace) {

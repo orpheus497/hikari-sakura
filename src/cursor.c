@@ -187,11 +187,13 @@ hikari_cursor_deactivate(struct hikari_cursor *cursor)
   hikari_cursor_set_image(cursor, NULL);
 }
 
+/* ##Function purpose: Set cursor image from xcursor theme or clear it. */
 void
 hikari_cursor_set_image(struct hikari_cursor *cursor, const char *path)
 {
   wl_list_remove(&cursor->surface_destroy.link);
   wl_list_init(&cursor->surface_destroy.link);
+  /* ##Condition purpose: Check if valid cursor path provided. */
   if (path != NULL) {
    wlr_cursor_set_xcursor(cursor->wlr_cursor, cursor->cursor_mgr, path);
   } else {

@@ -335,6 +335,7 @@ commit_pending_operation(
   }
 }
 
+/* ##Function purpose: Handle resetting view state operations. */
 static void
 commit_reset(struct hikari_view *view, struct hikari_operation *operation)
 {
@@ -949,6 +950,7 @@ hikari_view_unmap(struct hikari_view *view)
   assert(!hikari_view_is_tiled(view));
 }
 
+/* ##Function purpose: Show a hidden view and enable its scene node. */
 void
 hikari_view_show(struct hikari_view *view)
 {
@@ -961,6 +963,7 @@ hikari_view_show(struct hikari_view *view)
 #endif
   hikari_view_unset_hidden(view);
 
+  /* ##Condition purpose: Guard against missing scene node before enabling it. */
   if (view->scene_node != NULL) {
     wlr_scene_node_set_enabled(view->scene_node, true);
   }
@@ -974,6 +977,7 @@ hikari_view_show(struct hikari_view *view)
   assert(is_first_view(view));
 }
 
+/* ##Function purpose: Hide a visible view and disable its scene node. */
 void
 hikari_view_hide(struct hikari_view *view)
 {
@@ -988,6 +992,7 @@ hikari_view_hide(struct hikari_view *view)
   clear_focus(view);
   hide(view);
 
+  /* ##Condition purpose: Guard against missing scene node before disabling it. */
   if (view->scene_node != NULL) {
     wlr_scene_node_set_enabled(view->scene_node, false);
   }
@@ -1756,6 +1761,7 @@ hikari_view_damage_surface(
       (struct hikari_node *)view, damage_single_surface, &damage_data);
 }
 
+/* ##Function purpose: Refresh view geometry and position its scene node. */
 void
 hikari_view_refresh_geometry(struct hikari_view *view, struct wlr_box *geometry)
 {
@@ -1766,6 +1772,7 @@ hikari_view_refresh_geometry(struct hikari_view *view, struct wlr_box *geometry)
   view->current_geometry = new_geometry;
   view->current_unmaximized_geometry = refresh_unmaximized_geometry(view);
   
+  /* ##Condition purpose: Guard against missing scene node before updating position. */
   if (view->scene_node != NULL) {
     wlr_scene_node_set_position(view->scene_node, new_geometry->x, new_geometry->y);
   }

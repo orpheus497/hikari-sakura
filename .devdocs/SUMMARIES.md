@@ -4,7 +4,7 @@
 
 ---
 
-## Session Summary: 2026-07-31 04:59
+## Session Summary: 2026-07-31 06:34
 * **Phase:** Runtime testing & Debugging
 * **Status:** Completed
 * **Summary:** Investigated a runtime issue causing a black screen and unresponsive inputs upon compositor startup. Determined the root cause was an initialization order issue in `src/output.c` where `wlr_output_layout_add` triggered a damage frame before `scene_output` was created. Corrected the order of operations, restoring visual rendering and input processing.
@@ -12,7 +12,7 @@
 - Introduced a unified object pool allocation system replacing scattered `malloc`/`free` calls (Note: Implemented but subsequently REVERTED as it added unnecessary complexity over standard allocation).
 - Refactored `hikari_renderer` into a quad-batching system to reduce API overhead (Note: Implemented but subsequently REVERTED, as `wlr_scene` handles this natively).
 
-## Session Summary: 2026-07-31 01:15
+## Session Summary: 2026-07-31 06:34
 * **Phase:** wlroots 0.20 API Migration — Build Verified
 * **Status:** Completed — clean build achieved
 * **Summary:** Resolved all 7 wlroots 0.20 API breaking changes across 5 source files (`cursor.c`, `output.c`, `server.c`, `switch.c`, `xdg_view.c`). Changes included: adding `relative_direction` parameter to pointer axis notify, adapting headless backend and output layout creation signatures, migrating destroy signals from per-type to base `wlr_input_device`, replacing removed `wlr_xdg_surface_get_geometry()` with direct struct field access, and moving XDG surface map/unmap signals to `wlr_surface`. Both `hikari` and `hikari-unlocker` now compile and link cleanly. Updated all project documentation.
@@ -104,7 +104,7 @@
 * **Summary:**
   * Inspected all 65 header files in `include/hikari/` and 56 source files in `src/`.
   * Formulated pure FreeBSD modernization strategy focusing on `<dev/evdev/input-event-codes.h>`, `epoll-shim`, `seatd`, `tmpfs` `posix_fallocate`, OpenPAM (`hikari-unlocker`), and Data-Oriented Design (DOD) Struct-of-Arrays (SoA) layout tables.
-  * Updated [BRIEFING.md](file:///home/orpheus497/Projects/hikari/.devdocs/BRIEFING.md), [TODOS.md](file:///home/orpheus497/Projects/hikari/.devdocs/TODOS.md), and [SESSION_HANDOFF.md](file:///home/orpheus497/Projects/hikari/.devdocs/SESSION_HANDOFF.md).
+  * Updated [BRIEFING.md](BRIEFING.md), [TODOS.md](TODOS.md), and [SESSION_HANDOFF.md](SESSION_HANDOFF.md).
 
 ---
 

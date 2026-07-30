@@ -1,13 +1,13 @@
 # Hikari Project Briefing
 
-*Last Updated:* 2026-07-31 05:35
+*Last Updated:* 2026-07-31 06:34
 
 ## Current Status
 
 - **Phase:** Phase 8 — Code Documentation Compliance (Runtime bugs fixed)
 - **Branch:** wlroots-0.17.1
 - **Overall progress:** ~98% (all runtime crashing and black screen rendering bugs fixed)
-- **Target OS:** FreeBSD 13.x/14.x+ (Primary), Linux supported
+- **Target OS:** FreeBSD 13.x/14.x+
 
 ## What Works
 

@@ -30,11 +30,11 @@ Documentation precedes code. All files must be reviewed and updated to meet this
 
 | Prefix                                         | Target Location                         |
 |------------------------------------------------|-----------------------------------------|
-| `##Script function and purpose: [WHAT]` | Top of every script/source 
+| `##Script function and purpose: [WHAT]` | Top of every script/source              |
 | `##Function purpose: [HOW]`            | Before standalone functions             |
 | `##Action purpose: [WHY]`              | Before highly specific actions/commands |
 | `##Condition purpose: [LOGICAL DETAILS]`           | Before `if`/`switch` statements         |
-| `##Loop purpose: [LOGICAL REASONING`                | Before `for`/`while` loops              |
+| `##Loop purpose: [LOGICAL REASONING]`                | Before `for`/`while` loops              |
 | `##Error purpose: [WHERE THE ERROR WILL BE LOGGED]`               | Before `try`/`catch` or error handlers  |
 
 **OPERATIONAL WORKFLOW**

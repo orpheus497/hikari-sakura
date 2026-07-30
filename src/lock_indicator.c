@@ -14,6 +14,7 @@
 
 #define HIKARI_PI 3.14159265358979323846
 
+/* ##Function purpose: Initialize a colored indicator circle as a wlr_buffer. */
 static struct wlr_buffer *
 init_indicator_circle(float color[static 4])
 {
@@ -48,11 +49,14 @@ init_indicator_circle(float color[static 4])
   struct wlr_drm_format format = { .format = DRM_FORMAT_ARGB8888, .len = 0, .capacity = 0, .modifiers = NULL };
   wlr_buffer = wlr_allocator_create_buffer(hikari_server.allocator, size, size, &format);
   
+  /* ##Condition purpose: Check if buffer allocation succeeded. */
   if (wlr_buffer != NULL) {
     void *mapped_data;
     uint32_t mapped_format;
     size_t mapped_stride;
+    /* ##Condition purpose: Guard against failed buffer data mapping. */
     if (wlr_buffer_begin_data_ptr_access(wlr_buffer, WLR_BUFFER_DATA_PTR_ACCESS_WRITE, &mapped_data, &mapped_format, &mapped_stride)) {
+      /* ##Loop purpose: Copy rendered cairo image data into mapped buffer by row. */
       for (int y = 0; y < size; y++) {
         memcpy((char*)mapped_data + y * mapped_stride, data + y * stride, size * 4);
       }
@@ -84,6 +88,7 @@ reset_state_handler(void *data)
   return 0;
 }
 
+/* ##Function purpose: Initialize lock indicator state. */
 void
 hikari_lock_indicator_init(struct hikari_lock_indicator *lock_indicator)
 {
@@ -103,6 +108,7 @@ hikari_lock_indicator_init(struct hikari_lock_indicator *lock_indicator)
       hikari_server.event_loop, reset_state_handler, lock_indicator);
 }
 
+/* ##Function purpose: Finalize lock indicator state and destroy buffers. */
 void
 hikari_lock_indicator_fini(struct hikari_lock_indicator *lock_indicator)
 {
@@ -182,6 +188,7 @@ get_geometry(struct hikari_output *output, struct wlr_box *geometry)
       geometry, &output_geometry, &geometry->x, &geometry->y);
 }
 
+/* ##Function purpose: Update or damage lock indicator rendering on all outputs. */
 void
 hikari_lock_indicator_damage(struct hikari_lock_indicator *lock_indicator)
 {
@@ -190,8 +197,11 @@ hikari_lock_indicator_damage(struct hikari_lock_indicator *lock_indicator)
   struct wlr_box geometry;
 
   struct hikari_output *output;
+  /* ##Loop purpose: Iterate over all outputs to update lock indicator nodes. */
   wl_list_for_each (output, &hikari_server.outputs, server_outputs) {
+    /* ##Condition purpose: Determine if lock indicator should be visible or hidden. */
     if (lock_indicator->current != NULL) {
+      /* ##Condition purpose: Create new scene buffer node if none exists. */
       if (output->lock_indicator_node == NULL) {
          output->lock_indicator_node = wlr_scene_buffer_create(&hikari_server.scene->tree, lock_indicator->current);
       } else {

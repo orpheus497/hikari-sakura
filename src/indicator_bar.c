@@ -69,10 +69,12 @@ hikari_indicator_bar_update(struct hikari_indicator_bar *indicator_bar,
     struct hikari_output *output,
     const char *text)
 {
+  /* ##Condition purpose: Clean up existing scene buffer before recreation. */
   if (indicator_bar->scene_buffer != NULL) {
     hikari_indicator_bar_fini(indicator_bar);
   }
 
+  /* ##Condition purpose: Skip creation for empty indicator text. */
   if (text == NULL || !strcmp(text, "")) {
     return;
   }
@@ -124,10 +126,12 @@ hikari_indicator_bar_update(struct hikari_indicator_bar *indicator_bar,
   struct wlr_drm_format format = { .format = DRM_FORMAT_ARGB8888, .len = 0, .capacity = 0, .modifiers = NULL };
   struct wlr_buffer *buffer = wlr_allocator_create_buffer(hikari_server.allocator, width, height, &format);
   
+  /* ##Condition purpose: Check if buffer allocation succeeded. */
   if (buffer != NULL) {
     void *mapped_data;
     uint32_t mapped_format;
     size_t mapped_stride;
+    /* ##Condition purpose: Guard against failed buffer data mapping. */
     if (wlr_buffer_begin_data_ptr_access(buffer, WLR_BUFFER_DATA_PTR_ACCESS_WRITE, &mapped_data, &mapped_format, &mapped_stride)) {
       for (int y = 0; y < height; y++) {
         memcpy((char*)mapped_data + y * mapped_stride, data + y * stride, width * 4);

@@ -652,6 +652,7 @@ setup_selection(struct hikari_server *server)
   wl_signal_add(&server->seat->events.start_drag, &server->start_drag);
 }
 
+/* ##Function purpose: Handle new XDG toplevel creation. */
 static void
 new_toplevel_handler(struct wl_listener *listener, void *data)
 {
@@ -663,6 +664,7 @@ new_toplevel_handler(struct wl_listener *listener, void *data)
 
   struct hikari_xdg_view *xdg_view =
       hikari_malloc(sizeof(struct hikari_xdg_view));
+  /* ##Condition purpose: Guard against XDG view allocation failure. */
   if (xdg_view == NULL) {
     return;
   }
@@ -894,6 +896,12 @@ server_init(struct hikari_server *server, char *config_path)
   wl_signal_add(&server->backend->events.new_input, &server->new_input);
 
   server->output_layout = wlr_output_layout_create(server->display);
+  /* ##Condition purpose: Guard against output layout allocation failure. */
+  if (server->output_layout == NULL) {
+    /* ##Error purpose: Abort server initialization on output layout allocation failure. */
+    wl_display_destroy(server->display);
+    exit(EXIT_FAILURE);
+  }
   server->output_manager =
       wlr_xdg_output_manager_v1_create(server->display, server->output_layout);
 
@@ -1081,8 +1089,8 @@ hikari_server_stop(void)
   if (server->session != NULL) {
     wlr_session_destroy(server->session);
   }
-  wl_display_destroy(server->display);
   wlr_output_layout_destroy(server->output_layout);
+  wl_display_destroy(server->display);
 
   hikari_configuration_fini(hikari_configuration);
   hikari_free(hikari_configuration);
