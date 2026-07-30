@@ -109,7 +109,7 @@ chmod 4555 /usr/local/bin/hikari-unlocker
 
 | Package | Purpose | Minimum Version | FreeBSD Port Name |
 |---------|---------|-----------------|-------------------|
-| `wlroots` | Wayland Compositor Library | >= 0.18.0 | `x11-toolkits/wlroots` |
+| `wlroots` | Wayland Compositor Library | >= 0.20 | `x11-toolkits/wlroots` |
 | `pango` | Text Rendering Engine | Recent | `x11-toolkits/pango` |
 | `cairo` | 2D Graphics Rendering | Recent | `graphics/cairo` |
 | `libinput` | Input Device Event Handling | Recent | `x11/libinput` |

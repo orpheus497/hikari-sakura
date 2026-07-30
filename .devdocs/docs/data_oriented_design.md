@@ -1,2 +1,3 @@
 # Data-Oriented Design (Historical)
+
 The DOD Struct-of-Arrays refactoring (object pools, SoA view tables, batch rendering) was implemented and subsequently reverted. The custom object pool allocator and SoA tables added complexity without proven benefit, and the wlr_scene migration made the custom renderer they optimized for obsolete. Standard heap allocation via hikari_malloc is used throughout the codebase.

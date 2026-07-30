@@ -10,7 +10,7 @@
 
 ## What Works
 - FreeBSD evdev headers done.
-- Standard `hikari_malloc` allocation implemented system-wide.
+- Standard `hikari_malloc` allocation for compositor allocation paths.
 - `wlr_scene` rendering for borders (`wlr_scene_rect`), lock indicator (`wlr_scene_buffer`), backgrounds (`wlr_scene_buffer`), indicator bars (`wlr_scene_buffer`), and indicator frames (`wlr_scene_rect`).
 - XDG views and XWayland views both have `scene_tree` with border and indicator frame nodes.
 - Makefile targets wlroots-0.20 via pkg-config.

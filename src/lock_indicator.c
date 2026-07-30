@@ -57,6 +57,9 @@ init_indicator_circle(float color[static 4])
         memcpy((char*)mapped_data + y * mapped_stride, data + y * stride, size * 4);
       }
       wlr_buffer_end_data_ptr_access(wlr_buffer);
+    } else {
+      wlr_buffer_drop(wlr_buffer);
+      wlr_buffer = NULL;
     }
   }
 

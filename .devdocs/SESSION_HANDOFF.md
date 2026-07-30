@@ -4,6 +4,24 @@
 
 ---
 
+## Session Date: 2026-07-30 01:28
+* **Phase:** Code Review Fixes
+* **Accomplishments:**
+  - Triaged 27 review findings, applied 25 fixes (2 skipped with reasons)
+  - Buffer mapping guards (F1-F3): indicator_bar.c, lock_indicator.c, output.c — scene nodes only created on successful mapping
+  - Output lifecycle (F4-F6): disable checks commit before removing listeners; init deduplicates listener registration with enable; background repositioned on geometry update
+  - View safety (F7): commit_reset guards indicator_position for hidden views
+  - FLAG macro (F8): unsigned literal with parenthesization
+  - XDG data reference (F9): removed scene_tree overwrite of xdg_surface->data
+  - Layer shell (F10): popup damage guarded against disabled output
+  - Pre-existing bug fix: added missing wlr_output local variable in hikari_output_enable
+  - Documentation: 9 devdocs fixes, 6 code documentation annotations
+* **Modified:** 20 files (8 devdocs, 12 source/header)
+* **Skipped:** AGENTS.md move (breaks rule loading), damage ring transforms (legacy code, scene graph authoritative)
+* **Next Steps:** FreeBSD build verification with `bmake`
+
+---
+
 ## Session Date: 2026-07-29 15:32
 * **Phase:** Verification & Issue Fixes
 * **Accomplishments:**

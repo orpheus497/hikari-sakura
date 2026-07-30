@@ -7,6 +7,7 @@
 struct hikari_indicator;
 struct hikari_output;
 
+/* ##Class purpose: Single text bar in the view indicator overlay, rendered as a wlr_scene_buffer. */
 struct hikari_indicator_bar {
   struct wlr_scene_buffer *scene_buffer;
   struct hikari_indicator *indicator;
@@ -35,6 +36,7 @@ hikari_indicator_bar_update(struct hikari_indicator_bar *indicator_bar,
     struct hikari_output *output,
     const char *text);
 
+/* ##Function purpose: Reposition the indicator bar scene buffer relative to view geometry. */
 void
 hikari_indicator_bar_position(struct hikari_indicator_bar *indicator_bar,
     struct hikari_output *output,

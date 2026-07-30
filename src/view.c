@@ -338,7 +338,10 @@ commit_pending_operation(
 static void
 commit_reset(struct hikari_view *view, struct hikari_operation *operation)
 {
-  hikari_indicator_position(&hikari_server.indicator, view);
+  /* ##Condition purpose: Skip indicator repositioning for hidden views. */
+  if (!hikari_view_is_hidden(view)) {
+    hikari_indicator_position(&hikari_server.indicator, view);
+  }
 
   if (hikari_view_is_tiled(view)) {
     assert(!hikari_tile_is_attached(view->tile));

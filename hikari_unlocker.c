@@ -99,6 +99,7 @@ check_password(const char *username)
   if (nread == INPUT_BUFFER_SIZE - 1 && input_buffer[INPUT_BUFFER_SIZE - 2] != '\n' && input_buffer[INPUT_BUFFER_SIZE - 2] != '\0') {
     /* ##Error purpose: Drain remaining input, abort PAM, and write false on overlong password. */
     char c;
+    /* ##Loop purpose: Drain remaining stdin bytes until newline to discard overlong input. */
     while (read(0, &c, 1) == 1 && c != '\n');
     explicit_bzero(input_buffer, INPUT_BUFFER_SIZE);
     write(1, &success, sizeof(bool));

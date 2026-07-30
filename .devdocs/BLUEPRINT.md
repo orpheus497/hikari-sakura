@@ -11,7 +11,7 @@
                                               |
                                               v
                                   +-----------------------+
-                                  |   hikari_server.c     |
+                                  |   src/server.c        |
                                   |   (Server Lifecycle)  |
                                   +-----------+-----------+
                                               |
@@ -19,8 +19,8 @@
            |                                  |                                  |
            v                                  v                                  v
 +---------------------+            +---------------------+            +---------------------+
-|  hikari_output.c    |            |   hikari_view.c     |            |  hikari_keyboard.c  |
-|    (wlr_scene)      |            | hikari_workspace.c  |            |  hikari_pointer.c   |
+|  src/output.c       |            |   src/view.c        |            |  src/keyboard.c     |
+|    (wlr_scene)      |            |   src/workspace.c   |            |  src/pointer.c      |
 |                     |            | (Views/Sheets/Tiles)|            |  (Input Events)     |
 +---------------------+            +---------------------+            +---------------------+
 ```
@@ -43,7 +43,7 @@
 
 ## 3. Implementation Registry
 
-* **Standard Memory Allocation:** Migrated all heap allocations to `hikari_malloc`.
+* **Standard Memory Allocation:** Migrated compositor allocation paths to `hikari_malloc`.
 * **wlr_scene Rendering:** Migrated borders, lock indicator, backgrounds, and indicator bars to wlroots `wlr_scene` graph.
 * **FreeBSD Adaptations:** Native evdev headers adopted, Makefile points to wlroots 0.20 via pkg-config with epoll-shim conditional.
 * **DOD Reverted:** Struct-of-Arrays (SoA) and Object Pool implementations were removed as they added unnecessary complexity and are incompatible with `wlr_scene` workflows.

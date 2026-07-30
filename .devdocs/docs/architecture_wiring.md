@@ -22,9 +22,9 @@
            |                                  |                                  |
            v                                  v                                  v
 +---------------------+            +---------------------+            +---------------------+
-|  hikari_output.c    |            |   hikari_view.c     |            |  hikari_keyboard.c  |
-|  hikari_renderer.c  |            | hikari_workspace.c  |            |  hikari_pointer.c   |
-|  (Output & Render)  |            | (Views/Sheets/Tiles)|            |  (Input Events)     |
+|  src/output.c       |            |   hikari_view.c     |            |  hikari_keyboard.c  |
+|  (wlr_scene Output) |            | hikari_workspace.c  |            |  hikari_pointer.c   |
+|                     |            | (Views/Sheets/Tiles)|            |  (Input Events)     |
 +---------------------+            +---------------------+            +---------------------+
 ```
 
@@ -99,13 +99,14 @@ Base view structure for window surfaces. Extended by:
 
 ## 5. Rendering Pipeline
 
-Rendering is managed by the `wlr_scene` graph architecture provided by wlroots:
+Rendering uses the `wlr_scene` graph from wlroots. The compositor owns scene node creation, ordering, damage submission, and frame scheduling:
 
-1. **Damage Tracking:** Handled automatically by the scene graph via `wlr_damage_ring` on `scene_output->damage_ring`.
-2. **Scene Composition:** All visual elements are represented as nodes in the `wlr_scene`.
-   * **Borders:** Rendered as `wlr_scene_rect` nodes attached to view surfaces.
-   * **Lock Indicator:** Rendered as a `wlr_scene_buffer` node.
-   * **Backgrounds / Wallpapers:** Rendered as `wlr_scene_buffer` nodes.
-   * **Indicator Bars:** Handled via scene buffers.
-3. **Layer Shell:** Desktop docks, wallpapers, status bars (`waybar`), notification popups (`mako`), and launcher menus (`wofi`) are integrated into the scene graph via appropriate `wlr_scene_layer_tree` integrations.
-4. **Render Execution:** The scene graph automatically manages z-indexing, damage region intersection, and output buffer swapping without manual render passes. The legacy manual `renderer.c` pipeline has been completely removed.
+1. **Damage Tracking:** The compositor submits damage via `wlr_damage_ring_add_whole` and `wlr_damage_ring_add_box` on `scene_output->damage_ring`, and schedules frames with `wlr_output_schedule_frame`.
+2. **Scene Composition:** The compositor creates and manages scene graph nodes:
+   * **Borders:** `wlr_scene_rect` nodes attached to view scene trees.
+   * **Indicator Frames:** `wlr_scene_rect` nodes for modal view highlighting.
+   * **Lock Indicator:** `wlr_scene_buffer` node per output.
+   * **Backgrounds / Wallpapers:** `wlr_scene_buffer` nodes per output.
+   * **Indicator Bars:** `wlr_scene_buffer` nodes for title/sheet/group/mark text.
+3. **Layer Shell:** Docks, status bars, notification popups, and launcher menus are integrated via `wlr_scene_layer_tree`.
+4. **Render Execution:** `wlr_scene_output_commit` handles damage region intersection, z-ordering, and buffer swapping. The compositor calls this from its frame handler and manages `send_frame_done` timing.

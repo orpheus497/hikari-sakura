@@ -7,14 +7,14 @@
 ## Session Summary: 2026-07-29 14:34
 * **Phase:** wlr_scene Migration
 * **Status:** Major refactor completed (29 files, -1135/+197 lines)
-* **Summary:** Eliminated entire custom rendering pipeline. All visual elements (borders, lock indicator, backgrounds, indicator bars) now rendered via wlr_scene graph nodes.
+* **Summary:** Eliminated entire custom rendering pipeline. Borders, lock indicator, backgrounds, and indicator bars now rendered via wlr_scene graph nodes. Indicator frames remained pending.
 
 ---
 
 ## Session Summary: 2026-07-29 14:02
 * **Phase:** Object Pool Removal  
 * **Status:** Completed
-* **Summary:** Removed the custom slab allocator in favor of standard hikari_malloc heap allocation throughout the codebase.
+* **Summary:** Removed the custom slab allocator in favor of standard hikari_malloc heap allocation for compositor allocation paths.
 
 ---
 

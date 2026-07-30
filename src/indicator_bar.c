@@ -48,6 +48,7 @@ hikari_indicator_bar_fini(struct hikari_indicator_bar *indicator_bar)
   }
 }
 
+/* ##Function purpose: Reposition the indicator bar scene buffer relative to view geometry. */
 void
 hikari_indicator_bar_position(struct hikari_indicator_bar *indicator_bar,
     struct hikari_output *output,
@@ -62,6 +63,7 @@ hikari_indicator_bar_position(struct hikari_indicator_bar *indicator_bar,
       view_geometry->y + indicator_bar->offset);
 }
 
+/* ##Function purpose: Replace the existing scene buffer (if any) and create a new one with rendered text content. */
 void
 hikari_indicator_bar_update(struct hikari_indicator_bar *indicator_bar,
     struct hikari_output *output,
@@ -131,9 +133,9 @@ hikari_indicator_bar_update(struct hikari_indicator_bar *indicator_bar,
         memcpy((char*)mapped_data + y * mapped_stride, data + y * stride, width * 4);
       }
       wlr_buffer_end_data_ptr_access(buffer);
+
+      indicator_bar->scene_buffer = wlr_scene_buffer_create(&hikari_server.scene->tree, buffer);
     }
-    
-    indicator_bar->scene_buffer = wlr_scene_buffer_create(&hikari_server.scene->tree, buffer);
     wlr_buffer_drop(buffer);
   }
 

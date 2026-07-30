@@ -102,12 +102,11 @@ hikari_output_load_background(struct hikari_output *output,
         memcpy((char*)mapped_data + y * mapped_stride, data + y * stride, output_width * 4);
       }
       wlr_buffer_end_data_ptr_access(buffer);
+
+      output->background = wlr_scene_buffer_create(&hikari_server.scene->tree, buffer);
+      wlr_scene_node_set_position(&output->background->node, output->geometry.x, output->geometry.y);
+      wlr_scene_node_lower_to_bottom(&output->background->node);
     }
-    
-    output->background = wlr_scene_buffer_create(&hikari_server.scene->tree, buffer);
-    wlr_scene_node_set_position(&output->background->node, output->geometry.x, output->geometry.y);
-    wlr_scene_node_lower_to_bottom(&output->background->node);
-    
     wlr_buffer_drop(buffer);
   }
 
@@ -142,14 +141,21 @@ hikari_output_disable(struct hikari_output *output)
 
   struct wlr_output *wlr_output = output->wlr_output;
 
-  wl_list_remove(&output->frame.link);
-  wl_list_remove(&output->request_state.link);
-
   struct wlr_output_state state;
   wlr_output_state_init(&state);
   wlr_output_state_set_enabled(&state, false);
-  wlr_output_commit_state(wlr_output, &state);
+
+  /* ##Condition purpose: Only remove listeners and clear enabled if commit succeeds. */
+  if (!wlr_output_commit_state(wlr_output, &state)) {
+    wlr_output_state_finish(&state);
+    return;
+  }
   wlr_output_state_finish(&state);
+
+  wl_list_remove(&output->frame.link);
+  wl_list_remove(&output->request_state.link);
+  wl_list_init(&output->frame.link);
+  wl_list_init(&output->request_state.link);
 
   output->enabled = false;
 }
@@ -162,6 +168,8 @@ hikari_output_enable(struct hikari_output *output)
   if (output->enabled) {
     return;
   }
+
+  struct wlr_output *wlr_output = output->wlr_output;
 
   struct wlr_output_state state;
   wlr_output_state_init(&state);
@@ -193,6 +201,12 @@ output_geometry(struct hikari_output *output)
   output->usable_area = (struct wlr_box){
    .x = 0, .y = 0, .width = output_box.width, .height = output_box.height
   };
+
+  /* ##Action purpose: Reposition background scene node to match updated output geometry. */
+  if (output->background != NULL) {
+    wlr_scene_node_set_position(&output->background->node,
+        output->geometry.x, output->geometry.y);
+  }
 }
 
 /* static void */
@@ -294,10 +308,10 @@ hikari_output_init(struct hikari_output *output, struct wlr_output *wlr_output)
   wlr_output->data = output;
 
   output->frame.notify = frame_handler;
-  wl_signal_add(&wlr_output->events.frame, &output->frame);
+  wl_list_init(&output->frame.link);
 
   output->request_state.notify = request_state_handler;
-  wl_signal_add(&wlr_output->events.request_state, &output->request_state);
+  wl_list_init(&output->request_state.link);
 
   output->destroy.notify = destroy_handler;
   wl_signal_add(&wlr_output->events.destroy, &output->destroy);
@@ -325,11 +339,12 @@ hikari_output_init(struct hikari_output *output, struct wlr_output *wlr_output)
 
     wl_list_insert(&hikari_server.outputs, &output->server_outputs);
 
-    if (!hikari_server_in_lock_mode()) {
-      hikari_output_enable(output);
-    } else if (hikari_lock_mode_are_outputs_disabled(
-                   &hikari_server.lock_mode)) {
+    /* ##Condition purpose: Enable the output unless lock mode requires it disabled. */
+    if (hikari_server_in_lock_mode() &&
+        hikari_lock_mode_are_outputs_disabled(&hikari_server.lock_mode)) {
       hikari_output_disable(output);
+    } else {
+      hikari_output_enable(output);
     }
 
     struct hikari_output_config *output_config =

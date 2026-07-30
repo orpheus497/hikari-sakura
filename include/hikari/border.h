@@ -14,6 +14,7 @@ enum hikari_border_state {
   HIKARI_BORDER_ACTIVE
 };
 
+/* ##Class purpose: View border state and scene-graph rectangle nodes for the four border edges. */
 struct hikari_border {
   enum hikari_border_state state;
 
@@ -24,6 +25,7 @@ struct hikari_border {
   struct wlr_scene_rect *right;
 };
 
+/* ##Function purpose: Create four wlr_scene_rect nodes as children of parent tree for border rendering. */
 void
 hikari_border_init(struct hikari_border *border, struct wlr_scene_tree *parent);
 
@@ -33,6 +35,7 @@ hikari_border_geometry(struct hikari_border *border)
   return &border->geometry;
 }
 
+/* ##Function purpose: Recompute border rectangle positions and sizes from view geometry. */
 void
 hikari_border_refresh_geometry(
     struct hikari_border *border, struct wlr_box *geometry);

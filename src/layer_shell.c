@@ -336,6 +336,11 @@ done:
 
   struct hikari_output *output = layer->output;
 
+  /* ##Condition purpose: Skip popup damage when output is disabled. */
+  if (!output->enabled) {
+    return;
+  }
+
   if (whole) {
     struct wlr_box geometry = { .x = ox,
       .y = oy,

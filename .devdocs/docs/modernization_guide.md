@@ -12,8 +12,8 @@ This guide documents the step-by-step modernization strategy for `hikari`. It co
 ### 0.17.x Migration Notes
 * If migrating from older versions to 0.17.x, ensure legacy output interfaces are updated. (These are now obsolete in 0.18.0).
 
-### Key Migration Patterns for 0.18+ (Current Supported Target):
-The current supported target is `wlroots` 0.18.0 or newer, which introduces several breaking API changes:
+### Key Migration Patterns for 0.20+ (Current Supported Target):
+The current supported target is `wlroots` 0.20 or newer, which introduces several breaking API changes:
 
 1. **Allocators & Renderers:**
    * Modern `wlroots` requires `wlr_allocator_autocreate(backend, renderer)` during backend startup.

@@ -120,7 +120,7 @@ void
 hikari_view_subsurface_fini(struct hikari_view_subsurface *view_subsurface);
 
 #define FLAG(name, shift)                                                      \
-  static const uint16_t hikari_view_##name##_flag = 1 << shift;                \
+  static const uint16_t hikari_view_##name##_flag = (uint16_t)(1U << (shift)); \
                                                                                \
   static inline bool hikari_view_is_##name(struct hikari_view *view)           \
   {                                                                            \

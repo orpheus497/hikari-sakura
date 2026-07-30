@@ -22,6 +22,7 @@ hikari_indicator_init(
 void
 hikari_indicator_fini(struct hikari_indicator *indicator);
 
+/* ##Function purpose: Finalize indicator bars and hide the associated view's indicator frame overlay. */
 void
 hikari_indicator_fini_for_view(
     struct hikari_indicator *indicator, struct hikari_view *view);
