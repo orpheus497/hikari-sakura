@@ -1,6 +1,6 @@
 # Hikari Project Blueprint
 
-*Last Updated:* 2026-07-29 15:16
+*Last Updated:* 2026-07-31 01:15
 
 ## 1. Subsystem Architecture
 
@@ -45,5 +45,6 @@
 
 * **Standard Memory Allocation:** Migrated compositor allocation paths to `hikari_malloc`.
 * **wlr_scene Rendering:** Migrated borders, lock indicator, backgrounds, and indicator bars to wlroots `wlr_scene` graph.
+* **wlroots 0.20 Migration:** Resolved 7 API breaking changes across `cursor.c`, `output.c`, `server.c`, `switch.c`, and `xdg_view.c`.
 * **FreeBSD Adaptations:** Native evdev headers adopted, Makefile points to wlroots 0.20 via pkg-config with epoll-shim conditional.
 * **DOD Reverted:** Struct-of-Arrays (SoA) and Object Pool implementations were removed as they added unnecessary complexity and are incompatible with `wlr_scene` workflows.

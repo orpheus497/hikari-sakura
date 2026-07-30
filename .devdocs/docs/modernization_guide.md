@@ -9,22 +9,31 @@ This guide documents the step-by-step modernization strategy for `hikari`. It co
 
 `hikari` was originally authored against `wlroots` 0.10.x - 0.16.x. 
 
-### 0.17.x Migration Notes
-* If migrating from older versions to 0.17.x, ensure legacy output interfaces are updated. (These are now obsolete in 0.18.0).
+### Modern Target: `wlroots` 0.20
+The codebase is fully updated and verified against `wlroots` 0.20:
 
+<<<<<<< HEAD
 ### Key Migration Patterns for 0.20+ (Current Supported Target):
 The current supported target is `wlroots` 0.20 or newer, which introduces several breaking API changes:
+=======
+1. **Pointer Axis Events:**
+   * `wlr_seat_pointer_notify_axis` requires 7th argument (`enum wl_pointer_axis_relative_direction relative_direction`), passed from `event->relative_direction`.
+>>>>>>> 930f3bf (chore: complete wlroots 0.20 API migration and update documentation compliance)
 
-1. **Allocators & Renderers:**
-   * Modern `wlroots` requires `wlr_allocator_autocreate(backend, renderer)` during backend startup.
-   * `wlr_backend_autocreate` signature updates (`wl_display` parameter handling).
+2. **Headless Backend:**
+   * `wlr_headless_backend_create` takes `struct wl_event_loop *` instead of `struct wl_display *`. Created using `wl_display_get_event_loop(server->display)`.
 
-2. **XDG Shell & Surface Handling:**
-   * `wlr_xdg_shell_create` takes `wl_display*` directly.
-   * Surface commit listeners use updated `wlr_surface` event structures.
+3. **Output Layout:**
+   * `wlr_output_layout_create` requires `struct wl_display *display` parameter.
 
-3. **Output Layout & Damage:**
-   * `wlr_output_layout_add_auto` and `wlr_output_damage` interface updates.
+4. **Input Devices & Signals:**
+   * `destroy` signal moved from individual input structures (e.g., `wlr_switch->events.destroy`) to base device (`wlr_switch->base.events.destroy`).
+
+5. **XDG Surface Geometry:**
+   * `wlr_xdg_surface_get_geometry()` replaced by direct struct member access `xdg_surface->geometry`.
+
+6. **XDG Surface Map/Unmap Signals:**
+   * `map` and `unmap` signals moved from `wlr_xdg_surface->events` to base surface `wlr_xdg_surface->surface->events`.
 
 ---
 

@@ -1,3 +1,5 @@
+/* ##Script function and purpose: Hikari output management, modesetting, and scene tree setup for display outputs. */
+
 #include <hikari/output.h>
 
 #include <wayland-server-core.h>
@@ -160,6 +162,7 @@ hikari_output_disable(struct hikari_output *output)
   output->enabled = false;
 }
 
+/* ##Function purpose: Enable specified output, committing state to wlr_output and subscribing frame/state signals. */
 void
 hikari_output_enable(struct hikari_output *output)
 {

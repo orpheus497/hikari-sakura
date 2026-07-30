@@ -1,3 +1,5 @@
+/* ##Script function and purpose: Handling hardware switch input events (e.g., laptop lid toggle). */
+
 #include <hikari/switch.h>
 
 #include <hikari/action.h>
@@ -49,6 +51,7 @@ toggle_handler(struct wl_listener *listener, void *data)
   }
 }
 
+/* ##Function purpose: Initialize a switch input device and attach destroy signal listener to base wlr_input_device. */
 void
 hikari_switch_init(struct hikari_switch *swtch, struct wlr_input_device *device)
 {

@@ -1,3 +1,5 @@
+/* ##Script function and purpose: Native Wayland XDG shell surface view implementation and event handling. */
+
 #include <hikari/xdg_view.h>
 
 #include <assert.h>
@@ -455,6 +457,7 @@ constraints(struct hikari_view *view,
       state->max_height > 0 ? state->max_height : view->output->geometry.height;
 }
 
+/* ##Function purpose: Initialize an XDG view, linking listeners to surface events (map, unmap, destroy) and constructing scene tree nodes. */
 void
 hikari_xdg_view_init(struct hikari_xdg_view *xdg_view,
     struct wlr_xdg_surface *xdg_surface,

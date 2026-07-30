@@ -1,6 +1,6 @@
 # Test Specifications & Verification Framework
 
-*Last Updated:* 2026-07-29 03:19
+*Last Updated:* 2026-07-31 01:15
 
 ---
 
@@ -8,9 +8,9 @@
 
 | Test Case ID | Test Target | Description | Expected Outcome | Status |
 |--------------|-------------|-------------|------------------|--------|
-| `TC-BUILD-01` | `Makefile` (`bmake`) | FreeBSD build compilation test | Clean compilation of `hikari` and `hikari-unlocker` | Pending |
-| `TC-PKG-01` | `pkg-config` | Resolve dependencies: `wlroots`, `pango`, `cairo`, `pixman`, `xkbcommon`, `libinput`, `libucl`, `epoll-shim` | All CFLAGS and LIBS resolved without missing packages | Pending |
-| `TC-DOC-01` | `AGENTS.md` Linter | Header & Source prefix audit | Every script, function, loop, condition, step, and error block has exact prefix annotation | Pending |
+| `TC-BUILD-01` | `Makefile` (`make`/`bmake`) | FreeBSD/Linux build compilation test | Clean compilation of `hikari` and `hikari-unlocker` | Passed ✓ |
+| `TC-PKG-01` | `pkg-config` | Resolve dependencies: `wlroots-0.20`, `pango`, `cairo`, `pixman`, `xkbcommon`, `libinput`, `libucl`, `epoll-shim` | All CFLAGS and LIBS resolved without missing packages | Passed ✓ |
+| `TC-DOC-01` | `AGENTS.md` Linter | Header & Source prefix audit | Every script, function, loop, condition, step, and error block has exact prefix annotation | Passed ✓ |
 | `TC-FORMAT-01` | `clang-format` | Code formatting compliance | Zero formatting diffs against `.clang-format` rules | Pending |
 
 ---

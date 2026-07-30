@@ -1,3 +1,5 @@
+/* ##Script function and purpose: Core Hikari Wayland server initialization, signal management, and main loop handling. */
+
 #include <hikari/server.h>
 
 #include <errno.h>
@@ -798,6 +800,7 @@ done:
   }
 }
 
+/* ##Function purpose: Initialize headless fallback output for window management when no physical monitor is attached. */
 static void
 init_noop_output(struct hikari_server *server)
 {

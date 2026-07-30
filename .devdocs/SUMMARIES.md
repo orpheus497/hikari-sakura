@@ -4,6 +4,13 @@
 
 ---
 
+## Session Summary: 2026-07-31 01:15
+* **Phase:** wlroots 0.20 API Migration — Build Verified
+* **Status:** Completed — clean build achieved
+* **Summary:** Resolved all 7 wlroots 0.20 API breaking changes across 5 source files (`cursor.c`, `output.c`, `server.c`, `switch.c`, `xdg_view.c`). Changes included: adding `relative_direction` parameter to pointer axis notify, adapting headless backend and output layout creation signatures, migrating destroy signals from per-type to base `wlr_input_device`, replacing removed `wlr_xdg_surface_get_geometry()` with direct struct field access, and moving XDG surface map/unmap signals to `wlr_surface`. Both `hikari` and `hikari-unlocker` now compile and link cleanly. Updated all project documentation.
+
+---
+
 ## Session Summary: 2026-07-29 14:34
 * **Phase:** wlr_scene Migration
 * **Status:** Major refactor completed (29 files, -1135/+197 lines)
@@ -89,7 +96,7 @@
 * **Summary:**
   * Inspected all 65 header files in `include/hikari/` and 56 source files in `src/`.
   * Formulated pure FreeBSD modernization strategy focusing on `<dev/evdev/input-event-codes.h>`, `epoll-shim`, `seatd`, `tmpfs` `posix_fallocate`, OpenPAM (`hikari-unlocker`), and Data-Oriented Design (DOD) Struct-of-Arrays (SoA) layout tables.
-  * Updated [.devdocs/BRIEFING.md](file:///home/droid/Documents/Projects/hikari/.devdocs/BRIEFING.md), [.devdocs/TODOS.md](file:///home/droid/Documents/Projects/hikari/.devdocs/TODOS.md), and [.devdocs/SESSION_HANDOFF.md](file:///home/droid/Documents/Projects/hikari/.devdocs/SESSION_HANDOFF.md).
+  * Updated [BRIEFING.md](file:///home/orpheus497/Projects/hikari/.devdocs/BRIEFING.md), [TODOS.md](file:///home/orpheus497/Projects/hikari/.devdocs/TODOS.md), and [SESSION_HANDOFF.md](file:///home/orpheus497/Projects/hikari/.devdocs/SESSION_HANDOFF.md).
 
 ---
 

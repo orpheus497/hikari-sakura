@@ -1,3 +1,5 @@
+/* ##Script function and purpose: Hikari cursor input handling and pointer axis event dispatching. */
+
 #include <hikari/cursor.h>
 
 #include <assert.h>
@@ -258,6 +260,7 @@ button_handler(struct wl_listener *listener, void *data)
   hikari_server.mode->button_handler(cursor, event);
 }
 
+/* ##Function purpose: Handle pointer axis (scroll wheel) events and notify seat with relative direction. */
 static void
 axis_handler(struct wl_listener *listener, void *data)
 {

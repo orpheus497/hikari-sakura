@@ -75,7 +75,7 @@ repository, breaking changes might be encountered. These are documented in the
 
 ### Dependencies
 
-* wlroots
+* wlroots (>= 0.20)
 * pango
 * cairo
 * libinput
