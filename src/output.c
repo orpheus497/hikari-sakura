@@ -395,6 +395,12 @@ hikari_output_fini(struct hikari_output *output)
 
   hikari_output_disable(output);
 
+  if (output->enabled) {
+    wl_list_remove(&output->frame.link);
+    wl_list_remove(&output->request_state.link);
+    output->enabled = false;
+  }
+
   wl_list_remove(&output->destroy.link);
 
   struct hikari_workspace *workspace = output->workspace;
