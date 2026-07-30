@@ -54,8 +54,7 @@ commit_handler(struct wl_listener *listener, void *data)
   assert(view->surface != NULL);
 
   if (hikari_view_was_updated(view, serial)) {
-    struct wlr_box new_geometry;
-    wlr_xdg_surface_get_geometry(surface, &new_geometry);
+    struct wlr_box new_geometry = surface->geometry;
 
     switch (view->pending_operation.type) {
       case HIKARI_OPERATION_TYPE_TILE:
@@ -80,8 +79,7 @@ commit_handler(struct wl_listener *listener, void *data)
     struct hikari_output *output = view->output;
     bool visible = !hikari_view_is_hidden(view);
 
-    struct wlr_box new_geometry;
-    wlr_xdg_surface_get_geometry(surface, &new_geometry);
+    struct wlr_box new_geometry = surface->geometry;
 
     if (new_geometry.width != geometry->width ||
         new_geometry.height != geometry->height) {
@@ -128,7 +126,7 @@ first_map(struct hikari_xdg_view *xdg_view, bool *focus)
   struct wlr_box *geometry = &xdg_view->view.geometry;
 
   if (xdg_surface->surface->mapped) {
-    wlr_xdg_surface_get_geometry(xdg_surface, geometry);
+    *geometry = xdg_surface->geometry;
     if (geometry->width <= 0 || geometry->height <= 0) {
       *geometry = (struct wlr_box){0, 0, 1, 1};
     }
@@ -469,8 +467,7 @@ hikari_xdg_view_init(struct hikari_xdg_view *xdg_view,
   hikari_view_init(&xdg_view->view, child, workspace);
 
   if (xdg_surface->surface->mapped) {
-    struct wlr_box new_geometry;
-    wlr_xdg_surface_get_geometry(xdg_surface, &new_geometry);
+    struct wlr_box new_geometry = xdg_surface->geometry;
     if (new_geometry.width > 0 && new_geometry.height > 0) {
       xdg_view->view.geometry = new_geometry;
     } else {
@@ -499,10 +496,10 @@ hikari_xdg_view_init(struct hikari_xdg_view *xdg_view,
   hikari_indicator_frame_init(&xdg_view->view.indicator_frame, xdg_view->scene_tree);
 
   xdg_view->map.notify = map_handler;
-  wl_signal_add(&xdg_surface->events.map, &xdg_view->map);
+  wl_signal_add(&xdg_surface->surface->events.map, &xdg_view->map);
 
   xdg_view->unmap.notify = unmap_handler;
-  wl_signal_add(&xdg_surface->events.unmap, &xdg_view->unmap);
+  wl_signal_add(&xdg_surface->surface->events.unmap, &xdg_view->unmap);
 
   xdg_view->destroy.notify = destroy_handler;
   wl_signal_add(&xdg_surface->surface->events.destroy, &xdg_view->destroy);

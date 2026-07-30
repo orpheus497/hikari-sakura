@@ -801,7 +801,7 @@ done:
 static void
 init_noop_output(struct hikari_server *server)
 {
-  server->noop_backend = wlr_headless_backend_create(server->display);
+  server->noop_backend = wlr_headless_backend_create(wl_display_get_event_loop(server->display));
 
   struct wlr_output *wlr_output =
       wlr_headless_add_output(server->noop_backend, 800, 600);
@@ -886,7 +886,7 @@ server_init(struct hikari_server *server, char *config_path)
   server->new_input.notify = new_input_handler;
   wl_signal_add(&server->backend->events.new_input, &server->new_input);
 
-  server->output_layout = wlr_output_layout_create();
+  server->output_layout = wlr_output_layout_create(server->display);
   server->output_manager =
       wlr_xdg_output_manager_v1_create(server->display, server->output_layout);
 

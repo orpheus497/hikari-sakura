@@ -270,7 +270,8 @@ axis_handler(struct wl_listener *listener, void *data)
       event->orientation,
       event->delta,
       event->delta_discrete,
-      event->source);
+      event->source,
+      event->relative_direction);
 }
 
 static void
