@@ -46,8 +46,9 @@ In your user shell profile (`~/.profile`, `~/.zshrc`, or `~/.cshrc`):
 ```sh
 export XDG_RUNTIME_DIR=$(mktemp -d /tmp/runtime-${USER}.XXXXXX)
 chmod 0700 "${XDG_RUNTIME_DIR}"
-# Validate that the directory is owned by the current user with 0700 permissions
+# ##Condition purpose: Validate that the directory is owned by the current user with 0700 permissions
 if [ "$(stat -f "%u:%Op" "${XDG_RUNTIME_DIR}")" != "$(id -u):40700" ]; then
+  # ##Error purpose: Output error message and exit if ownership/permissions are invalid
   echo "Error: XDG_RUNTIME_DIR has invalid ownership or permissions."
   exit 1
 fi

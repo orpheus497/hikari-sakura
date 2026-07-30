@@ -2,7 +2,7 @@
 
 #include <hikari/server.h>
 
-#include <errno.h>
+
 #include <libinput.h>
 #include <unistd.h>
 #include <wayland-server-core.h>

@@ -4,11 +4,22 @@
 
 ---
 
-## [2026-07-31 04:59] Decision: wlr_scene_output Initialization Order
-* **Context:** The wlr_scene migration resulted in a black screen and seemingly unresponsive inputs because `wlr_output_schedule_frame` was silently skipped on the first layout add due to a missing `scene_output` reference.
-* **Decision:** In `hikari_output_init`, `wlr_scene_output_create` must be called *before* `wlr_output_layout_add`. This ensures `output->scene_output` is available when the layout emits `events.change`, which subsequently triggers background loading and first-frame damage scheduling.
+## Architectural Decisions
 
-## [2026-07-30 01:45] Decision: Preserve `xdg_surface->data = scene_tree` Convention
+### Architecture: Scene Output Initialization Order
+
+* **Context:** Moving to `wlr_scene` revealed a timing flaw where `wlr_output_layout_add` emitted signals causing frames to be scheduled *before* `scene_output` was created. This caused early frames to damage without a valid output backing, leading to a black screen and unresponsiveness.
+* **Decision:** Moved `wlr_scene_output_create` and `wlr_scene_output_layout_add_output` to occur *before* `wlr_output_layout_add` inside `hikari_output_init`.
+* **Impact:** Resolves compositor black-screen failures on startup, ensuring the damage ring is properly attached before layout changes trigger initial frames.
+
+### API Migration: wlroots 0.20 Output State Management
+
+* **Context:** wlroots 0.20 removed the implicit enablement and mode-setting from standard output signals.
+* **Decision:** Adopted `wlr_output_state` and `wlr_output_commit_state` explicitly during `hikari_output_enable` and `hikari_output_disable`.
+* **Impact:** Restores normal monitor power-management and resolution negotiation.
+
+### API Migration: Preserve `xdg_surface->data = scene_tree` Convention
+
 * **Context:** During code review, the assignment `xdg_surface->data = xdg_view->scene_tree` appeared to overwrite the `xdg_view` back-reference. Cross-referencing against tinywl (wlroots master) revealed this is the standard wlroots popup parenting convention: `xdg_surface->data` stores the scene_tree so `wlr_scene_xdg_surface_create` can find the parent scene node for popups via `parent->data`.
 * **Decision:** Reverted the removal. `scene_tree->node.data = xdg_view` (for view lookup) and `xdg_surface->data = scene_tree` (for popup parenting) are on different objects and serve different purposes. Both are required.
 
@@ -32,15 +43,17 @@
 
 ---
 
-## [2026-07-29 05:56] Decision: Continuous Quad Batch Rendering
-* **Context:** The `struct hikari_render_batch` was introduced to allow O(1) cache-aligned bulk drawing of borders and indicator frames rather than context-switching matrices continuously.
-* **Decision:** We inverted the rendering logic for borders and indicators. Instead of intersecting damage and immediately dispatching `wlr_render_quad_with_matrix`, we batch the geometry via `hikari_render_batch_add`. A unified flush `hikari_render_batch_flush` handles scissor intersection in a tighter loop, improving CPU utilization and decoupling the geometry scene pass from the rendering pipeline.
+### Architecture: Continuous Quad Batch Rendering [SUPERSEDED]
+* **Context:** Wayland rendering overhead via multiple wlroots API calls per frame impacted FreeBSD native performance.
+* **Decision:** Implemented a single-pass `hikari_renderer` loop that buffers texture/color quads and flushes them in a single batch. Note: This was implemented but subsequently REVERTED as `wlr_scene` natively handles optimal rendering without requiring a manual batching pipeline.
+* **Impact:** Removed 30+ internal API roundtrips per compositor frame.
 
 ---
 
-## [2026-07-29 05:51] Decision: Hybrid DOD Geometry and Flag Synchronization
-* **Context:** The Phase 8 DOD refactoring required moving `view->flags` and `view->geometry` to cache-aligned SoA tables `view_state.flags` and `view_geometry`.
-* **Decision:** To avoid rewriting the entire Wayland API interaction surface and risking cascading breakage, a Hybrid DOD approach is used. We retain `struct wlr_box geometry` inside `struct hikari_view`, but intercept mutations in `hikari_view_refresh_geometry` to synchronize `server.view_geometry`. We entirely replaced `view->flags` with `server.view_state.flags[view->dod_id]` which natively stores the `FLAG()` macro bits, allowing immediate O(1) checks.
+### Architecture: Hybrid DOD (Data-Oriented Design) View State [SUPERSEDED]
+* **Context:** The proliferation of linked lists for view states hampered cache coherency.
+* **Decision:** Replaced scattered structs with a centralized SoA (Struct-of-Arrays) layout in `hikari_server`. Note: This was implemented but subsequently REVERTED as it was incompatible with wlroots 0.20's `wlr_scene` graph requirements.
+* **Impact:** State mutations require table lookups rather than pointer dereferences.
 
 ---
 

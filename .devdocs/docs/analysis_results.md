@@ -1,10 +1,5 @@
 # Analysis Results
-<<<<<<< HEAD
-
-*Last Updated:* 2026-07-29 15:16
-=======
-*Last Updated:* 2026-07-31 01:15
->>>>>>> 930f3bf (chore: complete wlroots 0.20 API migration and update documentation compliance)
+*Last Updated:* 2026-07-31 05:01
 
 Codebase state and build status:
 - Build Status: Clean compilation and linking of both `hikari` and `hikari-unlocker` against `wlroots` 0.20

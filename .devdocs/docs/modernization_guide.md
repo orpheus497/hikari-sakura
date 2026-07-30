@@ -12,13 +12,11 @@ This guide documents the step-by-step modernization strategy for `hikari`. It co
 ### Modern Target: `wlroots` 0.20
 The codebase is fully updated and verified against `wlroots` 0.20:
 
-<<<<<<< HEAD
 ### Key Migration Patterns for 0.20+ (Current Supported Target):
 The current supported target is `wlroots` 0.20 or newer, which introduces several breaking API changes:
-=======
+
 1. **Pointer Axis Events:**
    * `wlr_seat_pointer_notify_axis` requires 7th argument (`enum wl_pointer_axis_relative_direction relative_direction`), passed from `event->relative_direction`.
->>>>>>> 930f3bf (chore: complete wlroots 0.20 API migration and update documentation compliance)
 
 2. **Headless Backend:**
    * `wlr_headless_backend_create` takes `struct wl_event_loop *` instead of `struct wl_display *`. Created using `wl_display_get_event_loop(server->display)`.
@@ -55,7 +53,7 @@ FreeBSD uses `kqueue` instead of Linux `epoll`. Linux epoll compatibility is pro
 
 ## 3. Memory Allocation (Updated)
 
-Hikari now utilizes standard heap allocation (`hikari_malloc`) across the codebase. The previous custom Object Pool slab allocator has been removed in favor of standard system `malloc`/`calloc` calls, simplifying the architecture and improving maintainability.
+Hikari now utilizes standard heap allocation (`hikari_malloc`) across the codebase for compositor allocation paths. The previous custom Object Pool slab allocator has been removed in favor of standard system `malloc`/`calloc` calls (with `hikari_unlocker.c` directly utilizing standard `calloc` and `strdup`), simplifying the architecture and improving maintainability.
 
 ---
 

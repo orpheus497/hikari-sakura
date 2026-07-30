@@ -1,4 +1,6 @@
 /* ##Script function and purpose: Isolated setuid-root PAM authentication helper for unlocking screen sessions in hikari. */
+#define _GNU_SOURCE
+#define _DEFAULT_SOURCE
 
 #include <pwd.h>
 #include <security/pam_appl.h>
@@ -11,9 +13,19 @@
 #include <unistd.h>
 #include <errno.h>
 
+void explicit_bzero(void *s, size_t n);
+
 static char *input_buffer = NULL;
 
 #define INPUT_BUFFER_SIZE 1024
+
+/* ##Function purpose: Helper to robustly write boolean result to stdout fd 1. */
+static void write_success(bool success) {
+  ssize_t nwritten;
+  do {
+    nwritten = write(1, &success, sizeof(bool));
+  } while (nwritten == -1 && errno == EINTR);
+}
 
 /* ##Function purpose: Callback handler processing PAM authentication prompts. */
 static int
@@ -75,7 +87,7 @@ check_password(const char *username)
   if (pam_start("hikari-unlocker", username, &conv, &auth_handle) !=
       PAM_SUCCESS) {
     /* ##Error purpose: Return -1 and write false if PAM initialization fails fatally. */
-    write(1, &success, sizeof(bool));
+    write_success(success);
     return -1;
   }
 
@@ -88,7 +100,7 @@ check_password(const char *username)
   /* ##Condition purpose: Check if nread failed or returned EOF. */
   if (nread <= 0) {
     /* ##Error purpose: Abort PAM initialization and write false to stdout on read failure. */
-    write(1, &success, sizeof(bool));
+    write_success(success);
     pam_end(auth_handle, PAM_ABORT);
     return -1;
   }
@@ -99,10 +111,13 @@ check_password(const char *username)
   if (nread == INPUT_BUFFER_SIZE - 1 && input_buffer[INPUT_BUFFER_SIZE - 2] != '\n' && input_buffer[INPUT_BUFFER_SIZE - 2] != '\0') {
     /* ##Error purpose: Drain remaining input, abort PAM, and write false on overlong password. */
     char c;
+    ssize_t res;
     /* ##Loop purpose: Drain remaining stdin bytes until newline to discard overlong input. */
-    while (read(0, &c, 1) == 1 && c != '\n');
+    while ((res = read(0, &c, 1)) == 1 || (res == -1 && errno == EINTR)) {
+      if (res == 1 && c == '\n') break;
+    }
     explicit_bzero(input_buffer, INPUT_BUFFER_SIZE);
-    write(1, &success, sizeof(bool));
+    write_success(success);
     pam_end(auth_handle, PAM_ABORT);
     return 0;
   }
@@ -114,7 +129,7 @@ check_password(const char *username)
   success = (pam_status == PAM_SUCCESS);
 
   /* ##Action purpose: Write authentication success boolean result to stdout fd 1. */
-  write(1, &success, sizeof(bool));
+  write_success(success);
 
   pam_end(auth_handle, pam_status);
 
@@ -125,7 +140,6 @@ check_password(const char *username)
 int
 main(int argc, char **argv)
 {
-  char input;
   bool success = false;
   struct passwd *passwd = getpwuid(getuid());
   /* ##Condition purpose: Verify password entry is found. */

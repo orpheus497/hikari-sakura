@@ -195,7 +195,7 @@ hikari_cursor_set_image(struct hikari_cursor *cursor, const char *path)
   if (path != NULL) {
    wlr_cursor_set_xcursor(cursor->wlr_cursor, cursor->cursor_mgr, path);
   } else {
-   wlr_cursor_set_xcursor(cursor->wlr_cursor, cursor->cursor_mgr, "default");
+   wlr_cursor_set_surface(cursor->wlr_cursor, NULL, 0, 0);
   }
 }
 

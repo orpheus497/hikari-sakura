@@ -11,6 +11,6 @@
 | **Phase 5** | wlr_scene rendering migration | 100% ✓ (all visual elements use wlr_scene graph) |
 | **Phase 6** | Build verification | 100% ✓ (clean `make` — both `hikari` and `hikari-unlocker` link successfully) |
 | **Phase 7** | Runtime testing | 100% ✓ (resolved black screen and input unresponsiveness on compositor startup) |
-| **Phase 8** | AGENTS.md code documentation compliance | 0% (pending) |
+| **Phase 8** | AGENTS.md code documentation compliance | 100% ✓ |
 
 *Note: DOD SoA tables and object pool phases were implemented and subsequently REVERTED as incompatible with wlr_scene workflows.*

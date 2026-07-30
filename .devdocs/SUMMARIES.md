@@ -8,6 +8,9 @@
 * **Phase:** Runtime testing & Debugging
 * **Status:** Completed
 * **Summary:** Investigated a runtime issue causing a black screen and unresponsive inputs upon compositor startup. Determined the root cause was an initialization order issue in `src/output.c` where `wlr_output_layout_add` triggered a damage frame before `scene_output` was created. Corrected the order of operations, restoring visual rendering and input processing.
+- Architected and implemented DOD SoA (Struct of Arrays) tables for internal state management (Note: Implemented but subsequently REVERTED as incompatible with `wlr_scene` workflows).
+- Introduced a unified object pool allocation system replacing scattered `malloc`/`free` calls (Note: Implemented but subsequently REVERTED as it added unnecessary complexity over standard allocation).
+- Refactored `hikari_renderer` into a quad-batching system to reduce API overhead (Note: Implemented but subsequently REVERTED, as `wlr_scene` handles this natively).
 
 ## Session Summary: 2026-07-31 01:15
 * **Phase:** wlroots 0.20 API Migration — Build Verified

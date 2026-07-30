@@ -22,15 +22,9 @@
            |                                  |                                  |
            v                                  v                                  v
 +---------------------+            +---------------------+            +---------------------+
-<<<<<<< HEAD
-|  src/output.c       |            |   hikari_view.c     |            |  hikari_keyboard.c  |
-|  (wlr_scene Output) |            | hikari_workspace.c  |            |  hikari_pointer.c   |
+|  src/output.c       |            |   src/view.c        |            |  src/keyboard.c     |
+|    (wlr_scene)      |            |   src/workspace.c   |            |  src/pointer.c      |
 |                     |            | (Views/Sheets/Tiles)|            |  (Input Events)     |
-=======
-|  hikari_output.c    |            |   hikari_view.c     |            |  hikari_keyboard.c  |
-|    (wlr_scene)      |            | hikari_workspace.c  |            |  hikari_pointer.c   |
-| (Output & Render)  |            | (Views/Sheets/Tiles)|            |  (Input Events)     |
->>>>>>> 930f3bf (chore: complete wlroots 0.20 API migration and update documentation compliance)
 +---------------------+            +---------------------+            +---------------------+
 ```
 

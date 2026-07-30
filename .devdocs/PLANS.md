@@ -10,6 +10,6 @@
 5. ~~Code documentation compliance~~ ✓ (Swept modified source files for `AGENTS.md` comment prefix standards)
 
 ## Next Steps
-1. **Runtime testing:** Launch `hikari` on a FreeBSD/Linux Wayland session with `seatd`. Verify compositor startup, view management, tiling, sheet switching, and lock/unlock cycle.
+1. **Runtime testing:** Launch `hikari` on a FreeBSD Wayland session with `seatd`. Verify compositor startup, view management, tiling, sheet switching, and lock/unlock cycle.
 2. **PAM verification:** Test `hikari-unlocker` with OpenPAM on FreeBSD. Verify screen lock and unlock with correct credentials.
 3. **Official changelog:** Prepare CHANGELOG.md and UPDATING.md entries for the wlroots 0.20 release (deferred pending user decision on version number).
