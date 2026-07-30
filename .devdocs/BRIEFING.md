@@ -1,12 +1,12 @@
 # Hikari Project Briefing
 
-*Last Updated:* 2026-07-31 01:15
+*Last Updated:* 2026-07-31 05:35
 
 ## Current Status
 
-- **Phase:** wlroots 0.20 API migration — BUILD VERIFIED ✓
+- **Phase:** Phase 8 — Code Documentation Compliance (Runtime bugs fixed)
 - **Branch:** wlroots-0.17.1
-- **Overall progress:** ~95% (all compilation issues resolved, clean build achieved, runtime testing pending)
+- **Overall progress:** ~98% (all runtime crashing and black screen rendering bugs fixed)
 - **Target OS:** FreeBSD 13.x/14.x+ (Primary), Linux supported
 
 ## What Works

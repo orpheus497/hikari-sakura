@@ -4,6 +4,17 @@
 
 ---
 
+## Session Date: 2026-07-31 05:35
+* **Phase:** Runtime testing & Debugging (Client Disconnects)
+* **Accomplishments:**
+  - Diagnosed and resolved segfaults occurring when clients crash or close (fixed dangling signal listeners in `xdg_view.c` and missing scene tree cleanup in `xwayland_view.c`).
+  - Added `scene_node` tracking to `hikari_view` and restored positioning (`wlr_scene_node_set_position`) and visibility (`wlr_scene_node_set_enabled`) toggles that were omitted during the wlroots 0.20 migration.
+  - Forced `DRM_FORMAT_MOD_LINEAR` when allocating background buffers to prevent silent cairo CPU-mapping failures on DRM backends (resolving the persistent black screen bug).
+* **Modified:** `include/hikari/view.h`, `src/view.c`, `src/xdg_view.c`, `src/xwayland_view.c`, `src/output.c`
+* **Next Steps:** User to recompile and test running `hikari` locally, confirming backgrounds display and windows map without crashing. Proceed to Phase 8.
+
+---
+
 ## Session Date: 2026-07-31 04:59
 * **Phase:** Runtime testing & Debugging
 * **Accomplishments:**

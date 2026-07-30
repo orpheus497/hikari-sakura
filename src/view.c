@@ -961,6 +961,10 @@ hikari_view_show(struct hikari_view *view)
 #endif
   hikari_view_unset_hidden(view);
 
+  if (view->scene_node != NULL) {
+    wlr_scene_node_set_enabled(view->scene_node, true);
+  }
+
   increase_group_visiblity(view);
 
   raise_view(view);
@@ -983,6 +987,10 @@ hikari_view_hide(struct hikari_view *view)
 
   clear_focus(view);
   hide(view);
+
+  if (view->scene_node != NULL) {
+    wlr_scene_node_set_enabled(view->scene_node, false);
+  }
 
   /* ##Action purpose: Hide the indicator frame overlay when the view is hidden. */
   hikari_indicator_frame_hide(&view->indicator_frame);
@@ -1758,7 +1766,9 @@ hikari_view_refresh_geometry(struct hikari_view *view, struct wlr_box *geometry)
   view->current_geometry = new_geometry;
   view->current_unmaximized_geometry = refresh_unmaximized_geometry(view);
   
-
+  if (view->scene_node != NULL) {
+    wlr_scene_node_set_position(view->scene_node, new_geometry->x, new_geometry->y);
+  }
 
   refresh_border_geometry(view);
 }

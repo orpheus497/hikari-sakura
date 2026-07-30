@@ -250,6 +250,10 @@ destroy_handler(struct wl_listener *listener, void *data)
 
   hikari_view_fini(&xwayland_view->view);
 
+  if (xwayland_view->scene_tree != NULL) {
+    wlr_scene_node_destroy(&xwayland_view->scene_tree->node);
+  }
+
   wl_list_remove(&xwayland_view->map.link);
   wl_list_remove(&xwayland_view->unmap.link);
   wl_list_remove(&xwayland_view->destroy.link);
@@ -403,6 +407,7 @@ hikari_xwayland_view_init(struct hikari_xwayland_view *xwayland_view,
 
   /* ##Step purpose: Create a scene tree for XWayland view border and indicator frame nodes. */
   xwayland_view->scene_tree = wlr_scene_tree_create(&hikari_server.scene->tree);
+  xwayland_view->view.scene_node = &xwayland_view->scene_tree->node;
   hikari_border_init(&xwayland_view->view.border, xwayland_view->scene_tree);
   hikari_indicator_frame_init(&xwayland_view->view.indicator_frame, xwayland_view->scene_tree);
 

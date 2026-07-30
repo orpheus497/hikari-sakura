@@ -492,6 +492,7 @@ hikari_xdg_view_init(struct hikari_xdg_view *xdg_view,
   xdg_view->surface->data = xdg_view;
   xdg_view->xdg_toplevel = xdg_surface->toplevel;
   xdg_view->scene_tree = wlr_scene_xdg_surface_create(&hikari_server.scene->tree, xdg_view->xdg_toplevel->base);
+  xdg_view->view.scene_node = &xdg_view->scene_tree->node;
   xdg_view->scene_tree->node.data = xdg_view;
   xdg_surface->data = xdg_view->scene_tree;
   
@@ -505,7 +506,7 @@ hikari_xdg_view_init(struct hikari_xdg_view *xdg_view,
   wl_signal_add(&xdg_surface->surface->events.unmap, &xdg_view->unmap);
 
   xdg_view->destroy.notify = destroy_handler;
-  wl_signal_add(&xdg_surface->surface->events.destroy, &xdg_view->destroy);
+  wl_signal_add(&xdg_surface->events.destroy, &xdg_view->destroy);
 
   assert(xdg_view->surface->role == WLR_XDG_SURFACE_ROLE_TOPLEVEL);
 

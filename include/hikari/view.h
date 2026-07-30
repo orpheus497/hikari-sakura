@@ -45,6 +45,7 @@ struct hikari_view {
   struct hikari_mark *mark;
   struct hikari_output *output;
   struct wlr_surface *surface;
+  struct wlr_scene_node *scene_node;
 
   bool use_csd;
   bool child;
