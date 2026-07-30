@@ -8,3 +8,4 @@ hikari.*\.tar\.gz
 wlr-layer-shell-unstable-v1-protocol.h
 
 hikari.core
+systemsettings.core

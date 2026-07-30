@@ -4,6 +4,10 @@
 
 ---
 
+## [2026-07-31 04:59] Decision: wlr_scene_output Initialization Order
+* **Context:** The wlr_scene migration resulted in a black screen and seemingly unresponsive inputs because `wlr_output_schedule_frame` was silently skipped on the first layout add due to a missing `scene_output` reference.
+* **Decision:** In `hikari_output_init`, `wlr_scene_output_create` must be called *before* `wlr_output_layout_add`. This ensures `output->scene_output` is available when the layout emits `events.change`, which subsequently triggers background loading and first-frame damage scheduling.
+
 ## [2026-07-30 01:45] Decision: Preserve `xdg_surface->data = scene_tree` Convention
 * **Context:** During code review, the assignment `xdg_surface->data = xdg_view->scene_tree` appeared to overwrite the `xdg_view` back-reference. Cross-referencing against tinywl (wlroots master) revealed this is the standard wlroots popup parenting convention: `xdg_surface->data` stores the scene_tree so `wlr_scene_xdg_surface_create` can find the parent scene node for popups via `parent->data`.
 * **Decision:** Reverted the removal. `scene_tree->node.data = xdg_view` (for view lookup) and `xdg_surface->data = scene_tree` (for popup parenting) are on different objects and serve different purposes. Both are required.

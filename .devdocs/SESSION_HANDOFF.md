@@ -4,7 +4,32 @@
 
 ---
 
-<<<<<<< HEAD
+## Session Date: 2026-07-31 04:59
+* **Phase:** Runtime testing & Debugging
+* **Accomplishments:**
+  - Diagnosed and resolved the black screen and input unresponsiveness bug on compositor startup.
+  - Reordered `wlr_scene_output_create` in `src/output.c` to run before `wlr_output_layout_add`, fixing a race condition that prevented the first frame from being scheduled.
+  - Cleaned up git merge conflict markers in `SESSION_HANDOFF.md` and `TODOS.md`.
+* **Modified:** `src/output.c`, `.devdocs/SESSION_HANDOFF.md`, `.devdocs/TODOS.md`, `.devdocs/PROGRESS.md`, `.devdocs/DECISIONS_LOG.md`
+* **Next Steps:** Proceed with Phase 8 (AGENTS.md code documentation compliance) and test PAM unlocker.
+
+## Session Date: 2026-07-31 01:15
+* **Phase:** wlroots 0.20 API Migration — Build Verified
+* **Accomplishments:**
+  - Fixed `wlr_seat_pointer_notify_axis` in `src/cursor.c` — added 7th `relative_direction` argument
+  - Added missing `struct wlr_output *wlr_output` declaration in `hikari_output_enable` (`src/output.c`)
+  - Fixed `wlr_headless_backend_create` in `src/server.c` — now passes `wl_display_get_event_loop(server->display)`
+  - Fixed `wlr_output_layout_create` in `src/server.c` — now passes `server->display`
+  - Fixed `wlr_switch->events.destroy` → `wlr_switch->base.events.destroy` in `src/switch.c`
+  - Replaced 4x `wlr_xdg_surface_get_geometry()` calls with direct `surface->geometry` access in `src/xdg_view.c`
+  - Fixed `xdg_surface->events.map/unmap` → `xdg_surface->surface->events.map/unmap` in `src/xdg_view.c`
+  - **Clean build achieved:** Both `hikari` and `hikari-unlocker` compile and link successfully
+  - Updated all `.devdocs/` and README documentation
+* **Modified:** `src/cursor.c`, `src/output.c`, `src/server.c`, `src/switch.c`, `src/xdg_view.c`, `README.md`, all `.devdocs/` files
+* **Next Steps:** Runtime testing on FreeBSD Wayland session; AGENTS.md compliance sweep on modified source files
+
+---
+
 ## Session Date: 2026-07-30 01:28
 * **Phase:** Code Review Fixes
 * **Accomplishments:**
@@ -20,22 +45,6 @@
 * **Modified:** 20 files (8 devdocs, 12 source/header)
 * **Skipped:** AGENTS.md move (breaks rule loading), damage ring transforms (legacy code, scene graph authoritative)
 * **Next Steps:** FreeBSD build verification with `bmake`
-=======
-## Session Date: 2026-07-31 01:15
-* **Phase:** wlroots 0.20 API Migration — Build Verified
-* **Accomplishments:**
-  - Fixed `wlr_seat_pointer_notify_axis` in `src/cursor.c` — added 7th `relative_direction` argument
-  - Added missing `struct wlr_output *wlr_output` declaration in `hikari_output_enable` (`src/output.c`)
-  - Fixed `wlr_headless_backend_create` in `src/server.c` — now passes `wl_display_get_event_loop(server->display)`
-  - Fixed `wlr_output_layout_create` in `src/server.c` — now passes `server->display`
-  - Fixed `wlr_switch->events.destroy` → `wlr_switch->base.events.destroy` in `src/switch.c`
-  - Replaced 4x `wlr_xdg_surface_get_geometry()` calls with direct `surface->geometry` access in `src/xdg_view.c`
-  - Fixed `xdg_surface->events.map/unmap` → `xdg_surface->surface->events.map/unmap` in `src/xdg_view.c`
-  - **Clean build achieved:** Both `hikari` and `hikari-unlocker` compile and link successfully
-  - Updated all `.devdocs/` and README documentation
-* **Modified:** `src/cursor.c`, `src/output.c`, `src/server.c`, `src/switch.c`, `src/xdg_view.c`, `README.md`, all `.devdocs/` files
-* **Next Steps:** Runtime testing on FreeBSD Wayland session; AGENTS.md compliance sweep on modified source files
->>>>>>> 930f3bf (chore: complete wlroots 0.20 API migration and update documentation compliance)
 
 ---
 

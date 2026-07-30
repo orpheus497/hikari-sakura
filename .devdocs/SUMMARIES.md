@@ -4,6 +4,11 @@
 
 ---
 
+## Session Summary: 2026-07-31 04:59
+* **Phase:** Runtime testing & Debugging
+* **Status:** Completed
+* **Summary:** Investigated a runtime issue causing a black screen and unresponsive inputs upon compositor startup. Determined the root cause was an initialization order issue in `src/output.c` where `wlr_output_layout_add` triggered a damage frame before `scene_output` was created. Corrected the order of operations, restoring visual rendering and input processing.
+
 ## Session Summary: 2026-07-31 01:15
 * **Phase:** wlroots 0.20 API Migration — Build Verified
 * **Status:** Completed — clean build achieved

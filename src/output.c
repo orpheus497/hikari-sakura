@@ -354,6 +354,9 @@ hikari_output_init(struct hikari_output *output, struct wlr_output *wlr_output)
         hikari_configuration_resolve_output_config(
             hikari_configuration, wlr_output->name);
 
+    struct wlr_scene_output *scene_output = wlr_scene_output_create(hikari_server.scene, wlr_output);
+    output->scene_output = scene_output;
+
     struct wlr_output_layout_output *l_output;
     if (output_config != NULL && output_config->position.value.type ==
                                      HIKARI_POSITION_CONFIG_TYPE_ABSOLUTE) {
@@ -366,8 +369,6 @@ hikari_output_init(struct hikari_output *output, struct wlr_output *wlr_output)
       wlr_output_layout_get_box(hikari_server.output_layout, NULL, &extents);
       l_output = wlr_output_layout_add(hikari_server.output_layout, wlr_output, extents.x + extents.width, 0);
     }
-    struct wlr_scene_output *scene_output = wlr_scene_output_create(hikari_server.scene, wlr_output);
-    output->scene_output = scene_output;
     wlr_scene_output_layout_add_output(hikari_server.scene_layout, l_output, scene_output);
 
     output_geometry(output);
