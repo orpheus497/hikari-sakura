@@ -4,6 +4,16 @@
 
 ---
 
+## Session Date: 2026-07-31 06:10
+* **Phase:** Runtime testing & Debugging (XDG Clients & Wallpaper)
+* **Accomplishments:**
+  - Resolved `foot` (and other XDG clients) causing a `Segmentation fault (core dumped)`. In wlroots 0.17+, `new_surface` fires before the surface role is set, which caused a null pointer dereference (`xdg_surface->toplevel`) in `new_xdg_surface_handler`. Replaced `new_surface` with `new_toplevel` listener to ensure the surface is fully initialized as a toplevel.
+  - Reverted a broken "fake" fix that forced `DRM_FORMAT_MOD_LINEAR` in `hikari_output_load_background`. Restored `.modifiers = NULL` and `.len = 0` (matching `indicator_bar.c`), allowing the FreeBSD allocator to choose a valid mapping format, completely resolving the black screen wallpaper bug without requiring a custom buffer.
+* **Modified:** `src/server.c`, `include/hikari/server.h`, `src/output.c`
+* **Next Steps:** Proceed to Phase 8 (AGENTS.md compliance sweep) and test the `hikari-unlocker` PAM integration.
+
+---
+
 ## Session Date: 2026-07-31 05:35
 * **Phase:** Runtime testing & Debugging (Client Disconnects)
 * **Accomplishments:**
@@ -11,7 +21,8 @@
   - Added `scene_node` tracking to `hikari_view` and restored positioning (`wlr_scene_node_set_position`) and visibility (`wlr_scene_node_set_enabled`) toggles that were omitted during the wlroots 0.20 migration.
   - Forced `DRM_FORMAT_MOD_LINEAR` when allocating background buffers to prevent silent cairo CPU-mapping failures on DRM backends (resolving the persistent black screen bug).
   - Fixed an assertion failure (`wlr_seat_destroy`) on compositor shutdown by ensuring `request_set_selection` listeners are properly removed in `hikari_server_stop`.
-* **Modified:** `include/hikari/view.h`, `src/view.c`, `src/xdg_view.c`, `src/xwayland_view.c`, `src/output.c`, `src/server.c`
+  - Fixed a segfault on XDG client disconnects (like kitty crashing) caused by a double-free of `wlr_scene_rect` nodes in `hikari_indicator_frame_fini` (since wlroots 0.17 automatically cleans up child nodes when the parent `wlr_scene_tree` is destroyed).
+* **Modified:** `include/hikari/view.h`, `src/view.c`, `src/xdg_view.c`, `src/xwayland_view.c`, `src/output.c`, `src/server.c`, `src/indicator_frame.c`
 * **Next Steps:** User to recompile and test running `hikari` locally, confirming backgrounds display and windows map without crashing. Proceed to Phase 8.
 
 ---

@@ -6,6 +6,20 @@
 
 ## Architectural Decisions
 
+### Architecture: XDG Shell Surface Initialization
+
+* **Context:** In wlroots 0.17+, `wlr_xdg_shell.events.new_surface` emits before the surface role (toplevel or popup) is assigned, causing `xdg_surface->toplevel` to be NULL and leading to segmentation faults when clients connect.
+* **Decision:** Migrated `wlr_xdg_shell` event binding from `new_surface` to `new_toplevel`, guaranteeing that the surface is fully initialized as a toplevel before `hikari` processes it. Popups are already correctly handled internally via the toplevel's `new_popup` event.
+* **Impact:** Prevents compositor crashes when XDG clients (like `foot`) map their windows.
+
+### Architecture: Background Buffer Allocation (FreeBSD)
+
+* **Context:** Forcing `DRM_FORMAT_MOD_LINEAR` during background buffer allocation caused `wlr_allocator_create_buffer` to fail or return CPU-unmappable buffers on FreeBSD's GBM backend, leading to a permanent black screen for the wallpaper.
+* **Decision:** Removed hardcoded modifiers (`.len = 0, .modifiers = NULL`), aligning the background allocator with the UI text allocator (`indicator_bar.c`).
+* **Impact:** Allows the allocator to implicitly select the optimal fallback (e.g., SHM), resolving the black screen without requiring a custom `wlr_buffer` implementation.
+
+
+
 ### Architecture: Scene Output Initialization Order
 
 * **Context:** Moving to `wlr_scene` revealed a timing flaw where `wlr_output_layout_add` emitted signals causing frames to be scheduled *before* `scene_output` was created. This caused early frames to damage without a valid output backing, leading to a black screen and unresponsiveness.

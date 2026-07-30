@@ -653,16 +653,13 @@ setup_selection(struct hikari_server *server)
 }
 
 static void
-new_xdg_surface_handler(struct wl_listener *listener, void *data)
+new_toplevel_handler(struct wl_listener *listener, void *data)
 {
   struct hikari_server *server =
-      wl_container_of(listener, server, new_xdg_surface);
+      wl_container_of(listener, server, new_toplevel);
 
-  struct wlr_xdg_surface *xdg_surface = data;
-
-  if (xdg_surface->role == WLR_XDG_SURFACE_ROLE_POPUP) {
-    return;
-  }
+  struct wlr_xdg_toplevel *toplevel = data;
+  struct wlr_xdg_surface *xdg_surface = toplevel->base;
 
   struct hikari_xdg_view *xdg_view =
       hikari_malloc(sizeof(struct hikari_xdg_view));
@@ -685,9 +682,9 @@ setup_xdg_shell(struct hikari_server *server)
 {
   server->xdg_shell = wlr_xdg_shell_create(server->display, 3);
 
-  server->new_xdg_surface.notify = new_xdg_surface_handler;
+  server->new_toplevel.notify = new_toplevel_handler;
   wl_signal_add(
-      &server->xdg_shell->events.new_surface, &server->new_xdg_surface);
+      &server->xdg_shell->events.new_toplevel, &server->new_toplevel);
 }
 
 #ifdef HAVE_LAYERSHELL
@@ -1048,7 +1045,7 @@ hikari_server_stop(void)
 
   wl_list_remove(&server->new_output.link);
   wl_list_remove(&server->new_input.link);
-  wl_list_remove(&server->new_xdg_surface.link);
+  wl_list_remove(&server->new_toplevel.link);
   wl_list_remove(&server->request_set_primary_selection.link);
   wl_list_remove(&server->request_set_selection.link);
   wl_list_remove(&server->request_start_drag.link);

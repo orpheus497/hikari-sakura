@@ -70,7 +70,7 @@ struct hikari_server {
 
   struct wl_listener new_output;
   struct wl_listener new_input;
-  struct wl_listener new_xdg_surface;
+  struct wl_listener new_toplevel;
   struct wl_listener request_set_primary_selection;
   struct wl_listener request_set_selection;
   struct wl_listener output_layout_change;

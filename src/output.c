@@ -92,8 +92,7 @@ hikari_output_load_background(struct hikari_output *output,
   unsigned char *data = cairo_image_surface_get_data(output_surface);
   int stride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, output_width);
 
-  uint64_t modifiers[] = { DRM_FORMAT_MOD_LINEAR };
-  struct wlr_drm_format format = { .format = DRM_FORMAT_ARGB8888, .len = 1, .capacity = 1, .modifiers = modifiers };
+  struct wlr_drm_format format = { .format = DRM_FORMAT_ARGB8888, .len = 0, .capacity = 0, .modifiers = NULL };
   struct wlr_buffer *buffer = wlr_allocator_create_buffer(hikari_server.allocator, output_width, output_height, &format);
   
   if (buffer != NULL) {
