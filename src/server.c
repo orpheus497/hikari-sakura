@@ -756,8 +756,9 @@ drop_privileges(struct hikari_server *server)
     }
   }
 
-  if (geteuid() == 0 || getegid() == 0) {
-    fprintf(stderr, "running as root is prohibited\n");
+  if (geteuid() == 0) {
+    fprintf(stderr, "running as root is prohibited (uid=%d, euid=%d, gid=%d, egid=%d)\n",
+            getuid(), geteuid(), getgid(), getegid());
     return false;
   }
 
@@ -792,6 +793,12 @@ hikari_server_prepare_privileged(void)
 
 done:
   if (!drop_privileges(server) || !success) {
+    if (server->backend != NULL) {
+      wlr_backend_destroy(server->backend);
+    }
+    if (server->session != NULL) {
+      wlr_session_destroy(server->session);
+    }
     if (server->display != NULL) {
       wl_display_destroy(server->display);
     }
@@ -1066,9 +1073,16 @@ hikari_server_stop(void)
   wlr_xwayland_destroy(server->xwayland);
 #endif
 
-
-
   wlr_seat_destroy(server->seat);
+  if (server->noop_backend != NULL) {
+    wlr_backend_destroy(server->noop_backend);
+  }
+  if (server->backend != NULL) {
+    wlr_backend_destroy(server->backend);
+  }
+  if (server->session != NULL) {
+    wlr_session_destroy(server->session);
+  }
   wl_display_destroy(server->display);
   wlr_output_layout_destroy(server->output_layout);
 
