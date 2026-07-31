@@ -192,8 +192,13 @@ hikari_output_enable(struct hikari_output *output)
   }
   wlr_output_state_finish(&state);
 
-  wl_signal_add(&wlr_output->events.frame, &output->frame);
-  wl_signal_add(&wlr_output->events.request_state, &output->request_state);
+  /* ##Action purpose: Subscribe to frame and request_state events for the output, guarding against double-registration. */
+  if (wl_list_empty(&output->frame.link)) {
+    wl_signal_add(&wlr_output->events.frame, &output->frame);
+  }
+  if (wl_list_empty(&output->request_state.link)) {
+    wl_signal_add(&wlr_output->events.request_state, &output->request_state);
+  }
 
   output->enabled = true;
 }
