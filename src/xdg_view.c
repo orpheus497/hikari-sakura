@@ -533,13 +533,14 @@ hikari_xdg_view_init(struct hikari_xdg_view *xdg_view,
 // after the initial commit. See wlr_xdg_surface.c line 168.
 
   xdg_view->surface = xdg_surface;
-  xdg_view->surface->data = xdg_view;
   xdg_view->xdg_toplevel = xdg_surface->toplevel;
   xdg_view->scene_tree = wlr_scene_xdg_surface_create(&hikari_server.scene->tree, xdg_view->xdg_toplevel->base);
   xdg_view->view.scene_node = &xdg_view->scene_tree->node;
   xdg_view->scene_tree->node.data = xdg_view;
+  // [COMMENT] Action purpose: Store the scene_tree in xdg_surface->data for wlroots
+  // popup parenting convention (wlr_scene_xdg_surface_create uses parent->data to
+  // find the scene tree). The view back-reference is in scene_tree->node.data.
   xdg_surface->data = xdg_view->scene_tree;
-  
   hikari_border_init(&xdg_view->view.border, xdg_view->scene_tree);
   hikari_indicator_frame_init(&xdg_view->view.indicator_frame, xdg_view->scene_tree);
 

@@ -552,9 +552,16 @@ server_decoration_handler(struct wl_listener *listener, void *data)
     return;
   }
 
-  // [COMMENT] Action purpose: Retrieve the hikari_xdg_view back-reference stored in xdg_surface->data
-  // by hikari_xdg_view_init. This is the canonical lookup path for XDG views.
-  struct hikari_xdg_view *xdg_view = xdg_surface->data;
+  // [COMMENT] Action purpose: Retrieve the scene_tree stored in xdg_surface->data
+  // (wlroots popup parenting convention), then look up the hikari_xdg_view from
+  // scene_tree->node.data where it was stored by hikari_xdg_view_init.
+  struct wlr_scene_tree *scene_tree = xdg_surface->data;
+
+  if (scene_tree == NULL) {
+    return;
+  }
+
+  struct hikari_xdg_view *xdg_view = scene_tree->node.data;
 
   // [COMMENT] Action purpose: Guard against a decoration event arriving before the xdg_view is fully initialized.
   if (xdg_view == NULL) {
@@ -830,6 +837,12 @@ init_noop_output(struct hikari_server *server)
 
   struct wlr_output *wlr_output =
       wlr_headless_add_output(server->noop_backend, 800, 600);
+
+  // [COMMENT] Action purpose: Initialize render backend for the noop output, matching
+  // what new_output_handler does for real outputs. Without this, any rendering
+  // path that touches the noop output will fail.
+  wlr_output_init_render(wlr_output, server->allocator, server->renderer);
+
   struct hikari_output *noop_output =
       hikari_malloc(sizeof(struct hikari_output));
 

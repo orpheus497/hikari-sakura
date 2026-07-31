@@ -610,6 +610,14 @@ commit_popup_handler(struct wl_listener *listener, void *data)
   struct hikari_layer_popup *layer_popup =
       wl_container_of(listener, layer_popup, commit);
 
+  // [COMMENT] Action purpose: Handle wlroots 0.20 initial_commit lifecycle for
+  // layer shell popups (which are XDG popups). The compositor must respond with
+  // a configure on the first commit so the popup can map.
+  if (layer_popup->popup->base->initial_commit) {
+    wlr_xdg_surface_schedule_configure(layer_popup->popup->base);
+    return;
+  }
+
   damage_popup(layer_popup, false);
 }
 

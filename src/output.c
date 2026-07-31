@@ -26,6 +26,7 @@ render_image_to_surface(cairo_surface_t *output,
 {
   cairo_t *cairo = cairo_create(output);
   if (cairo_surface_status(image) != CAIRO_STATUS_SUCCESS) {
+    cairo_destroy(cairo);
     return;
   }
 

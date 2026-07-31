@@ -57,21 +57,21 @@ clear_password(void)
   hikari_lock_indicator_clear(mode->lock_indicator);
 }
 
-static void
+static bool
 start_unlocker(void)
 {
   // [COMMENT] Action purpose: Create two unidirectional pipes for IPC with
   // hikari-unlocker: pipe[0] carries the password (parent writes, child reads),
   // pipe[1] carries the authentication result (child writes, parent reads).
   if (pipe(locker_pipe[0]) == -1) {
-    return;
+    return false;
   }
   if (pipe(locker_pipe[1]) == -1) {
     close(locker_pipe[0][0]);
     close(locker_pipe[0][1]);
     locker_pipe[0][0] = -1;
     locker_pipe[0][1] = -1;
-    return;
+    return false;
   }
 
   // [COMMENT] Action purpose: Fork a child process to run hikari-unlocker,
@@ -91,7 +91,7 @@ start_unlocker(void)
     locker_pipe[1][0] = -1;
     locker_pipe[1][1] = -1;
     locker_pid = -1;
-    return;
+    return false;
   }
 
   // [COMMENT] Action purpose: In the child process, rewire stdin/stdout to the
@@ -111,6 +111,8 @@ start_unlocker(void)
     close(locker_pipe[0][0]);
     close(locker_pipe[1][1]);
   }
+
+  return true;
 }
 
 static void
@@ -156,6 +158,9 @@ locker_result_handler(int fd, uint32_t mask, void *data)
   bool success = false;
   bool got_result = false;
 
+  // [COMMENT] Action purpose: Read the authentication result boolean from the
+  // unlocker pipe when data is available, distinguishing a complete result from
+  // read failure or EOF.
   if (mask & WL_EVENT_READABLE) {
     ssize_t n;
     do {
@@ -173,11 +178,18 @@ locker_result_handler(int fd, uint32_t mask, void *data)
     }
   }
 
+  // [COMMENT] Action purpose: Handle pipe hangup when no readable result was
+  // obtained -- the unlocker exited or crashed without writing a result, so
+  // this is a terminal failure requiring child cleanup.
   if ((mask & WL_EVENT_HANGUP) && !got_result) {
-    // [COMMENT] Action purpose: Pipe closed by hikari-unlocker without sending
-    // a complete result -- treat as fatal authentication failure.
     success = false;
   }
+
+  // [COMMENT] Action purpose: Determine whether this result is terminal (the
+  // child has exited or will exit) or retryable (wrong password, child stays
+  // alive for the next attempt). Terminal conditions: success, hangup without
+  // result, or read failure. Retryable: got_result is true but success is false.
+  bool terminal = success || !got_result;
 
   // [COMMENT] Action purpose: Remove the fd event source now that we have a
   // result. The source must be cleaned up before closing the pipe fds.
@@ -186,19 +198,24 @@ locker_result_handler(int fd, uint32_t mask, void *data)
     mode->locker_event_source = NULL;
   }
 
-  // [COMMENT] Action purpose: Reap the unlocker child process with a blocking
-  // waitpid to guarantee no zombie is left behind. This runs after the event
-  // source is removed, so the compositor will not re-enter this handler.
-  if (locker_pid > 0) {
-    int status;
-    waitpid(locker_pid, &status, 0);
-    locker_pid = -1;
+  if (terminal) {
+    // [COMMENT] Action purpose: Reap the unlocker child process with a blocking
+    // waitpid on terminal results (success or fatal failure). Retries on EINTR
+    // to guarantee the child is collected before clearing locker_pid.
+    if (locker_pid > 0) {
+      int status;
+      while (waitpid(locker_pid, &status, 0) == -1 && errno == EINTR)
+        ;
+      locker_pid = -1;
+    }
+
+    close(locker_pipe[1][0]);
+    close(locker_pipe[0][1]);
+    locker_pipe[1][0] = -1;
+    locker_pipe[0][1] = -1;
   }
 
   if (success) {
-    close(locker_pipe[1][0]);
-    close(locker_pipe[0][1]);
-
     hikari_server_enter_normal_mode(NULL);
   } else {
     hikari_lock_indicator_set_deny(mode->lock_indicator);
@@ -213,6 +230,14 @@ static void
 submit_password(void)
 {
   struct hikari_lock_mode *mode = get_mode();
+
+  // [COMMENT] Action purpose: Refuse password submission if the unlocker child
+  // failed to start. The pipe descriptors are invalid so writing would fail.
+  if (locker_pid <= 0) {
+    hikari_lock_indicator_set_deny(mode->lock_indicator);
+    return;
+  }
+
   size_t password_length = strnlen(input_buffer, 1023) + 1;
 
   hikari_lock_indicator_set_verify(mode->lock_indicator);
@@ -498,6 +523,9 @@ hikari_lock_mode_enter(void)
   hikari_lock_indicator_init(mode->lock_indicator);
 
   clear_buffer();
+  // [COMMENT] Action purpose: Start the unlocker child process. If pipe or fork
+  // setup fails, the session remains locked but password submission is disabled
+  // since locker_pid stays -1 and pipe descriptors remain invalid.
   start_unlocker();
   override_visibility();
 

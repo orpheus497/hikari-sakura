@@ -4,11 +4,37 @@
 
 ---
 
-## [2026-07-31 19:34] Fix: Blocking `waitpid()` Reaps Unlocker on All Exit Paths
+## [2026-07-31 20:30] Fix: `xdg_surface->data` Type Confusion in Decoration Handler
 
-* **Context:** In `locker_result_handler()` (`src/lock_mode.c`), the previous fix used `waitpid(locker_pid, &status, WNOHANG)` only on the success path. If the child hadn't exited yet, or if authentication failed/hung up, `locker_pid` was never reaped, leaving a zombie process.
-* **Decision:** Moved `waitpid(locker_pid, &status, 0)` (blocking) to execute unconditionally after removing the event source — before the success/failure branch. This guarantees the child is reaped on every code path (successful auth, failed auth, and hangup). `locker_pid` is cleared to `-1` only after the blocking wait returns.
-* **Impact:** Eliminates zombie `hikari-unlocker` processes on failed authentication attempts and pipe hangups.
+* **Context:** `hikari_xdg_view_init()` sets `xdg_surface->data = xdg_view->scene_tree` (the wlroots popup parenting convention). However, `server_decoration_handler()` read `xdg_surface->data` as if it were a `hikari_xdg_view*`. Since it's actually a `wlr_scene_tree*`, every decoration event caused heap corruption or segfault by dereferencing a scene tree pointer as a view struct.
+* **Decision:** Fixed the decoration handler to follow the correct lookup chain: `xdg_surface->data` → `scene_tree`, then `scene_tree->node.data` → `xdg_view`. Removed the dead store `xdg_surface->data = xdg_view` (line 536 in xdg_view.c) that was immediately overwritten.
+* **Impact:** Eliminates crash-level type confusion on every server decoration negotiation.
+
+## [2026-07-31 20:30] Fix: Layer Shell Popup Missing `initial_commit` Handler
+
+* **Context:** In wlroots 0.20, all XDG surfaces (including popups spawned by layer shell surfaces like waybar) require `initial_commit` handling — the compositor must respond with `wlr_xdg_surface_schedule_configure()` on the first commit. The layer shell `commit_popup_handler()` only called `damage_popup()`, skipping this lifecycle step. Popups from layer shell clients could fail to map.
+* **Decision:** Added `initial_commit` guard matching the existing XDG view popup handler pattern.
+* **Impact:** Layer shell popups (e.g., waybar right-click menus) now correctly map in wlroots 0.20.
+
+## [2026-07-31 20:30] Fix: Cairo Context Leak in `render_image_to_surface()`
+
+* **Context:** `render_image_to_surface()` called `cairo_create(output)` then checked the image surface status with an early return on failure. The early return path did not call `cairo_destroy()`, leaking the cairo context.
+* **Decision:** Added `cairo_destroy(cairo)` before the early return.
+* **Impact:** No memory leak when loading an invalid PNG background.
+
+## [2026-07-31 20:30] Fix: Noop/Headless Output Missing `wlr_output_init_render()`
+
+* **Context:** `init_noop_output()` created a headless output for the fallback workspace but never called `wlr_output_init_render()`. The regular `new_output_handler()` does call it for real outputs. Without render initialization, any rendering path touching the noop output (e.g., running with no physical monitors) could fail.
+* **Decision:** Added `wlr_output_init_render(wlr_output, server->allocator, server->renderer)` before `hikari_output_init()` in `init_noop_output()`.
+* **Impact:** Noop/headless output can now safely handle rendering operations.
+
+---
+
+## [2026-07-31 20:14] Fix: Retryable vs Terminal Unlocker Lifecycle in Lock Mode
+
+* **Context:** `hikari-unlocker` runs a `while (!success)` loop: on wrong password (`PAM_AUTH_ERR`) it writes `false`, stays alive, and reads the next password. The previous `locker_result_handler()` unconditionally reaped the child after any result, which would block-deadlock on a retryable `false` (child still alive waiting for stdin).
+* **Decision:** Classify results as *terminal* (success, hangup-without-result, read failure) or *retryable* (got `false` result with child still alive). Only terminal results trigger `waitpid(locker_pid, &status, 0)` with EINTR retry and pipe cleanup. Retryable results just show the deny indicator — the child stays alive and `submit_password()` will send the next attempt. `start_unlocker()` now returns `bool`; `submit_password()` guards against `locker_pid <= 0` to prevent writing to invalid descriptors.
+* **Impact:** Wrong-password retries no longer deadlock or orphan the unlocker. Fatal failures still guarantee child reaping and pipe cleanup.
 
 ## [2026-07-31 16:45] Fix: `output->server` Not Initialized in `hikari_output_init()`
 
