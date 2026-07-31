@@ -1,6 +1,4 @@
 // [COMMENT] Script function and purpose: Isolated setuid-root PAM authentication helper for unlocking screen sessions in hikari.
-#define _GNU_SOURCE
-#define _DEFAULT_SOURCE
 
 #include <pwd.h>
 #include <security/pam_appl.h>
@@ -13,7 +11,6 @@
 #include <unistd.h>
 #include <errno.h>
 
-void explicit_bzero(void *s, size_t n);
 
 static char *input_buffer = NULL;
 

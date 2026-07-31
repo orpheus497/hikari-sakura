@@ -4,6 +4,14 @@
 
 ---
 
+## [2026-07-31 20:38] Cleanup: Remove glibc-isms from hikari-unlocker and dead Linux PAM file
+
+* **Context:** Full FreeBSD stack audit revealed `_GNU_SOURCE`, `_DEFAULT_SOURCE`, and a manual `void explicit_bzero(void *, size_t)` prototype in `hikari_unlocker.c`. These are glibc-specific — on FreeBSD, `explicit_bzero` is declared in `<strings.h>` (already included) without feature macros. Additionally, `etc/pam.d/hikari-unlocker.Linux` remains despite Linux support being removed from the project.
+* **Decision:** Removed `_GNU_SOURCE`, `_DEFAULT_SOURCE` defines and the redundant prototype. The Linux PAM file should be deleted manually (`rm etc/pam.d/hikari-unlocker.Linux`).
+* **Impact:** Cleaner FreeBSD-native code. No functional change — `explicit_bzero` was already available via `<strings.h>`.
+
+---
+
 ## [2026-07-31 20:30] Fix: `xdg_surface->data` Type Confusion in Decoration Handler
 
 * **Context:** `hikari_xdg_view_init()` sets `xdg_surface->data = xdg_view->scene_tree` (the wlroots popup parenting convention). However, `server_decoration_handler()` read `xdg_surface->data` as if it were a `hikari_xdg_view*`. Since it's actually a `wlr_scene_tree*`, every decoration event caused heap corruption or segfault by dereferencing a scene tree pointer as a view struct.
