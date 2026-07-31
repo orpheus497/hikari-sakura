@@ -1,12 +1,12 @@
 # Hikari Project Briefing
 
-*Last Updated:* 2026-07-31 13:46
+*Last Updated:* 2026-07-31 14:20
 
 ## Current Status
 
-- **Phase:** Phase 9 — Runtime Crash Fix & Final Validation
+- **Phase:** Phase 10 — wlroots 0.20 Initial Commit Lifecycle Fix
 - **Branch:** wlroots-0.17.1
-- **Overall progress:** 98% (critical runtime crash fixed; FreeBSD runtime validation pending)
+- **Overall progress:** 99% (critical lifecycle fix applied; awaiting FreeBSD runtime validation)
 - **Target OS:** FreeBSD 13.x/14.x+
 
 ## What Works
@@ -35,6 +35,7 @@
 - Unsafe `wl_container_of` on `wlr_surface` replaced with `wlr_xdg_surface_try_from_wlr_surface` (`src/server.c`)
 - `#if HAVE_XWAYLAND` inconsistency fixed (`src/server.c`)
 - `start-hikari.sh` uses absolute path with `./` fallback.
+- **wlroots 0.20 initial_commit lifecycle:** commit listener moved from `map()` to `hikari_xdg_view_init()` (new_toplevel time); added `initial_commit` handler calling `wlr_xdg_toplevel_set_size(0,0)` to set `initialized = true`; added popup `initial_commit` handler; guarded `request_fullscreen_handler` with `initialized` check (`src/xdg_view.c`)
 
 ## What Was Removed
 

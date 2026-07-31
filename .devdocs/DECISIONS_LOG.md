@@ -4,6 +4,14 @@
 
 ---
 
+## [2026-07-31 14:20] Decision: wlroots 0.20 Initial Commit Lifecycle Pattern
+
+* **Context:** The compositor crashed with `Assertion failed: (surface->initialized)` in `wlr_xdg_surface_schedule_configure`. Deep analysis revealed this is NOT just a single bad call — it's a missing lifecycle pattern. In wlroots 0.20, the `new_toplevel` signal fires before the surface is initialized. The compositor must register a commit listener at `new_toplevel` time and handle `initial_commit` by calling `wlr_xdg_toplevel_set_size(0, 0)`, which sets `initialized = true`. Without this, the surface can never map, and any configure call will crash. Cross-referenced against tinywl 0.20.
+* **Decision:** Moved commit listener registration from `map()` to `hikari_xdg_view_init()` (new_toplevel time). Added `initial_commit` guard at the top of `commit_handler` that calls `wlr_xdg_toplevel_set_size(0, 0)` and returns early. Added `popup_commit_handler` with `initial_commit` → `wlr_xdg_surface_schedule_configure`. Guarded `request_fullscreen_handler` with `surface->initialized` check. Added `commit` member to `hikari_xdg_popup` struct.
+* **Impact:** Resolves the `surface->initialized` assertion crash. XDG surfaces now follow the correct wlroots 0.20 initialization handshake and can successfully map.
+
+---
+
 ## [2026-07-31 12:47] Decision: Revert Native Environment Bootstrapping
 
 * **Context:** The previous decision to inject `setup_env()` in `main.c` violated Wayland architectural standards. Compositors should not generate their own IPC bus (`XDG_RUNTIME_DIR`) or wrap themselves in `dbus-run-session` natively.

@@ -40,6 +40,7 @@ struct hikari_xdg_popup {
   struct wl_listener map;
   struct wl_listener unmap;
   struct wl_listener destroy;
+  struct wl_listener commit;
   struct wl_listener new_popup;
 };
 

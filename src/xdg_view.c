@@ -51,6 +51,18 @@ commit_handler(struct wl_listener *listener, void *data)
 
   struct hikari_view *view = (struct hikari_view *)xdg_view;
   struct wlr_xdg_surface *surface = xdg_view->surface;
+
+  /* ##Condition purpose: Handle the wlroots 0.20 initial_commit lifecycle.
+   * When an xdg_surface performs its first commit, the compositor must reply
+   * with a configure (set_size 0,0 lets the client pick its own dimensions).
+   * This sets surface->initialized = true inside wlroots, allowing the
+   * client to map. Without this, all subsequent configure calls will crash
+   * with assert(surface->initialized). See tinywl.c xdg_toplevel_commit. */
+  if (surface->initial_commit) {
+    wlr_xdg_toplevel_set_size(xdg_view->xdg_toplevel, 0, 0);
+    return;
+  }
+
   uint32_t serial = surface->current.configure_serial;
 
   assert(view->surface != NULL);
@@ -183,8 +195,8 @@ map(struct hikari_view *view, bool focus)
   xdg_view->new_popup.notify = new_popup_handler;
   wl_signal_add(&xdg_surface->events.new_popup, &xdg_view->new_popup);
 
-  xdg_view->commit.notify = commit_handler;
-  wl_signal_add(&xdg_view->surface->surface->events.commit, &xdg_view->commit);
+  /* ##Action purpose: commit listener is now registered in hikari_xdg_view_init
+   * (at new_toplevel time) to catch initial_commit before map. */
 
   hikari_view_map(view, xdg_surface->surface);
 }
@@ -221,7 +233,8 @@ unmap(struct hikari_view *view)
   wl_list_remove(&xdg_view->set_title.link);
   wl_list_remove(&xdg_view->request_fullscreen.link);
   wl_list_remove(&xdg_view->new_popup.link);
-  wl_list_remove(&xdg_view->commit.link);
+  /* ##Action purpose: commit listener is removed in destroy_handler since it
+   * lives for the full surface lifetime (registered at new_toplevel). */
 }
 
 static void
@@ -278,6 +291,7 @@ destroy_handler(struct wl_listener *listener, void *data)
 
   wl_list_remove(&xdg_view->map.link);
   wl_list_remove(&xdg_view->unmap.link);
+  wl_list_remove(&xdg_view->commit.link);
   wl_list_remove(&xdg_view->destroy.link);
 
   hikari_view_fini(view);
@@ -313,11 +327,28 @@ destroy_popup_handler(struct wl_listener *listener, void *data)
   hikari_view_child_fini(&popup->view_child);
 
   wl_list_remove(&popup->destroy.link);
+  wl_list_remove(&popup->commit.link);
   wl_list_remove(&popup->unmap.link);
   wl_list_remove(&popup->map.link);
   wl_list_remove(&popup->new_popup.link);
 
   hikari_free(popup);
+}
+
+/* ##Function purpose: Handle wlroots 0.20 popup initial_commit lifecycle.
+ * When an xdg_popup performs its first commit, the compositor must reply
+ * with a configure so the popup can map. See tinywl xdg_popup_commit. */
+static void
+popup_commit_handler(struct wl_listener *listener, void *data)
+{
+  struct hikari_xdg_popup *popup =
+      wl_container_of(listener, popup, commit);
+
+  /* ##Condition purpose: Only handle the initial commit; subsequent commits
+   * are managed by the scene graph automatically. */
+  if (popup->popup->base->initial_commit) {
+    wlr_xdg_surface_schedule_configure(popup->popup->base);
+  }
 }
 
 static void
@@ -416,6 +447,12 @@ xdg_popup_create(struct wlr_xdg_popup *wlr_popup, struct hikari_view *parent)
   popup->new_popup.notify = new_popup_popup_handler;
   wl_signal_add(&wlr_popup->base->events.new_popup, &popup->new_popup);
 
+  /* ##Action purpose: Register commit listener on popup surface to handle
+   * initial_commit — wlroots 0.20 requires the compositor to respond with a
+   * configure so the popup can map. See tinywl xdg_popup_commit. */
+  popup->commit.notify = popup_commit_handler;
+  wl_signal_add(&wlr_popup->base->surface->events.commit, &popup->commit);
+
   popup->map.notify = popup_map;
   wl_signal_add(&wlr_popup->base->surface->events.map, &popup->map);
 
@@ -434,8 +471,12 @@ request_fullscreen_handler(struct wl_listener *listener, void *data)
   struct hikari_xdg_view *xdg_view =
       wl_container_of(listener, xdg_view, request_fullscreen);
 
-  /* ##Action purpose: Apply the client's requested fullscreen state properly via the native wlroots API, which safely handles configuration lifecycles. */
-  wlr_xdg_toplevel_set_fullscreen(xdg_view->xdg_toplevel, xdg_view->xdg_toplevel->requested.fullscreen);
+  /* ##Condition purpose: Guard against calling configure before the surface
+   * is initialized (initial_commit not yet handled). See tinywl request_fullscreen. */
+  if (xdg_view->surface->initialized) {
+    /* ##Action purpose: Apply the client's requested fullscreen state via wlroots API. */
+    wlr_xdg_toplevel_set_fullscreen(xdg_view->xdg_toplevel, xdg_view->xdg_toplevel->requested.fullscreen);
+  }
 }
 
 static void
@@ -507,6 +548,12 @@ hikari_xdg_view_init(struct hikari_xdg_view *xdg_view,
 
   xdg_view->unmap.notify = unmap_handler;
   wl_signal_add(&xdg_surface->surface->events.unmap, &xdg_view->unmap);
+
+  /* ##Action purpose: Register commit listener at new_toplevel time (not map
+   * time) so that the initial_commit is caught before map. This is the
+   * wlroots 0.20 lifecycle pattern — see tinywl server_new_xdg_toplevel. */
+  xdg_view->commit.notify = commit_handler;
+  wl_signal_add(&xdg_surface->surface->events.commit, &xdg_view->commit);
 
   xdg_view->destroy.notify = destroy_handler;
   wl_signal_add(&xdg_surface->events.destroy, &xdg_view->destroy);
