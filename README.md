@@ -40,14 +40,22 @@ moused enable`. This requires setting `kern.evdev.rcpt_mask` to `3`.
 
 ### Setting up XDG\_RUNTIME\_DIR
 
-This section describes how to use `/tmp` as your `XDG_RUNTIME_DIR`. Some Wayland
-clients (e.g. native Wayland `firefox`) require `posix_fallocate` to work in
-that directory. This is not supported by ZFS, therefore you should prevent the
-ZFS tmp dataset from mounting to `/tmp` and `mount -t tmpfs tmpfs /tmp`. To
-persist this setting edit your `/etc/fstab` appropriately to automatically mount
-`tmpfs` during boot.
+Wayland compositors require `XDG_RUNTIME_DIR` to be set to a user-owned
+directory with mode `0700`. Some Wayland clients (e.g. native Wayland `firefox`)
+require `posix_fallocate` to work in that directory. This is not supported by
+ZFS, therefore you should prevent the ZFS tmp dataset from mounting to `/tmp`
+and `mount -t tmpfs tmpfs /tmp`. To persist this setting edit your `/etc/fstab`
+appropriately to automatically mount `tmpfs` during boot.
 
-Additionally set `XDG_RUNTIME_DIR` to `/tmp` in your environment.
+If your system does not set `XDG_RUNTIME_DIR` automatically (e.g. FreeBSD with
+`seatd` and no `elogind`), the `start-hikari` wrapper script will create one at
+`/tmp/hikari-runtime-$UID` with the correct permissions. You can also set it
+manually:
+
+```
+export XDG_RUNTIME_DIR=/tmp/runtime-$(id -u)
+mkdir -p -m 0700 "$XDG_RUNTIME_DIR"
+```
 
 ### Setting up PAM
 
@@ -88,12 +96,29 @@ repository, breaking changes might be encountered. These are documented in the
 
 ### Compiling and Installing
 
-The build process will produce two binaries `hikari` and `hikari-unlocker`. The
-latter is used to check credentials for unlocking the screen, which needs to be
-installed with root setuid.  `hikari` can rely on `seatd`, `(e)logind` or other
-mechanisms to gain root privileges when required; however, if needed it can
-also be installed with root setuid - see "Installing with SUID" below.
-Both binaries need to be located in your `PATH`.
+The build process will produce two binaries `hikari` and `hikari-unlocker`, plus
+a `start-hikari` wrapper script. `hikari-unlocker` is used to check credentials
+for unlocking the screen, which needs to be installed with root setuid.
+`hikari` can rely on `seatd`, `(e)logind` or other mechanisms to gain root
+privileges when required; however, if needed it can also be installed with root
+setuid - see "Installing with SUID" below. All three files need to be located
+in your `PATH`.
+
+### Launching
+
+Use `start-hikari` to launch the compositor. It sets up the required Wayland
+session environment before executing the `hikari` binary:
+
+* Clears leaked `WAYLAND_DISPLAY` / `DISPLAY` variables
+* Creates `XDG_RUNTIME_DIR` if the system did not provide one
+* Wraps execution in a D-Bus session if one is not already active
+
+```
+start-hikari
+```
+
+If you are using a display manager (GDM, SDDM, greetd), the installed
+`hikari.desktop` session file will call `start-hikari` automatically.
 
 `hikari` can be configured via `$XDG_CONFIG_HOME/hikari/hikari.conf`, the
 default configuration can be found under `$PREFIX/etc/hikari/hikari.conf`
