@@ -4,6 +4,26 @@
 
 ---
 
+## [2026-07-31 12:47] Decision: Revert Native Environment Bootstrapping
+
+* **Context:** The previous decision to inject `setup_env()` in `main.c` violated Wayland architectural standards. Compositors should not generate their own IPC bus (`XDG_RUNTIME_DIR`) or wrap themselves in `dbus-run-session` natively.
+* **Decision:** Removed `setup_env()` from `main.c`. Added detailed diagnostic error messages to `server.c` for `wlr_backend_autocreate` failures. Created `start-hikari.sh` to handle dbus/XDG environment bootstrapping externally.
+* **Impact:** `hikari` complies with proper `wlroots` daemon and wrapper architectures. C code is cleaner and adheres to the separation of concerns.
+
+## [2026-07-31 12:21] Decision: Native Environment Bootstrapping [REVERTED]
+
+* **Context:** `hikari` failed to run natively on FreeBSD, falling back to a nested Wayland session that caused assertion crashes because `seatd`, `dbus`, and `XDG_RUNTIME_DIR` were not configured properly.
+* **Decision:** Implemented `setup_env()` in `src/main.c` before parsing options to dynamically generate `XDG_RUNTIME_DIR` if missing, encapsulate execution via `execvp("dbus-run-session", ...)`, and strictly unset `WAYLAND_DISPLAY` and `DISPLAY` to prevent accidental nesting.
+* **Impact:** `hikari` is guaranteed to launch on native DRM/libinput backends and avoids wlroots Wayland-backend bugs.
+
+## [2026-07-31 12:21] Decision: Remove Manual Damage Ring Hooks
+
+* **Context:** Manual `wlr_damage_ring` logic was left as migration debt. `wlr_scene` handles surface damage implicitly.
+* **Decision:** Removed `wlr_damage_ring_add_whole` and `wlr_damage_ring_add` from output utilities (`src/output.c`, `include/hikari/output.h`). Retained `wlr_output_schedule_frame`.
+* **Impact:** Eliminates redundant damage tracking and aligns fully with `wlr_scene` architecture.
+
+---
+
 ## Architectural Decisions
 
 ### Architecture: XDG Shell Surface Initialization

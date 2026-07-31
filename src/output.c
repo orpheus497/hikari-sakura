@@ -130,7 +130,6 @@ hikari_output_damage_whole(struct hikari_output *output)
   assert(output != NULL);
 
   if (output->scene_output != NULL) {
-    wlr_damage_ring_add_whole(&output->scene_output->damage_ring);
     wlr_output_schedule_frame(output->wlr_output);
   }
 }

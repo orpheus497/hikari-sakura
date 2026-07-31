@@ -4,6 +4,30 @@
 
 ---
 
+## Session Date: 2026-07-31 12:47
+
+* **Phase:** Implementation Audit & FreeBSD Interlinking Fix
+* **Accomplishments:**
+  - Audited `hikari` against `wlroots` 0.20 standards, `tinywl.c`, and Wayland architecture principles.
+  - Reverted the falsely implemented `setup_env()` from `src/main.c` that attempted to bootstrap `XDG_RUNTIME_DIR` and `dbus-run-session` natively within the compositor.
+  - Added explicit, actionable diagnostic error messages in `src/server.c` for `wlr_backend_autocreate` failures to instruct users to ensure `seatd` is running and `XDG_RUNTIME_DIR` is set.
+  - Created a proper wrapper script `start-hikari.sh` to handle environment bootstrapping and IPC daemon execution externally, aligning with standard wlroots compositor deployment.
+* **Modified:** `src/main.c`, `src/server.c`, `start-hikari.sh`, `implementation_plan.md`, `task.md`
+* **Next Steps:** Proceed to verify the `hikari-unlocker` PAM integration.
+
+## Session Date: 2026-07-31 12:21
+
+* **Phase:** Native FreeBSD System Interlinking & Runtime Fixes
+* **Accomplishments:**
+  - Analyzed and confirmed that `hikari` was unintentionally falling back to the `wayland` backend because the native DRM/session backend failed due to a missing environment setup (`seatd`, `dbus`, `XDG_RUNTIME_DIR`).
+  - Wrote a native `setup_env()` bootstrapper directly into `src/main.c` that generates `/tmp/hikari-runtime-$UID`, wraps the process in `dbus-run-session`, and strips leaked display variables.
+  - Resolved `Assertion failed: (surface->initialized)` by refactoring `request_fullscreen_handler` in `src/xdg_view.c` to use `wlr_xdg_toplevel_set_fullscreen(..., false)`, averting manual configure scheduling on uninitialized surfaces.
+  - Stripped obsolete manual `wlr_damage_ring` additions from `src/output.c` and `include/hikari/output.h`, fully relying on `wlr_scene` for damage tracking.
+* **Modified:** `main.c`, `src/xdg_view.c`, `src/output.c`, `include/hikari/output.h`, `task.md`
+* **Next Steps:** Proceed to verify the `hikari-unlocker` PAM integration.
+
+---
+
 ## Session Date: 2026-07-31 06:34
 
 * **Phase:** Runtime testing & Debugging (XDG Clients & Wallpaper)

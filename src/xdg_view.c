@@ -434,9 +434,8 @@ request_fullscreen_handler(struct wl_listener *listener, void *data)
   struct hikari_xdg_view *xdg_view =
       wl_container_of(listener, xdg_view, request_fullscreen);
 
-  if (xdg_view->xdg_toplevel->base->initialized) {
-    wlr_xdg_surface_schedule_configure(xdg_view->xdg_toplevel->base);
-  }
+  /* Reject fullscreen requests properly via the native wlroots API, which safely handles configuration lifecycles. */
+  wlr_xdg_toplevel_set_fullscreen(xdg_view->xdg_toplevel, false);
 }
 
 static void

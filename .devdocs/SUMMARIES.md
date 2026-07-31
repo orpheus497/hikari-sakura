@@ -4,6 +4,18 @@
 
 ---
 
+## Session Summary: 2026-07-31 12:47
+* **Phase:** Implementation Audit & FreeBSD Interlinking Fix
+* **Status:** Completed
+* **Summary:** Audited the compositor against `wlroots` 0.20 standards and Wayland architecture principles. Reverted the falsely implemented C environment bootstrapper in `main.c`. Added actionable error messages in `server.c` for backend failures, and provided a proper `start-hikari.sh` wrapper script to handle FreeBSD `seatd`, `XDG_RUNTIME_DIR`, and `dbus-run-session` prerequisites externally.
+
+## Session Summary: 2026-07-31 12:21
+* **Phase:** Native FreeBSD System Interlinking & Runtime Fixes
+* **Status:** Completed
+* **Summary:** Implemented native C environment bootstrapping (`setup_env()`) in `main.c` to handle FreeBSD system requirements natively (DBus session, XDG paths) and prevent fallback to nested Wayland execution. Additionally, patched `request_fullscreen_handler` in `src/xdg_view.c` to fix a severe wlroots 0.20 initialization crash caused by manual configure scheduling, and stripped leftover damage ring migration debt.
+
+---
+
 ## Session Summary: 2026-07-31 06:34
 * **Phase:** Runtime testing & Debugging
 * **Status:** Completed
