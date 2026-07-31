@@ -1,5 +1,5 @@
 [Desktop Entry]
 Name=Hikari
 Comment=Stacking compositor with tiling capabilities
-Exec=hikari
+Exec=start-hikari
 Type=Application

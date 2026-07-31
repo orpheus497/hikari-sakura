@@ -811,10 +811,10 @@ hikari_server_prepare_privileged(void)
 done:
   if (!drop_privileges(server) || !success) {
     if (server->backend != NULL) {
+      /* ##Action purpose: Destroy backend, which also destroys the session
+       * internally in wlroots 0.20. Do NOT call wlr_session_destroy
+       * separately — the session is owned by the backend. */
       wlr_backend_destroy(server->backend);
-    }
-    if (server->session != NULL) {
-      wlr_session_destroy(server->session);
     }
     if (server->display != NULL) {
       wl_display_destroy(server->display);
@@ -1101,11 +1101,11 @@ hikari_server_stop(void)
   if (server->noop_backend != NULL) {
     wlr_backend_destroy(server->noop_backend);
   }
+  /* ##Action purpose: Destroy backend, which also destroys the session
+   * internally in wlroots 0.20. Do NOT call wlr_session_destroy
+   * separately — the session is owned by the backend. */
   if (server->backend != NULL) {
     wlr_backend_destroy(server->backend);
-  }
-  if (server->session != NULL) {
-    wlr_session_destroy(server->session);
   }
   wlr_output_layout_destroy(server->output_layout);
   wl_display_destroy(server->display);

@@ -347,9 +347,12 @@ hikari_output_init(struct hikari_output *output, struct wlr_output *wlr_output)
     wlr_output_state_init(&state);
     wlr_output_state_set_enabled(&state, true);
 
-    if (!wl_list_empty(&wlr_output->modes)) {
-      struct wlr_output_mode *mode =
-          wl_container_of(wlr_output->modes.next, mode, link);
+    /* ##Condition purpose: Set the monitor's EDID-preferred mode if available.
+     * wlr_output_preferred_mode returns the mode flagged as preferred by the
+     * monitor (native resolution at native refresh). Some backends (Wayland,
+     * headless) have no modes — the NULL check handles that. */
+    struct wlr_output_mode *mode = wlr_output_preferred_mode(wlr_output);
+    if (mode != NULL) {
       wlr_output_state_set_mode(&state, mode);
     }
 

@@ -4,6 +4,30 @@
 
 ---
 
+## Session Date: 2026-07-31 14:49 — Startup Wiring Analysis & Critical Bug Fixes
+
+* **Phase:** Phase 11 — Startup Wiring Deep Investigation
+* **Accomplishments:**
+  - Read and cross-referenced every source file, header, Makefile, start-hikari.sh, PAM configs, hikari.desktop, and the authoritative wlroots 0.20 `backend.h`, `session.h`, and `tinywl.c` reference implementation.
+  - Produced comprehensive analysis artifact identifying 7 bugs across seatd/session, output mode selection, D-Bus wrapping, PAM IPC, and shutdown lifecycle.
+  - **BUG-1 (P0 CRITICAL):** Removed double `wlr_session_destroy` from both `hikari_server_stop()` and `hikari_server_prepare_privileged()` error path. In wlroots 0.20, the session is owned by the backend — calling `wlr_session_destroy` after `wlr_backend_destroy` is a use-after-free. Verified against tinywl which never calls `wlr_session_destroy`.
+  - **BUG-2 (P1):** Replaced manual first-mode selection in output.c with `wlr_output_preferred_mode()` to select the monitor's EDID-preferred native resolution.
+  - **BUG-5 (P1):** Changed `hikari.desktop` from `Exec=hikari` to `Exec=start-hikari`. Added install/uninstall of `start-hikari` to Makefile.
+  - **BUG-4 (P3):** Suppressed stderr from GNU `stat -c` fallback in `start-hikari.sh` so FreeBSD doesn't print confusing error messages.
+  - **BUG-3 (P2):** Assessed output commit failure cleanup — determined the destroy listener (registered before commit) properly handles cleanup via `hikari_output_fini`. No code change needed.
+  - **BUG-6 (P2):** Documented blocking PAM I/O issue in lock_mode.c. Deferred — requires architectural change to non-blocking I/O with `wl_event_loop_add_fd`.
+  - **BUG-7 (P3):** Documented noop_backend not multi-attached. No action needed — works in practice.
+* **Modified Files:**
+  - `src/server.c` — BUG-1: Removed wlr_session_destroy calls (lines 813-818, 1104-1108)
+  - `src/output.c` — BUG-2: wlr_output_preferred_mode (line 350-357)
+  - `share/wayland-sessions/hikari.desktop` — BUG-5: Exec=start-hikari
+  - `Makefile` — BUG-5: install/uninstall start-hikari
+  - `start-hikari.sh` — BUG-4: stderr suppression on stat fallback
+* **Decisions:** Session not separately destroyed per wlroots 0.20 ownership model. Output mode selection uses EDID-preferred. Desktop file uses wrapper script.
+* **Remaining Work:** Build validation (terminal unavailable), runtime test on FreeBSD, BUG-6 non-blocking PAM I/O (deferred).
+
+---
+
 ## Session Date: 2026-07-31 14:37 — Review Fix Execution
 
 * **Phase:** Phase 10 — Review Fix Pass

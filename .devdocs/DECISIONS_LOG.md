@@ -4,6 +4,26 @@
 
 ---
 
+## [2026-07-31 14:49] Decision: wlr_session Ownership — Do Not Destroy Separately
+
+* **Context:** `hikari_server_stop()` and `hikari_server_prepare_privileged()` error path both called `wlr_session_destroy()` after `wlr_backend_destroy()`. Reading the wlroots 0.20 `backend.h` header confirmed `wlr_backend_autocreate` creates a session that is **owned by the backend**. The `wlr_session` struct has an internal `event_loop_destroy` listener for cleanup. The tinywl 0.20 reference implementation never calls `wlr_session_destroy`. The double destroy is a use-after-free.
+* **Decision:** Removed both `wlr_session_destroy` calls. The session is destroyed by the backend automatically.
+* **Impact:** Eliminates crash/heap corruption on compositor shutdown.
+
+## [2026-07-31 14:49] Decision: Use wlr_output_preferred_mode Instead of Manual First Mode
+
+* **Context:** Output initialization manually picked the first mode from `wlr_output->modes` via `wl_container_of(wlr_output->modes.next, mode, link)`. This is not guaranteed to be the EDID-preferred mode. The tinywl reference uses `wlr_output_preferred_mode()`.
+* **Decision:** Replaced with `wlr_output_preferred_mode(wlr_output)` which returns the mode flagged as preferred by the monitor.
+* **Impact:** Ensures native resolution on monitors that report a preferred mode.
+
+## [2026-07-31 14:49] Decision: Desktop File Should Use start-hikari Wrapper
+
+* **Context:** `hikari.desktop` had `Exec=hikari` which bypasses the wrapper script that provides D-Bus session wrapping and XDG_RUNTIME_DIR bootstrapping. Display managers launching via this file would silently lack D-Bus, breaking portals/clipboard/secrets.
+* **Decision:** Changed to `Exec=start-hikari`. Added `start-hikari` installation to Makefile.
+* **Impact:** Display manager launches now get proper D-Bus session and XDG_RUNTIME_DIR.
+
+---
+
 ## [2026-07-31 14:20] Decision: wlroots 0.20 Initial Commit Lifecycle Pattern
 
 * **Context:** The compositor crashed with `Assertion failed: (surface->initialized)` in `wlr_xdg_surface_schedule_configure`. Deep analysis revealed this is NOT just a single bad call — it's a missing lifecycle pattern. In wlroots 0.20, the `new_toplevel` signal fires before the surface is initialized. The compositor must register a commit listener at `new_toplevel` time and handle `initial_commit` by calling `wlr_xdg_toplevel_set_size(0, 0)`, which sets `initialized = true`. Without this, the surface can never map, and any configure call will crash. Cross-referenced against tinywl 0.20.

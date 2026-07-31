@@ -1,6 +1,6 @@
 # Project Progress tracking
 
-*Last Updated:* 2026-07-31 14:20
+*Last Updated:* 2026-07-31 14:49
 
 | Phase | Description | Status |
 |---|---|---|
@@ -14,6 +14,7 @@
 | **Phase 7b** | FreeBSD runtime validation | Pending (crash fix applied — awaiting retest on FreeBSD Wayland session) |
 | **Phase 8** | AGENTS.md code documentation compliance | 100% ✓ |
 | **Phase 9** | Runtime crash fix & final validation | 100% ✓ (removed `wlr_xdg_surface_ping`, fixed fullscreen handler, fixed unlocker framing) |
-| **Phase 10** | wlroots 0.20 initial_commit lifecycle | In Progress (commit listener relocated, initial_commit handler added, popup lifecycle added — awaiting runtime test) |
+| **Phase 10** | wlroots 0.20 initial_commit lifecycle | 100% ✓ (commit listener relocated, initial_commit handler added, popup lifecycle added, review fixes applied) |
+| **Phase 11** | Startup wiring deep investigation | In Progress — 5/7 bugs fixed: session double-free, output mode, desktop file, stat stderr, Makefile install. Deferred: non-blocking PAM I/O. Awaiting build validation. |
 
 *Note: DOD SoA tables and object pool phases were implemented and subsequently REVERTED as incompatible with wlr_scene workflows.*

@@ -34,8 +34,8 @@ if [ -z "$XDG_RUNTIME_DIR" ]; then
         fi
     else
         # Validate existing directory
-        DIR_UID=$(stat -c '%u' "$XDG_RUNTIME_DIR" 2>/dev/null || stat -f '%u' "$XDG_RUNTIME_DIR")
-        DIR_PERMS=$(stat -c '%a' "$XDG_RUNTIME_DIR" 2>/dev/null || stat -f '%OLp' "$XDG_RUNTIME_DIR")
+        DIR_UID=$(stat -c '%u' "$XDG_RUNTIME_DIR" 2>/dev/null || stat -f '%u' "$XDG_RUNTIME_DIR" 2>/dev/null)
+        DIR_PERMS=$(stat -c '%a' "$XDG_RUNTIME_DIR" 2>/dev/null || stat -f '%OLp' "$XDG_RUNTIME_DIR" 2>/dev/null)
         if [ "$DIR_UID" != "$USER_UID" ] || [ "$DIR_PERMS" != "700" ]; then
             echo "start-hikari: XDG_RUNTIME_DIR exists but has incorrect ownership or permissions" >&2
             exit 1

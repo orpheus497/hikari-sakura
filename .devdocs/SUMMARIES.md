@@ -4,6 +4,14 @@
 
 ---
 
+## Session Summary: 2026-07-31 14:49 — Startup Wiring Analysis & Critical Bug Fixes
+
+* **Phase:** Phase 11 — Startup Wiring Deep Investigation
+* **Status:** Completed (awaiting build validation)
+* **Summary:** Conducted full deep investigation of hikari's startup wiring (seatd, D-Bus, XDG_RUNTIME_DIR, video/backend adaptation, PAM unlocker, shutdown lifecycle) by reading every source file and cross-referencing against the authoritative wlroots 0.20 `backend.h`, `session.h`, and `tinywl.c`. Identified 7 bugs. Fixed 5: removed critical double `wlr_session_destroy` (use-after-free on shutdown), replaced manual mode selection with `wlr_output_preferred_mode`, fixed desktop file to use `start-hikari` wrapper + added Makefile install, suppressed noisy `stat` stderr on FreeBSD. Assessed and cleared BUG-3 (destroy listener handles cleanup). Deferred BUG-6 (blocking PAM I/O — requires architectural refactor). Documented BUG-7 (noop_backend not multi-attached — works in practice).
+
+---
+
 ## Session Summary: 2026-07-31 14:37 — Review Fix Execution
 
 * **Phase:** Phase 10 — Review Fix Pass

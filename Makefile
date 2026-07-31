@@ -258,6 +258,7 @@ install: hikari hikari-unlocker share/man/man1/hikari.1
 	sed "s,PREFIX,${PREFIX}," etc/hikari/hikari.conf > ${DESTDIR}/${ETC_PREFIX}/etc/hikari/hikari.conf
 	chmod 644 ${DESTDIR}/${ETC_PREFIX}/etc/hikari/hikari.conf
 	install -m ${PERMS} hikari ${DESTDIR}/${PREFIX}/bin
+	install -m 555 start-hikari.sh ${DESTDIR}/${PREFIX}/bin/start-hikari
 	install -m 4555 hikari-unlocker ${DESTDIR}/${PREFIX}/bin
 	install -m 644 share/man/man1/hikari.1 ${DESTDIR}/${PREFIX}/share/man/man1
 	install -m 644 share/backgrounds/hikari/hikari_wallpaper.png ${DESTDIR}/${PREFIX}/share/backgrounds/hikari/hikari_wallpaper.png
@@ -266,6 +267,7 @@ install: hikari hikari-unlocker share/man/man1/hikari.1
 
 uninstall:
 	-rm ${DESTDIR}/${PREFIX}/bin/hikari
+	-rm ${DESTDIR}/${PREFIX}/bin/start-hikari
 	-rm ${DESTDIR}/${PREFIX}/bin/hikari-unlocker
 	-rm ${DESTDIR}/${PREFIX}/share/man/man1/hikari.1
 	-rm ${DESTDIR}/${PREFIX}/share/backgrounds/hikari/hikari_wallpaper.png
