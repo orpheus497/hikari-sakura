@@ -52,8 +52,8 @@
 
 ### Cleanup: Dead code removal
 
-* **Files:** `include/hikari/render.h`, `src/output.c`, `include/hikari/output.h`, `include/hikari/xdg_view.h`, `include/hikari/server.h`
-* **Removed:** Empty render.h (vestige of removed renderer), commented-out `mode_handler` block, commented-out `struct wl_listener mode` member, unused `request_move`/`request_resize`/`request_maximize` listener declarations in `hikari_xdg_view`, "DESTORY" typo → "DESTROY".
+* **Files:** `include/hikari/render.h` (deleted), `src/output.c`, `include/hikari/output.h`, `include/hikari/xdg_view.h`, `include/hikari/server.h`
+* **Removed:** Empty render.h (vestige of removed renderer — deleted from disk), commented-out `mode_handler` block, commented-out `struct wl_listener mode` member, unused `request_move`/`request_resize`/`request_maximize` listener declarations in `hikari_xdg_view`, "DESTORY" typo → "DESTROY".
 * **Migrated:** `server.h` comment prefixes from `##` to `[COMMENT]` per AGENTS.md.
 
 ### Desktop entry and gitignore
@@ -66,7 +66,7 @@
 ## [2026-07-31 20:38] Cleanup: Remove glibc-isms from hikari-unlocker and dead Linux PAM file
 
 * **Context:** Full FreeBSD stack audit revealed `_GNU_SOURCE`, `_DEFAULT_SOURCE`, and a manual `void explicit_bzero(void *, size_t)` prototype in `hikari_unlocker.c`. These are glibc-specific — on FreeBSD, `explicit_bzero` is declared in `<strings.h>` (already included) without feature macros. Additionally, `etc/pam.d/hikari-unlocker.Linux` remains despite Linux support being removed from the project.
-* **Decision:** Removed `_GNU_SOURCE`, `_DEFAULT_SOURCE` defines and the redundant prototype. The Linux PAM file should be deleted manually (`rm etc/pam.d/hikari-unlocker.Linux`).
+* **Decision:** Removed `_GNU_SOURCE`, `_DEFAULT_SOURCE` defines and the redundant prototype. The Linux PAM file has been deleted (`rm etc/pam.d/hikari-unlocker.Linux`).
 * **Impact:** Cleaner FreeBSD-native code. No functional change — `explicit_bzero` was already available via `<strings.h>`.
 
 ---

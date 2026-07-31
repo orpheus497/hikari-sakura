@@ -110,6 +110,11 @@ start_unlocker(void)
     close(1);
     dup2(locker_pipe[0][0], 0);
     dup2(locker_pipe[1][1], 1);
+    // [COMMENT] Action purpose: Close original pipe descriptors after dup2 to
+    // avoid leaking extra file descriptors into hikari-unlocker. The dup2 calls
+    // above copied them to stdin/stdout; the originals are now redundant.
+    close(locker_pipe[0][0]);
+    close(locker_pipe[1][1]);
     execl("/bin/sh", "/bin/sh", "-c", "hikari-unlocker", NULL);
     exit(0);
   // [COMMENT] Action purpose: In the parent process, close the child-side pipe
@@ -238,11 +243,14 @@ submit_password(void)
 {
   struct hikari_lock_mode *mode = get_mode();
 
-  // [COMMENT] Action purpose: Refuse password submission if the unlocker child
-  // failed to start. The pipe descriptors are invalid so writing would fail.
+  // [COMMENT] Action purpose: If the unlocker child is not running (failed start
+  // or died), attempt to restart it before denying. This handles the case where
+  // the unlocker crashed between lock_mode_enter and the first password submit.
   if (locker_pid <= 0) {
-    hikari_lock_indicator_set_deny(mode->lock_indicator);
-    return;
+    if (!start_unlocker()) {
+      hikari_lock_indicator_set_deny(mode->lock_indicator);
+      return;
+    }
   }
 
   size_t password_length = strnlen(input_buffer, 1023) + 1;
@@ -252,12 +260,22 @@ submit_password(void)
   // (broken pipe, full buffer), the password is silently lost — the unlocker
   // will not receive it and will not write a result, so locker_result_handler
   // will eventually fire with WL_EVENT_HANGUP and show the deny indicator.
-  ssize_t nw;
-  do {
-    nw = write(locker_pipe[0][1], input_buffer, password_length);
-  } while (nw == -1 && errno == EINTR);
-  if (nw < 0) {
-    fprintf(stderr, "lock_mode: failed to write password to unlocker pipe\n");
+  // [COMMENT] Action purpose: Write the full password to the unlocker pipe,
+  // handling both EINTR interrupts and partial writes. The buffer position
+  // and remaining length are advanced after each successful partial write.
+  const char *buf = input_buffer;
+  size_t remaining = password_length;
+  while (remaining > 0) {
+    ssize_t nw = write(locker_pipe[0][1], buf, remaining);
+    if (nw == -1) {
+      if (errno == EINTR) {
+        continue;
+      }
+      fprintf(stderr, "lock_mode: failed to write password to unlocker pipe\n");
+      break;
+    }
+    buf += nw;
+    remaining -= (size_t)nw;
   }
   clear_buffer();
 
@@ -546,8 +564,8 @@ hikari_lock_mode_enter(void)
 
   clear_buffer();
   // [COMMENT] Action purpose: Start the unlocker child process. If pipe or fork
-  // setup fails, the session remains locked but password submission is disabled
-  // since locker_pid stays -1 and pipe descriptors remain invalid.
+  // setup fails here, submit_password() will retry start_unlocker() on the
+  // first password submission attempt.
   start_unlocker();
   override_visibility();
 

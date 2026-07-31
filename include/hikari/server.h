@@ -39,7 +39,7 @@ struct wlr_input_device;
 struct hikari_output;
 struct hikari_group;
 
-/* [COMMENT] Class purpose: Represents the central hikari Wayland compositor server instance, holding display, backend, mode, and view layout state. */
+/* [COMMENT] Function purpose: Represents the central hikari Wayland compositor server instance, holding display, backend, mode, and view layout state. */
 struct hikari_server {
 
   bool cycling;

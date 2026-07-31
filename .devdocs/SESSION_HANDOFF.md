@@ -17,7 +17,7 @@
 7. Security: Replaced `memset` with `explicit_bzero` for password buffer zeroing in lock_mode.c.
 8. Robustness: Added EINTR-retrying write + error check for lock_mode pipe write.
 9. Added 5 missing `wl_list_remove()` calls in `hikari_server_stop()` for decoration, layer shell, and virtual input listeners.
-10. Removed dead code: empty render.h, commented-out mode_handler, commented-out struct members, unused xdg_view listener declarations.
+10. Removed dead code: empty render.h (deleted from disk), commented-out mode_handler, commented-out struct members, unused xdg_view listener declarations.
 11. Fixed "DESTORY" typo → "DESTROY" in output.c.
 12. Migrated server.h comment prefixes from `##` to `[COMMENT]`.
 13. Added `DesktopNames=Hikari` to hikari.desktop.
@@ -46,11 +46,10 @@
 
 ### Next Steps for Next Agent
 
-1. **Manual file deletions:** `rm include/hikari/render.h`, `rm etc/pam.d/hikari-unlocker.Linux`, `rm *.core` from repo root.
-2. **Build validation:** Run `bmake` to confirm all Phase 13-14 fixes compile cleanly against wlroots 0.20.
-3. **Verify `wlr_output_effective_resolution()`** exists in installed wlroots 0.20 headers (layer_shell.c dependency).
-4. **Resolve tmpfs/ZFS issue** for XDG_RUNTIME_DIR on FreeBSD.
-5. **Runtime testing** on FreeBSD Wayland session.
+1. **Build validation:** Run `bmake` to confirm all Phase 13-14 fixes compile cleanly against wlroots 0.20.
+2. **Verify `wlr_output_effective_resolution()`** exists in installed wlroots 0.20 headers (layer_shell.c dependency).
+3. **Resolve tmpfs/ZFS issue** for XDG_RUNTIME_DIR on FreeBSD.
+4. **Runtime testing** on FreeBSD Wayland session.
 
 ---
 

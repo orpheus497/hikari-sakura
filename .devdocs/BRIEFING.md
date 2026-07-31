@@ -59,15 +59,13 @@
 - Custom renderer pipeline.
 - DOD SoA tables.
 - All `struct hikari_renderer` forward declarations.
-- Empty `include/hikari/render.h` (Phase 14).
+- Empty `include/hikari/render.h` (Phase 14 — deleted).
 - Unused `request_move`/`request_resize`/`request_maximize` from `xdg_view.h` (Phase 14).
 - Commented-out `mode_handler` and `struct wl_listener mode` from output.c/output.h (Phase 14).
 
 ## Remaining Work
 
 - **CRITICAL:** Resolve tmpfs/ZFS incompatibility for XDG_RUNTIME_DIR.
-- **Manual:** Delete `include/hikari/render.h` from disk (file is empty, marked for deletion).
-- **Manual:** Delete `etc/pam.d/hikari-unlocker.Linux` (dead Linux PAM file).
 - **Manual:** Delete `.core` dump files from repo root.
 - Build validation (`bmake`) to confirm all Phase 13-14 fixes compile.
 - Runtime testing on FreeBSD Wayland session.

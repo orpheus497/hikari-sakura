@@ -834,8 +834,24 @@ init_noop_output(struct hikari_server *server)
 {
   server->noop_backend = wlr_headless_backend_create(wl_display_get_event_loop(server->display));
 
+  // [COMMENT] Action purpose: Guard against headless backend allocation failure.
+  // Without a noop backend, the compositor cannot manage views when no physical
+  // monitor is attached.
+  if (server->noop_backend == NULL) {
+    fprintf(stderr, "error: could not create headless backend for noop output\n");
+    wl_display_destroy(server->display);
+    exit(EXIT_FAILURE);
+  }
+
   struct wlr_output *wlr_output =
       wlr_headless_add_output(server->noop_backend, 800, 600);
+
+  // [COMMENT] Action purpose: Guard against headless output allocation failure.
+  if (wlr_output == NULL) {
+    fprintf(stderr, "error: could not create headless output\n");
+    wl_display_destroy(server->display);
+    exit(EXIT_FAILURE);
+  }
 
   // [COMMENT] Action purpose: Initialize render backend for the noop output, matching
   // what new_output_handler does for real outputs. Without this, any rendering
