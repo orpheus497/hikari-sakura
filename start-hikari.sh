@@ -1,17 +1,21 @@
 #!/bin/sh
-# Wrapper script for Hikari to properly initialize a Wayland session
-# This should be executed instead of the `hikari` binary directly, unless
-# your login manager (e.g., GDM, SDDM) already provides these environment variables.
+# ##Script function and purpose: Launch wrapper for the hikari Wayland compositor.
+# Ensures a correct Wayland session environment is established before executing
+# the compositor binary. Should be invoked instead of the hikari binary directly
+# unless a login manager (GDM, SDDM, greetd) already provides these variables.
+#
+# Usage (installed system): start-hikari [hikari options]
+# Usage (development tree):  ./start-hikari.sh [hikari options]
 
-# Clear any leaked variables that might cause nesting bugs
+# Clear any leaked display variables that would cause nested-compositor bugs
 unset WAYLAND_DISPLAY
 unset DISPLAY
 
 export XDG_SESSION_TYPE=wayland
 export XDG_SESSION_CLASS=user
 
-# If XDG_RUNTIME_DIR is not set by the system (e.g. pam_xdg or systemd),
-# generate a proper temporary directory for the session IPC bus.
+# ##Condition purpose: Bootstrap XDG_RUNTIME_DIR if the system (pam_xdg, systemd,
+# or elogind) did not provide one. FreeBSD with seatd typically requires this.
 if [ -z "$XDG_RUNTIME_DIR" ]; then
     export XDG_RUNTIME_DIR="/tmp/hikari-runtime-$(id -u)"
     if [ ! -d "$XDG_RUNTIME_DIR" ]; then
@@ -19,9 +23,22 @@ if [ -z "$XDG_RUNTIME_DIR" ]; then
     fi
 fi
 
-# Wrap execution in a dbus session if one is not active
-if [ -z "$DBUS_SESSION_BUS_ADDRESS" ] && command -v dbus-run-session >/dev/null 2>&1; then
-    exec dbus-run-session ./hikari "$@"
+# ##Action purpose: Resolve hikari binary — prefer system-installed binary on $PATH
+# so that installed deployments work correctly (e.g. rc.d / service scripts).
+# Fall back to ./hikari for in-tree development builds without installation.
+if command -v hikari > /dev/null 2>&1; then
+    HIKARI_BIN=hikari
+elif [ -x "./hikari" ]; then
+    HIKARI_BIN=./hikari
 else
-    exec ./hikari "$@"
+    echo "start-hikari: hikari binary not found on PATH or in current directory" >&2
+    exit 1
+fi
+
+# ##Condition purpose: Wrap execution in a D-Bus session if one is not already
+# active. Required for XDG portal, clipboard, and secret service functionality.
+if [ -z "$DBUS_SESSION_BUS_ADDRESS" ] && command -v dbus-run-session > /dev/null 2>&1; then
+    exec dbus-run-session "$HIKARI_BIN" "$@"
+else
+    exec "$HIKARI_BIN" "$@"
 fi

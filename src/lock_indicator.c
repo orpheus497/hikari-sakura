@@ -46,7 +46,13 @@ init_indicator_circle(float color[static 4])
   unsigned char *data = cairo_image_surface_get_data(surface);
   int stride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, size);
 
-  struct wlr_drm_format format = { .format = DRM_FORMAT_ARGB8888, .len = 0, .capacity = 0, .modifiers = NULL };
+  /* ##Action purpose: Declare wlr_drm_format using only the public API contract:
+   * zero-initialise the struct, then set .format. The .len=0 and .modifiers=NULL
+   * fields indicate no explicit modifier list, allowing the allocator to choose
+   * the best available modifier. Accessing .capacity is forbidden — it is a
+   * private internal field used by wlroots for dynamic array bookkeeping. */
+  struct wlr_drm_format format = {0};
+  format.format = DRM_FORMAT_ARGB8888;
   wlr_buffer = wlr_allocator_create_buffer(hikari_server.allocator, size, size, &format);
   
   /* ##Condition purpose: Check if buffer allocation succeeded. */

@@ -4,6 +4,44 @@
 
 ---
 
+## Session Date: 2026-07-31 13:16
+
+* **Phase:** Comprehensive Audit Fix Execution — All 6 Issues Resolved
+* **Accomplishments:**
+  - **Fix 1 (CRITICAL):** Corrected `clock_gettime` return value misuse in `hikari_server_cursor_focus` (`server.c:436-442`). The function return value (0/-1) was being cast to `uint32_t time_msec` instead of extracting the actual time from the `struct timespec` fields. Every pointer motion event was receiving `time_msec=0`. Fixed to `(uint32_t)(now.tv_sec * 1000LL + now.tv_nsec / 1000000LL)`.
+  - **Fix 2 (CRITICAL):** Removed access to `wlr_drm_format.capacity` (an internal wlroots field) in three files: `src/output.c`, `src/indicator_bar.c`, `src/lock_indicator.c`. Replaced with zero-init `= {0}` plus explicit `.format = DRM_FORMAT_ARGB8888` per public API contract.
+  - **Fix 3 (MEDIUM):** Extended `wlr_xcursor_manager_load` in `cursor.c` to load scales 1 and 2. Added per-output scale loading in `hikari_output_init` (`output.c`) using `wlr_output->scale` to support arbitrary HiDPI scale factors.
+  - **Fix 4 (MEDIUM):** Removed dead unsafe `wl_container_of(wlr_decoration->surface, view, surface)` from `server_decoration_handler` in `server.c`. The `hikari_view*` was computed but never used before the correct `xdg_surface->data` lookup path. The erroneous line constituted undefined behaviour (wrong offset calculation).
+  - **Fix 5 (LOW):** Changed `#if HAVE_XWAYLAND` to `#ifdef HAVE_XWAYLAND` for consistency with all other XWayland guards in `server.c`.
+  - **Fix 6 (LOW):** Rewrote `start-hikari.sh` to resolve the `hikari` binary from `$PATH` (for installed system deployments) with a `./hikari` fallback (for development builds). Added full `AGENTS.md`-compliant documentation prefixes.
+  - **Build:** `make` completed successfully with zero warnings after all 6 fixes.
+* **Modified Files:**
+  - `src/server.c` — Fixes 1, 4, 5
+  - `src/output.c` — Fixes 2, 3
+  - `src/indicator_bar.c` — Fix 2
+  - `src/lock_indicator.c` — Fix 2
+  - `src/cursor.c` — Fix 3
+  - `start-hikari.sh` — Fix 6
+* **Remaining Work:** PAM `hikari-unlocker` runtime verification. No code changes pending.
+
+---
+
+## Session Date: 2026-07-31 13:08
+
+* **Phase:** wlroots 0.20 Full Audit & Resource Cross-Reference
+* **Accomplishments:**
+  - Performed full codebase audit against wlroots 0.20 API, tinywl patterns, Wayland Book principles, and FreeBSD deployment requirements.
+  - Ingested all provided resources: wlroots Getting-started wiki, Packaging-recommendations wiki, Phoronix wlroots 0.20 release article.
+  - Confirmed all previously applied 0.20 API migration fixes are correct and complete.
+  - Identified 2 critical bugs: `clock_gettime` return value misuse in `hikari_server_cursor_focus` (`server.c:439`), and `wlr_drm_format` internal field access (`output.c:95`, `indicator_bar.c:126`, `lock_indicator.c:49`).
+  - Identified 2 medium issues: xcursor scale hardcoded to 1, unsafe `wl_container_of` in `server_decoration_handler`.
+  - Identified 2 low issues: `#if`/`#ifdef` inconsistency, relative path in `start-hikari.sh`.
+  - Generated comprehensive audit artifact: `wlroots_0_20_audit_report.md`.
+* **Modified:** `.devdocs/BRIEFING.md`, `.devdocs/SESSION_HANDOFF.md`, `.devdocs/TODOS.md`, `.devdocs/SUMMARIES.md`
+* **Next Steps:** Apply the 2 critical fixes (clock_gettime, wlr_drm_format) and 2 low-effort low fixes (#if→#ifdef, start-hikari.sh path) — pending user approval.
+
+---
+
 ## Session Date: 2026-07-31 12:47
 
 * **Phase:** Implementation Audit & FreeBSD Interlinking Fix

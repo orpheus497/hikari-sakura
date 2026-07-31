@@ -435,8 +435,10 @@ hikari_server_node_at(double x,
 void
 hikari_server_cursor_focus(void)
 {
+  /* ##Action purpose: Retrieve monotonic clock time and convert to milliseconds for Wayland event timestamping. */
   struct timespec now;
-  uint32_t time_msec = (uint32_t)clock_gettime(CLOCK_MONOTONIC, &now);
+  clock_gettime(CLOCK_MONOTONIC, &now);
+  uint32_t time_msec = (uint32_t)(now.tv_sec * 1000LL + now.tv_nsec / 1000000LL);
   hikari_server.mode->cursor_move(time_msec);
 }
 
@@ -534,21 +536,29 @@ static void
 server_decoration_handler(struct wl_listener *listener, void *data)
 {
   struct wlr_server_decoration *wlr_decoration = data;
+
+  /* ##Condition purpose: Guard against surfaces without a role — they cannot be XDG toplevels. */
   if (wlr_decoration->surface->role == NULL) {
     return;
   }
-  struct hikari_view *view =
-      wl_container_of(wlr_decoration->surface, view, surface);
+
+  /* ##Action purpose: Retrieve the XDG surface from the wlr_surface using the wlroots 0.17+ helper
+   * to safely determine if this decoration belongs to an XDG toplevel. The
+   * wl_container_of pattern cannot be used here because hikari_view embeds
+   * wlr_surface as a pointer field, not as a value. */
   struct wlr_xdg_surface *xdg_surface =
       wlr_xdg_surface_try_from_wlr_surface(wlr_decoration->surface);
-      
-  /* ##Condition purpose: Guard against non-XDG surfaces before accessing XDG-specific data. */
+
+  /* ##Condition purpose: Guard against non-XDG surfaces (e.g. layer shell) before accessing XDG-specific data. */
   if (xdg_surface == NULL) {
     return;
   }
 
+  /* ##Action purpose: Retrieve the hikari_xdg_view back-reference stored in xdg_surface->data
+   * by hikari_xdg_view_init. This is the canonical lookup path for XDG views. */
   struct hikari_xdg_view *xdg_view = xdg_surface->data;
 
+  /* ##Condition purpose: Guard against a decoration event arriving before the xdg_view is fully initialized. */
   if (xdg_view == NULL) {
     return;
   }
@@ -1083,7 +1093,7 @@ hikari_server_stop(void)
 
   wl_display_destroy_clients(server->display);
 
-#if HAVE_XWAYLAND
+#ifdef HAVE_XWAYLAND
   wlr_xwayland_destroy(server->xwayland);
 #endif
 

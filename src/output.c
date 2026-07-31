@@ -92,7 +92,13 @@ hikari_output_load_background(struct hikari_output *output,
   unsigned char *data = cairo_image_surface_get_data(output_surface);
   int stride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, output_width);
 
-  struct wlr_drm_format format = { .format = DRM_FORMAT_ARGB8888, .len = 0, .capacity = 0, .modifiers = NULL };
+  /* ##Action purpose: Declare wlr_drm_format using only the public API contract:
+   * zero-initialise the struct, then set .format. The .len=0 and .modifiers=NULL
+   * fields indicate no explicit modifier list, allowing the allocator to choose
+   * the best available modifier. Accessing .capacity is forbidden — it is a
+   * private internal field used by wlroots for dynamic array bookkeeping. */
+  struct wlr_drm_format format = {0};
+  format.format = DRM_FORMAT_ARGB8888;
   struct wlr_buffer *buffer = wlr_allocator_create_buffer(hikari_server.allocator, output_width, output_height, &format);
   
   /* ##Condition purpose: Check if buffer allocation succeeded. */
@@ -380,6 +386,14 @@ hikari_output_init(struct hikari_output *output, struct wlr_output *wlr_output)
     wlr_scene_output_layout_add_output(hikari_server.scene_layout, l_output, scene_output);
 
     output_geometry(output);
+
+    /* ##Action purpose: Load xcursor images at this output's actual scale factor.
+     * wlr_output->scale is set by the backend (e.g., from EDID or sysctl on FreeBSD)
+     * and may differ from the pre-loaded scales in hikari_cursor_init. Calling
+     * wlr_xcursor_manager_load here ensures cursor images are available at the exact
+     * density required by this display. Duplicate loads are no-ops internally. */
+    wlr_xcursor_manager_load(
+        hikari_server.cursor.cursor_mgr, (float)wlr_output->scale);
 
     if (first) {
       hikari_workspace_merge(

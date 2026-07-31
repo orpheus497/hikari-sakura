@@ -121,7 +121,14 @@ hikari_cursor_init(
   unsigned long cursor_size = get_cursor_size();
 
   cursor->cursor_mgr = wlr_xcursor_manager_create(cursor_theme, cursor_size);
+
+  /* ##Action purpose: Pre-load xcursor images at integer scales 1 and 2.
+   * Scale 1 is required for all SDR displays. Scale 2 covers the majority of
+   * HiDPI deployments. Additional scales will be loaded per-output in
+   * hikari_output_init when the actual wlr_output->scale value is available,
+   * ensuring correct cursor sharpness at all display densities. */
   wlr_xcursor_manager_load(cursor->cursor_mgr, 1);
+  wlr_xcursor_manager_load(cursor->cursor_mgr, 2);
 
   cursor->wlr_cursor = wlr_cursor;
 
