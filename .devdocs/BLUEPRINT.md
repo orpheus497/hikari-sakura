@@ -96,3 +96,4 @@ Read and cross-reference the content against the codebase.
 * https://emersion.fr/blog/2019/intro-to-damage-tracking/
 * https://gitlab.freedesktop.org/wlroots/wlroots/-/wikis/Packaging-recommendations
 * https://www.phoronix.com/news/wlroots-0.20-Released
+* https://docs.freebsd.org/en/books/handbook/wayland/
