@@ -1,12 +1,14 @@
 # Forward Strategy & Plans
 
-*Last Updated:* 2026-07-31 15:27
+*Last Updated:* 2026-07-31 15:53
 
 ## Implementations to be Fully Implemented
 
 1. **PAM Verification Execution:**
    - Deploy `hikari` and `hikari-unlocker` to a native FreeBSD environment.
-   - Run `chown root:wheel hikari-unlocker` and `chmod 4555 hikari-unlocker`.
+   - Identify the canonical absolute installed path for `hikari-unlocker` (e.g. `${PREFIX}/bin/hikari-unlocker`).
+   - Verify the binary has trusted package provenance and existing `root:wheel` ownership.
+   - Only after verification, apply mode `4555` to the absolute installed path (e.g. `chmod 4555 /usr/local/bin/hikari-unlocker`).
    - Launch compositor and invoke `Meta+L` to trigger the lock screen.
    - Verify input characters render correctly and PAM unlocks upon Enter.
 

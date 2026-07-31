@@ -1,5 +1,5 @@
-/* ##Script function and purpose: Implements the indicator frame overlay using wlr_scene_rect nodes,
-   providing a colored frame around views during modal interactive operations. */
+// [COMMENT] Script function and purpose: Implements the indicator frame overlay using wlr_scene_rect nodes,
+// providing a colored frame around views during modal interactive operations.
 
 #include <hikari/indicator_frame.h>
 
@@ -13,7 +13,7 @@
 #include <hikari/output.h>
 #include <hikari/view.h>
 
-/* ##Function purpose: Create 4 scene_rect nodes (disabled, transparent) as children of the given parent tree. */
+// [COMMENT] Function purpose: Create 4 scene_rect nodes (disabled, transparent) as children of the given parent tree.
 void
 hikari_indicator_frame_init(
     struct hikari_indicator_frame *indicator_frame,
@@ -25,7 +25,7 @@ hikari_indicator_frame_init(
   indicator_frame->left = wlr_scene_rect_create(parent, 0, 0, color);
   indicator_frame->right = wlr_scene_rect_create(parent, 0, 0, color);
 
-  /* ##Action purpose: Place frame rects above surface content but below other overlays. */
+  // [COMMENT] Action purpose: Place frame rects above surface content but below other overlays.
   wlr_scene_node_raise_to_top(&indicator_frame->top->node);
   wlr_scene_node_raise_to_top(&indicator_frame->bottom->node);
   wlr_scene_node_raise_to_top(&indicator_frame->left->node);
@@ -37,7 +37,7 @@ hikari_indicator_frame_init(
   wlr_scene_node_set_enabled(&indicator_frame->right->node, false);
 }
 
-/* ##Function purpose: Destroy the 4 scene_rect nodes. */
+// [COMMENT] Function purpose: Destroy the 4 scene_rect nodes.
 void
 hikari_indicator_frame_fini(struct hikari_indicator_frame *indicator_frame)
 {
@@ -54,7 +54,7 @@ hikari_indicator_frame_fini(struct hikari_indicator_frame *indicator_frame)
   }
 }
 
-/* ##Function purpose: Recompute the frame geometry to match the current view bounds. Does not change visibility. */
+// [COMMENT] Function purpose: Recompute the frame geometry to match the current view bounds. Does not change visibility.
 void
 hikari_indicator_frame_refresh_geometry(
     struct hikari_indicator_frame *indicator_frame, struct hikari_view *view)
@@ -93,7 +93,7 @@ hikari_indicator_frame_refresh_geometry(
 
   int border = hikari_configuration->border;
 
-  /* ##Step purpose: Position and size each rect to form a frame around the view. */
+  // [COMMENT] Action purpose: Position and size each rect to form a frame around the view.
   wlr_scene_node_set_position(&indicator_frame->top->node,
       top_bottom_geometry->x, top_bottom_geometry->y);
   wlr_scene_rect_set_size(indicator_frame->top,
@@ -117,7 +117,7 @@ hikari_indicator_frame_refresh_geometry(
       border, left_right_geometry->height);
 }
 
-/* ##Function purpose: Enable the indicator frame with the given color. */
+// [COMMENT] Function purpose: Enable the indicator frame with the given color.
 void
 hikari_indicator_frame_show(
     struct hikari_indicator_frame *indicator_frame, float color[static 4])
@@ -137,7 +137,7 @@ hikari_indicator_frame_show(
   wlr_scene_node_set_enabled(&indicator_frame->right->node, true);
 }
 
-/* ##Function purpose: Disable (hide) the indicator frame. */
+// [COMMENT] Function purpose: Disable (hide) the indicator frame.
 void
 hikari_indicator_frame_hide(struct hikari_indicator_frame *indicator_frame)
 {

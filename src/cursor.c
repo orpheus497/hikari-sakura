@@ -1,4 +1,4 @@
-/* ##Script function and purpose: Hikari cursor input handling and pointer axis event dispatching. */
+// [COMMENT] Script function and purpose: Hikari cursor input handling and pointer axis event dispatching.
 
 #include <hikari/cursor.h>
 
@@ -109,7 +109,7 @@ configure_bindings(struct hikari_cursor *cursor, struct wl_list *bindings)
   }
 }
 
-/* ##Function purpose: Initialize the cursor, attach it to the output layout, and pre-load xcursor themes. */
+// [COMMENT] Function purpose: Initialize the cursor, attach it to the output layout, and pre-load xcursor themes.
 void
 hikari_cursor_init(
     struct hikari_cursor *cursor, struct wlr_output_layout *output_layout)
@@ -123,11 +123,11 @@ hikari_cursor_init(
 
   cursor->cursor_mgr = wlr_xcursor_manager_create(cursor_theme, cursor_size);
 
-  /* ##Action purpose: Pre-load xcursor images at integer scales 1 and 2.
-   * Scale 1 is required for all SDR displays. Scale 2 covers the majority of
-   * HiDPI deployments. Additional scales will be loaded per-output in
-   * hikari_output_init when the actual wlr_output->scale value is available,
-   * ensuring correct cursor sharpness at all display densities. */
+  // [COMMENT] Action purpose: Pre-load xcursor images at integer scales 1 and 2.
+// Scale 1 is required for all SDR displays. Scale 2 covers the majority of
+// HiDPI deployments. Additional scales will be loaded per-output in
+// hikari_output_init when the actual wlr_output->scale value is available,
+// ensuring correct cursor sharpness at all display densities.
   wlr_xcursor_manager_load(cursor->cursor_mgr, 1);
   wlr_xcursor_manager_load(cursor->cursor_mgr, 2);
 
@@ -195,20 +195,20 @@ hikari_cursor_deactivate(struct hikari_cursor *cursor)
   hikari_cursor_set_image(cursor, NULL);
 }
 
-/* ##Function purpose: Set cursor image from xcursor theme or clear it. */
+// [COMMENT] Function purpose: Set cursor image from xcursor theme or clear it.
 void
 hikari_cursor_set_image(struct hikari_cursor *cursor, const char *path)
 {
-  /* ##Action purpose: Remove existing surface destroy listener before resetting the cursor. */
+  // [COMMENT] Action purpose: Remove existing surface destroy listener before resetting the cursor.
   wl_list_remove(&cursor->surface_destroy.link);
-  /* ##Action purpose: Reinitialize the listener list link to prevent use-after-free on disconnect. */
+  // [COMMENT] Action purpose: Reinitialize the listener list link to prevent use-after-free on disconnect.
   wl_list_init(&cursor->surface_destroy.link);
-  /* ##Condition purpose: Check if valid cursor path provided. */
+  // [COMMENT] Action purpose: Check if valid cursor path provided.
   if (path != NULL) {
-   /* ##Action purpose: Set the hardware/software cursor to the requested xcursor image. */
+   // [COMMENT] Action purpose: Set the hardware/software cursor to the requested xcursor image.
    wlr_cursor_set_xcursor(cursor->wlr_cursor, cursor->cursor_mgr, path);
   } else {
-   /* ##Action purpose: Clear the cursor image by unsetting the wlr_surface. */
+   // [COMMENT] Action purpose: Clear the cursor image by unsetting the wlr_surface.
    wlr_cursor_set_surface(cursor->wlr_cursor, NULL, 0, 0);
   }
 }
@@ -274,7 +274,7 @@ button_handler(struct wl_listener *listener, void *data)
   hikari_server.mode->button_handler(cursor, event);
 }
 
-/* ##Function purpose: Handle pointer axis (scroll wheel) events and notify seat with relative direction. */
+// [COMMENT] Function purpose: Handle pointer axis (scroll wheel) events and notify seat with relative direction.
 static void
 axis_handler(struct wl_listener *listener, void *data)
 {

@@ -43,16 +43,31 @@ moused enable`. This requires setting `kern.evdev.rcpt_mask` to `3`.
 Wayland compositors require `XDG_RUNTIME_DIR` to be set to a user-owned
 directory with mode `0700`. Some Wayland clients (e.g. native Wayland `firefox`)
 require `posix_fallocate` to work in that directory. This is not supported by
-ZFS, therefore you should prevent the ZFS tmp dataset from mounting to `/tmp`
-and `mount -t tmpfs tmpfs /tmp`. To persist this setting edit your `/etc/fstab`
-appropriately to automatically mount `tmpfs` during boot.
+ZFS, therefore on ZFS-root systems you must ensure `/tmp` is backed by `tmpfs`:
+
+1. Prevent the ZFS dataset from mounting over the tmpfs:
+
+```sh
+sudo zfs set canmount=noauto zroot/tmp
+```
+
+2. Add a `tmpfs` entry to `/etc/fstab` (if not already present):
+
+```sh
+tmpfs   /tmp   tmpfs   rw,mode=1777,size=256m   0   0
+```
+
+3. Reboot, then verify `/tmp` is tmpfs: `stat -f '%T' /tmp` should report `tmpfs`.
+
+> **Note:** Without step 1, ZFS automount will mount `zroot/tmp` *over* the
+> fstab tmpfs entry, and `/tmp` will still be ZFS despite the fstab line.
 
 If your system does not set `XDG_RUNTIME_DIR` automatically (e.g. FreeBSD with
 `seatd` and no `elogind`), the `start-hikari` wrapper script will create one at
 `/tmp/hikari-runtime-$UID` with the correct permissions. You can also set it
 manually:
 
-```
+```sh
 export XDG_RUNTIME_DIR=/tmp/runtime-$(id -u)
 mkdir -p -m 0700 "$XDG_RUNTIME_DIR"
 ```
@@ -70,7 +85,7 @@ systems).
 a layout set the `XKB_DEFAULT_LAYOUT` to the desired value before staring
 `hikari`.
 
-```
+```sh
 XKB_DEFAULT_LAYOUT "de(nodeadkeys),de"
 ```
 
@@ -83,7 +98,7 @@ repository, breaking changes might be encountered. These are documented in the
 
 ### Dependencies
 
-* wlroots (>= 0.20)
+* wlroots (0.20)
 * pango
 * cairo
 * libinput
@@ -99,10 +114,9 @@ repository, breaking changes might be encountered. These are documented in the
 The build process will produce two binaries `hikari` and `hikari-unlocker`, plus
 a `start-hikari` wrapper script. `hikari-unlocker` is used to check credentials
 for unlocking the screen, which needs to be installed with root setuid.
-`hikari` can rely on `seatd`, `(e)logind` or other mechanisms to gain root
-privileges when required; however, if needed it can also be installed with root
-setuid - see "Installing with SUID" below. All three files need to be located
-in your `PATH`.
+`hikari` can rely on `seatd` to gain root privileges when required; however, if
+needed it can also be installed with root setuid — see "Installing with SUID"
+below. All three files need to be located in your `PATH`.
 
 ### Launching
 
@@ -113,7 +127,7 @@ session environment before executing the `hikari` binary:
 * Creates `XDG_RUNTIME_DIR` if the system did not provide one
 * Wraps execution in a D-Bus session if one is not already active
 
-```
+```sh
 start-hikari
 ```
 
@@ -140,7 +154,7 @@ during the compilation process. To override installation paths for `etc` specify
 Simply run `make`. The installation destination can be configured by setting
 `PREFIX` (default is `/usr/local` and does not need to be given explicitly).
 
-```
+```sh
 make
 ```
 
@@ -150,7 +164,7 @@ make
 
 On Linux `bmake` is required which needs to be run like so:
 
-```
+```sh
 bmake WITH_POSIX_C_SOURCE=YES
 ```
 
@@ -158,7 +172,7 @@ The installation destination can be configured by
 setting`PREFIX` (default is `/usr/local` and does not need to be given
 explicitly).
 
-```
+```sh
 bmake PREFIX=/usr/local install
 ```
 
@@ -169,7 +183,7 @@ bmake PREFIX=/usr/local install
 The following sections explain how to enabled features on an individual basis.
 However, to enable every feature the build system offers the `WITH_ALL` flag.
 
-```
+```sh
 make WITH_ALL=YES
 ```
 
@@ -178,7 +192,7 @@ make WITH_ALL=YES
 `hikari` offers optional XWayland support which is enabled via setting
 `WITH_XWAYLAND`.
 
-```
+```sh
 make WITH_XWAYLAND=YES
 ```
 
@@ -188,7 +202,7 @@ Screencopy support allows tools like `grim` to work with `hikari`, it also
 allows applications to copy the desktop content. This is disabled by default
 and can be added by setting `WITH_SCREENCOPY`.
 
-```
+```sh
 make WITH_SCREENCOPY=YES
 ```
 
@@ -197,7 +211,7 @@ make WITH_SCREENCOPY=YES
 Gamma control is needed for tools like `redshift`. This is disabled by default
 and can be enabled via setting `WITH_GAMMACONTROL`.
 
-```
+```sh
 make WITH_GAMMACONTROL=YES
 ```
 
@@ -207,7 +221,7 @@ Some applications that are used to build desktop components require
 `layer-shell`. Examples for this are `waybar`, `wofi` and `slurp`. To turn on
 `layer-shell` support compile with the `WITH_LAYERSHELL` option.
 
-```
+```sh
 make WITH_LAYERSHELL=YES
 ```
 
@@ -215,9 +229,9 @@ make WITH_LAYERSHELL=YES
 
 Virtual input support is needed for applications like `wayvnc`.
 
-```
+```sh
 make WITH_VIRTUAL_INPUT=YES
-```
+```sh
 
 #### Building the manpage
 
@@ -232,7 +246,7 @@ installation.
 If `hikari` should require root privileges for startup, state `WITH_SUID=YES`
 during installation.
 
-```
+```sh
 make WITH_SUID=YES install
 ```
 
@@ -243,7 +257,7 @@ try to reproduce the issue. This builds `hikari` with debug symbols and
 sanitizers enabled. Extracting a stack trace for debugging purposes is also very
 helpful if you are planning to submit a bug report.
 
-```
+```sh
 make DEBUG=YES
 ```
 

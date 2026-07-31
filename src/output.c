@@ -1,4 +1,4 @@
-/* ##Script function and purpose: Hikari output management, modesetting, and scene tree setup for display outputs. */
+// [COMMENT] Script function and purpose: Hikari output management, modesetting, and scene tree setup for display outputs.
 
 #include <hikari/output.h>
 
@@ -92,23 +92,23 @@ hikari_output_load_background(struct hikari_output *output,
   unsigned char *data = cairo_image_surface_get_data(output_surface);
   int stride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, output_width);
 
-  /* ##Action purpose: Declare wlr_drm_format using only the public API contract:
-   * zero-initialise the struct, then set .format. The .len=0 and .modifiers=NULL
-   * fields indicate no explicit modifier list, allowing the allocator to choose
-   * the best available modifier. Accessing .capacity is forbidden — it is a
-   * private internal field used by wlroots for dynamic array bookkeeping. */
+  // [COMMENT] Action purpose: Declare wlr_drm_format using only the public API contract:
+  // zero-initialise the struct, then set .format. The .len=0 and .modifiers=NULL
+  // fields indicate no explicit modifier list, allowing the allocator to choose
+  // the best available modifier. Accessing .capacity is forbidden -- it is a
+  // private internal field used by wlroots for dynamic array bookkeeping.
   struct wlr_drm_format format = {0};
   format.format = DRM_FORMAT_ARGB8888;
   struct wlr_buffer *buffer = wlr_allocator_create_buffer(hikari_server.allocator, output_width, output_height, &format);
   
-  /* ##Condition purpose: Check if buffer allocation succeeded. */
+  // [COMMENT] Action purpose: Check if buffer allocation succeeded.
   if (buffer != NULL) {
     void *mapped_data;
     uint32_t mapped_format;
     size_t mapped_stride;
-    /* ##Condition purpose: Guard against failed buffer data mapping. */
+    // [COMMENT] Action purpose: Guard against failed buffer data mapping.
     if (wlr_buffer_begin_data_ptr_access(buffer, WLR_BUFFER_DATA_PTR_ACCESS_WRITE, &mapped_data, &mapped_format, &mapped_stride)) {
-      /* ##Loop purpose: Copy rendered cairo image data into mapped buffer by row. */
+      // [COMMENT] Action purpose: Copy rendered cairo image data into mapped buffer by row.
       for (int y = 0; y < output_height; y++) {
         memcpy((char*)mapped_data + y * mapped_stride, data + y * stride, output_width * 4);
       }
@@ -140,7 +140,7 @@ hikari_output_damage_whole(struct hikari_output *output)
   }
 }
 
-/* ##Function purpose: Disable specified output and remove its listeners. */
+// [COMMENT] Function purpose: Disable specified output and remove its listeners.
 void
 hikari_output_disable(struct hikari_output *output)
 {
@@ -156,7 +156,7 @@ hikari_output_disable(struct hikari_output *output)
   wlr_output_state_init(&state);
   wlr_output_state_set_enabled(&state, false);
 
-  /* ##Condition purpose: Only remove listeners and clear enabled if commit succeeds. */
+  // [COMMENT] Action purpose: Only remove listeners and clear enabled if commit succeeds.
   if (!wlr_output_commit_state(wlr_output, &state)) {
     wlr_output_state_finish(&state);
     return;
@@ -171,7 +171,7 @@ hikari_output_disable(struct hikari_output *output)
   output->enabled = false;
 }
 
-/* ##Function purpose: Enable specified output, committing state to wlr_output and subscribing frame/state signals. */
+// [COMMENT] Function purpose: Enable specified output, committing state to wlr_output and subscribing frame/state signals.
 void
 hikari_output_enable(struct hikari_output *output)
 {
@@ -192,12 +192,12 @@ hikari_output_enable(struct hikari_output *output)
   }
   wlr_output_state_finish(&state);
 
-  /* ##Action purpose: Subscribe to frame and request_state events for the output, guarding against double-registration. */
-  /* ##Condition purpose: Only add the frame listener if not already registered (empty link means unregistered). */
+  // [COMMENT] Action purpose: Subscribe to frame and request_state events for the output, guarding against double-registration.
+  // [COMMENT] Action purpose: Only add the frame listener if not already registered (empty link means unregistered).
   if (wl_list_empty(&output->frame.link)) {
     wl_signal_add(&wlr_output->events.frame, &output->frame);
   }
-  /* ##Condition purpose: Only add the request_state listener if not already registered (empty link means unregistered). */
+  // [COMMENT] Action purpose: Only add the request_state listener if not already registered (empty link means unregistered).
   if (wl_list_empty(&output->request_state.link)) {
     wl_signal_add(&wlr_output->events.request_state, &output->request_state);
   }
@@ -205,7 +205,7 @@ hikari_output_enable(struct hikari_output *output)
   output->enabled = true;
 }
 
-/* ##Function purpose: Update internal output geometry tracking from layout box. */
+// [COMMENT] Function purpose: Update internal output geometry tracking from layout box.
 static void
 output_geometry(struct hikari_output *output)
 {
@@ -222,7 +222,7 @@ output_geometry(struct hikari_output *output)
    .x = 0, .y = 0, .width = output_box.width, .height = output_box.height
   };
 
-  /* ##Action purpose: Reposition background scene node to match updated output geometry. */
+  // [COMMENT] Action purpose: Reposition background scene node to match updated output geometry.
   if (output->background != NULL) {
     wlr_scene_node_set_position(&output->background->node,
         output->geometry.x, output->geometry.y);
@@ -297,7 +297,7 @@ destroy_handler(struct wl_listener *listener, void *data)
   hikari_free(output);
 }
 
-/* ##Function purpose: Initialize a new compositor output, allocating workspace and configuring state. */
+// [COMMENT] Function purpose: Initialize a new compositor output, allocating workspace and configuring state.
 void
 hikari_output_init(struct hikari_output *output, struct wlr_output *wlr_output)
 {
@@ -337,7 +337,7 @@ hikari_output_init(struct hikari_output *output, struct wlr_output *wlr_output)
   output->destroy.notify = destroy_handler;
   wl_signal_add(&wlr_output->events.destroy, &output->destroy);
 
-  /* ##Condition purpose: Skip hardware setup for headless/noop backend outputs. */
+  // [COMMENT] Action purpose: Skip hardware setup for headless/noop backend outputs.
   if (!noop) {
     bool first = wl_list_empty(&hikari_server.outputs);
 
@@ -347,10 +347,10 @@ hikari_output_init(struct hikari_output *output, struct wlr_output *wlr_output)
     wlr_output_state_init(&state);
     wlr_output_state_set_enabled(&state, true);
 
-    /* ##Condition purpose: Set the monitor's EDID-preferred mode if available.
-     * wlr_output_preferred_mode returns the mode flagged as preferred by the
-     * monitor (native resolution at native refresh). Some backends (Wayland,
-     * headless) have no modes — the NULL check handles that. */
+    // [COMMENT] Action purpose: Set the monitor's EDID-preferred mode if available.
+    // wlr_output_preferred_mode returns the mode flagged as preferred by the
+    // monitor (native resolution at native refresh). Some backends (Wayland,
+    // headless) have no modes -- the NULL check handles that.
     struct wlr_output_mode *mode = wlr_output_preferred_mode(wlr_output);
     if (mode != NULL) {
       wlr_output_state_set_mode(&state, mode);
@@ -368,7 +368,7 @@ hikari_output_init(struct hikari_output *output, struct wlr_output *wlr_output)
 
     wl_list_insert(&hikari_server.outputs, &output->server_outputs);
 
-    /* ##Condition purpose: Disable the output if lock mode requires it. */
+    // [COMMENT] Action purpose: Disable the output if lock mode requires it.
     if (hikari_server_in_lock_mode() &&
         hikari_lock_mode_are_outputs_disabled(&hikari_server.lock_mode)) {
       hikari_output_disable(output);
@@ -397,11 +397,11 @@ hikari_output_init(struct hikari_output *output, struct wlr_output *wlr_output)
 
     output_geometry(output);
 
-    /* ##Action purpose: Load xcursor images at this output's actual scale factor.
-     * wlr_output->scale is set by the backend (e.g., from EDID or sysctl on FreeBSD)
-     * and may differ from the pre-loaded scales in hikari_cursor_init. Calling
-     * wlr_xcursor_manager_load here ensures cursor images are available at the exact
-     * density required by this display. Duplicate loads are no-ops internally. */
+    // [COMMENT] Action purpose: Load xcursor images at this output's actual scale factor.
+    // wlr_output->scale is set by the backend (e.g., from EDID or sysctl on FreeBSD)
+    // and may differ from the pre-loaded scales in hikari_cursor_init. Calling
+    // wlr_xcursor_manager_load here ensures cursor images are available at the exact
+    // density required by this display. Duplicate loads are no-ops internally.
     wlr_xcursor_manager_load(
         hikari_server.cursor.cursor_mgr, (float)wlr_output->scale);
 
@@ -413,7 +413,7 @@ hikari_output_init(struct hikari_output *output, struct wlr_output *wlr_output)
   }
 }
 
-/* ##Function purpose: Finalize and teardown an output, merging its workspace to another active output. */
+// [COMMENT] Function purpose: Finalize and teardown an output, merging its workspace to another active output.
 void
 hikari_output_fini(struct hikari_output *output)
 {

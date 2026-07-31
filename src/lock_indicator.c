@@ -14,7 +14,7 @@
 
 #define HIKARI_PI 3.14159265358979323846
 
-/* ##Function purpose: Initialize a colored indicator circle as a wlr_buffer. */
+// [COMMENT] Function purpose: Initialize a colored indicator circle as a wlr_buffer.
 static struct wlr_buffer *
 init_indicator_circle(float color[static 4])
 {
@@ -46,23 +46,23 @@ init_indicator_circle(float color[static 4])
   unsigned char *data = cairo_image_surface_get_data(surface);
   int stride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, size);
 
-  /* ##Action purpose: Declare wlr_drm_format using only the public API contract:
-   * zero-initialise the struct, then set .format. The .len=0 and .modifiers=NULL
-   * fields indicate no explicit modifier list, allowing the allocator to choose
-   * the best available modifier. Accessing .capacity is forbidden — it is a
-   * private internal field used by wlroots for dynamic array bookkeeping. */
+  // [COMMENT] Action purpose: Declare wlr_drm_format using only the public API contract:
+  // zero-initialise the struct, then set .format. The .len=0 and .modifiers=NULL
+  // fields indicate no explicit modifier list, allowing the allocator to choose
+  // the best available modifier. Accessing .capacity is forbidden -- it is a
+  // private internal field used by wlroots for dynamic array bookkeeping.
   struct wlr_drm_format format = {0};
   format.format = DRM_FORMAT_ARGB8888;
   wlr_buffer = wlr_allocator_create_buffer(hikari_server.allocator, size, size, &format);
   
-  /* ##Condition purpose: Check if buffer allocation succeeded. */
+  // [COMMENT] Action purpose: Check if buffer allocation succeeded.
   if (wlr_buffer != NULL) {
     void *mapped_data;
     uint32_t mapped_format;
     size_t mapped_stride;
-    /* ##Condition purpose: Guard against failed buffer data mapping. */
+    // [COMMENT] Action purpose: Guard against failed buffer data mapping.
     if (wlr_buffer_begin_data_ptr_access(wlr_buffer, WLR_BUFFER_DATA_PTR_ACCESS_WRITE, &mapped_data, &mapped_format, &mapped_stride)) {
-      /* ##Loop purpose: Copy rendered cairo image data into mapped buffer by row. */
+      // [COMMENT] Action purpose: Copy rendered cairo image data into mapped buffer by row.
       for (int y = 0; y < size; y++) {
         memcpy((char*)mapped_data + y * mapped_stride, data + y * stride, size * 4);
       }
@@ -94,7 +94,7 @@ reset_state_handler(void *data)
   return 0;
 }
 
-/* ##Function purpose: Initialize lock indicator state. */
+// [COMMENT] Function purpose: Initialize lock indicator state.
 void
 hikari_lock_indicator_init(struct hikari_lock_indicator *lock_indicator)
 {
@@ -114,11 +114,22 @@ hikari_lock_indicator_init(struct hikari_lock_indicator *lock_indicator)
       hikari_server.event_loop, reset_state_handler, lock_indicator);
 }
 
-/* ##Function purpose: Finalize lock indicator state and destroy buffers. */
+// [COMMENT] Function purpose: Finalize lock indicator state, destroy scene
+// nodes on all outputs, and drop indicator buffers.
 void
 hikari_lock_indicator_fini(struct hikari_lock_indicator *lock_indicator)
 {
   assert(lock_indicator != NULL);
+
+  // [COMMENT] Action purpose: Destroy lock indicator scene nodes on all outputs
+  // to ensure no indicator remains visible when lock mode ends.
+  struct hikari_output *output;
+  wl_list_for_each (output, &hikari_server.outputs, server_outputs) {
+    if (output->lock_indicator_node != NULL) {
+      wlr_scene_node_destroy(&output->lock_indicator_node->node);
+      output->lock_indicator_node = NULL;
+    }
+  }
 
   wlr_buffer_drop(lock_indicator->wait);
   wlr_buffer_drop(lock_indicator->type);
@@ -194,7 +205,7 @@ get_geometry(struct hikari_output *output, struct wlr_box *geometry)
       geometry, &output_geometry, &geometry->x, &geometry->y);
 }
 
-/* ##Function purpose: Update or damage lock indicator rendering on all outputs. */
+// [COMMENT] Function purpose: Update or damage lock indicator rendering on all outputs.
 void
 hikari_lock_indicator_damage(struct hikari_lock_indicator *lock_indicator)
 {
@@ -203,17 +214,17 @@ hikari_lock_indicator_damage(struct hikari_lock_indicator *lock_indicator)
   struct wlr_box geometry;
 
   struct hikari_output *output;
-  /* ##Loop purpose: Iterate over all outputs to update lock indicator nodes. */
+  // [COMMENT] Action purpose: Iterate over all outputs to update lock indicator nodes.
   wl_list_for_each (output, &hikari_server.outputs, server_outputs) {
-    /* ##Condition purpose: Determine if lock indicator should be visible or hidden. */
+    // [COMMENT] Action purpose: Determine if lock indicator should be visible or hidden.
     if (lock_indicator->current != NULL) {
-      /* ##Condition purpose: Create new scene buffer node if none exists. */
+      // [COMMENT] Action purpose: Create new scene buffer node if none exists.
       if (output->lock_indicator_node == NULL) {
          output->lock_indicator_node = wlr_scene_buffer_create(&hikari_server.scene->tree, lock_indicator->current);
       } else {
          wlr_scene_buffer_set_buffer(output->lock_indicator_node, lock_indicator->current);
       }
-      /* ##Condition purpose: Guard against NULL from failed wlr_scene_buffer_create before positioning or enabling. */
+      // [COMMENT] Action purpose: Guard against NULL from failed wlr_scene_buffer_create before positioning or enabling.
       if (output->lock_indicator_node != NULL) {
         get_geometry(output, &geometry);
         wlr_scene_node_set_position(&output->lock_indicator_node->node, geometry.x, geometry.y);
@@ -221,7 +232,7 @@ hikari_lock_indicator_damage(struct hikari_lock_indicator *lock_indicator)
         wlr_scene_node_raise_to_top(&output->lock_indicator_node->node);
       }
     } else {
-      /* ##Condition purpose: Guard against dereferencing a null lock indicator node when hiding. */
+      // [COMMENT] Action purpose: Guard against dereferencing a null lock indicator node when hiding.
       if (output->lock_indicator_node != NULL) {
          wlr_scene_node_set_enabled(&output->lock_indicator_node->node, false);
       }

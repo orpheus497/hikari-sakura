@@ -262,7 +262,8 @@ install: hikari hikari-unlocker share/man/man1/hikari.1
 	install -m 4555 hikari-unlocker ${DESTDIR}/${PREFIX}/bin
 	install -m 644 share/man/man1/hikari.1 ${DESTDIR}/${PREFIX}/share/man/man1
 	install -m 644 share/backgrounds/hikari/hikari_wallpaper.png ${DESTDIR}/${PREFIX}/share/backgrounds/hikari/hikari_wallpaper.png
-	install -m 644 share/wayland-sessions/hikari.desktop ${DESTDIR}/${PREFIX}/share/wayland-sessions/hikari.desktop
+	sed "s,Exec=start-hikari,Exec=${PREFIX}/bin/start-hikari," share/wayland-sessions/hikari.desktop > ${DESTDIR}/${PREFIX}/share/wayland-sessions/hikari.desktop
+	chmod 644 ${DESTDIR}/${PREFIX}/share/wayland-sessions/hikari.desktop
 	install -m 644 etc/pam.d/hikari-unlocker.${OS} ${DESTDIR}/${ETC_PREFIX}/etc/pam.d/hikari-unlocker
 
 uninstall:

@@ -48,7 +48,7 @@ hikari_indicator_bar_fini(struct hikari_indicator_bar *indicator_bar)
   }
 }
 
-/* ##Function purpose: Reposition the indicator bar scene buffer relative to view geometry. */
+// [COMMENT] Function purpose: Reposition the indicator bar scene buffer relative to view geometry.
 void
 hikari_indicator_bar_position(struct hikari_indicator_bar *indicator_bar,
     struct hikari_output *output,
@@ -63,18 +63,18 @@ hikari_indicator_bar_position(struct hikari_indicator_bar *indicator_bar,
       view_geometry->y + indicator_bar->offset);
 }
 
-/* ##Function purpose: Replace the existing scene buffer (if any) and create a new one with rendered text content. */
+// [COMMENT] Function purpose: Replace the existing scene buffer (if any) and create a new one with rendered text content.
 void
 hikari_indicator_bar_update(struct hikari_indicator_bar *indicator_bar,
     struct hikari_output *output,
     const char *text)
 {
-  /* ##Condition purpose: Clean up existing scene buffer before recreation. */
+  // [COMMENT] Action purpose: Clean up existing scene buffer before recreation.
   if (indicator_bar->scene_buffer != NULL) {
     hikari_indicator_bar_fini(indicator_bar);
   }
 
-  /* ##Condition purpose: Skip creation for empty indicator text. */
+  // [COMMENT] Action purpose: Skip creation for empty indicator text.
   if (text == NULL || !strcmp(text, "")) {
     return;
   }
@@ -123,23 +123,23 @@ hikari_indicator_bar_update(struct hikari_indicator_bar *indicator_bar,
   unsigned char *data = cairo_image_surface_get_data(surface);
   int stride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, width);
 
-  /* ##Action purpose: Declare wlr_drm_format using only the public API contract:
-   * zero-initialise the struct, then set .format. The .len=0 and .modifiers=NULL
-   * fields indicate no explicit modifier list, allowing the allocator to choose
-   * the best available modifier. Accessing .capacity is forbidden — it is a
-   * private internal field used by wlroots for dynamic array bookkeeping. */
+  // [COMMENT] Action purpose: Declare wlr_drm_format using only the public API contract:
+  // zero-initialise the struct, then set .format. The .len=0 and .modifiers=NULL
+  // fields indicate no explicit modifier list, allowing the allocator to choose
+  // the best available modifier. Accessing .capacity is forbidden -- it is a
+  // private internal field used by wlroots for dynamic array bookkeeping.
   struct wlr_drm_format format = {0};
   format.format = DRM_FORMAT_ARGB8888;
   struct wlr_buffer *buffer = wlr_allocator_create_buffer(hikari_server.allocator, width, height, &format);
   
-  /* ##Condition purpose: Check if buffer allocation succeeded. */
+  // [COMMENT] Action purpose: Check if buffer allocation succeeded.
   if (buffer != NULL) {
     void *mapped_data;
     uint32_t mapped_format;
     size_t mapped_stride;
-    /* ##Condition purpose: Guard against failed buffer data mapping. */
+    // [COMMENT] Action purpose: Guard against failed buffer data mapping.
     if (wlr_buffer_begin_data_ptr_access(buffer, WLR_BUFFER_DATA_PTR_ACCESS_WRITE, &mapped_data, &mapped_format, &mapped_stride)) {
-      /* ##Loop purpose: Copy rendered cairo image data into mapped buffer by row. */
+      // [COMMENT] Action purpose: Copy rendered cairo image data into mapped buffer by row.
       for (int y = 0; y < height; y++) {
         memcpy((char*)mapped_data + y * mapped_stride, data + y * stride, width * 4);
       }

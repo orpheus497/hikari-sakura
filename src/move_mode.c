@@ -28,7 +28,7 @@ cancel(void)
   }
 }
 
-/* ##Function purpose: Handles keyboard events during move mode. */
+// [COMMENT] Function purpose: Handles keyboard events during move mode.
 static void
 key_handler(
     struct hikari_keyboard *keyboard, struct wlr_keyboard_key_event *event)
@@ -70,7 +70,7 @@ cursor_move(uint32_t time_msec)
   }
 }
 
-/* ##Function purpose: Handles pointer button events during move mode. */
+// [COMMENT] Function purpose: Handles pointer button events during move mode.
 static void
 button_handler(
     struct hikari_cursor *cursor, struct wlr_pointer_button_event *event)

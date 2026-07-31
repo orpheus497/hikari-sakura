@@ -405,7 +405,7 @@ hikari_xwayland_view_init(struct hikari_xwayland_view *xwayland_view,
 #endif
   xwayland_view->surface = xwayland_surface;
 
-  /* ##Step purpose: Create a scene tree for XWayland view border and indicator frame nodes. */
+  // [COMMENT] Action purpose: Create a scene tree for XWayland view border and indicator frame nodes.
   xwayland_view->scene_tree = wlr_scene_tree_create(&hikari_server.scene->tree);
   xwayland_view->view.scene_node = &xwayland_view->scene_tree->node;
   hikari_border_init(&xwayland_view->view.border, xwayland_view->scene_tree);

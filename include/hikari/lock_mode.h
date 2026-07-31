@@ -11,6 +11,7 @@
 struct hikari_lock_mode {
   struct hikari_mode mode;
   struct wl_event_source *disable_outputs;
+  struct wl_event_source *locker_event_source;
   struct hikari_lock_indicator *lock_indicator;
 
   bool outputs_disabled;

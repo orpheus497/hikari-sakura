@@ -4,6 +4,46 @@
 
 ---
 
+## [2026-07-31 16:17] Decision: Non-blocking PAM Authentication I/O (BUG-6 Resolved)
+
+* **Context:** `submit_password()` in `lock_mode.c` used a synchronous `read(locker_pipe[1][0], &success, sizeof(bool))` that blocked the entire Wayland event loop during `pam_authenticate()`. PAM's `pam_unix.so` may delay 1-3 seconds on failure, freezing all rendering and input.
+* **Decision:** Replaced blocking `read()` with `wl_event_loop_add_fd()`. A new `locker_result_handler()` callback fires asynchronously when `hikari-unlocker` writes the result boolean. The compositor event loop continues processing frames and input during authentication.
+* **Implementation:** Added `locker_event_source` field to `struct hikari_lock_mode`. The fd source is registered per-submission and cleaned up in both the result handler and the `cancel()` path.
+* **Impact:** Resolves BUG-6 from Phase 11. Compositor remains responsive during password verification.
+
+---
+
+## [2026-07-31 16:17] Decision: PAM Config — Use `auth include system` Instead of `auth include passwd`
+
+* **Context:** `hikari-unlocker.FreeBSD` contained `auth include passwd`. Live system verification confirmed FreeBSD's `/etc/pam.d/passwd` explicitly states: "passwd(1) does not use the auth, account or session services." The file contains only a `password` stack (for changing passwords), not an `auth` stack. This means `pam_authenticate()` would always fail because OpenPAM finds no auth rules in the include chain.
+* **Decision:** Changed to `auth include system`. The `/etc/pam.d/system` file contains the correct auth chain: `auth required pam_unix.so no_warn try_first_pass nullok`.
+* **Impact:** Screen unlock authentication will now work correctly on FreeBSD.
+
+---
+
+## [2026-07-31 16:12] Research Finding: ZFS Automount Overrides fstab tmpfs on /tmp
+
+* **Context:** Live system testing revealed that although `/etc/fstab` contains a `tmpfs /tmp` entry, `stat -f '%T' /tmp` reports `zfs`. The mount table shows BOTH `tmpfs on /tmp` and `zroot/tmp on /tmp` — ZFS automount runs after fstab and mounts the dataset on top of the tmpfs.
+* **Technical Finding:** `posix_fallocate()` returns `EOPNOTSUPP (45)` on both `/var/run/user/1001` (ZFS) and `/tmp` (ZFS over tmpfs). However, `shm_open()` + `posix_fallocate()` and `memfd_create()` + `posix_fallocate()` both succeed — POSIX SHM and anonymous memory bypass ZFS entirely. wlroots 0.20 uses `shm_open()` (confirmed via `nm -D`), not filesystem-backed temp files.
+* **Decision:** Fix is `sudo zfs set canmount=noauto zroot/tmp` (system admin, one command). Added ZFS detection warning to `start-hikari.sh` and expanded README with step-by-step instructions.
+* **Impact:** Users with ZFS root will get actionable warnings instead of silent client failures.
+
+---
+
+## [2026-07-31 15:46] Research Finding: XDG_RUNTIME_DIR on ZFS Incompatible with Wayland
+
+* **Context:** Deep investigation into whether mounting XDG on tmpfs works with ZFS or needs re-addressing. System analysis revealed FreeBSD 15.1-RELEASE with full ZFS root (`zroot`). `/var/run/user/1001` (set by `pam_xdg` via `/etc/pam.d/system`) resides on the root ZFS dataset. `/tmp` is also ZFS-backed (`zroot/tmp`). The only tmpfs mount on the system is `/compat/linux/dev/shm` (Linux compat layer).
+* **Technical Finding:** ZFS on FreeBSD does not support `posix_fallocate()` — returns `EINVAL` (since FreeBSD r325320, 2017). ZFS's Copy-on-Write architecture cannot provide the pre-allocation guarantees POSIX requires. Wayland clients use `posix_fallocate()` to pre-allocate `wl_shm` shared memory buffers inside `XDG_RUNTIME_DIR`. When `XDG_RUNTIME_DIR` is on ZFS, these allocations fail, causing client crashes or rendering failures.
+* **Impact on hikari:** The `start-hikari.sh` fallback to `/tmp/hikari-runtime-$UID` does not resolve the issue because `/tmp` is also ZFS. The fallback also never triggers because `pam_xdg` already sets `XDG_RUNTIME_DIR`. Runtime testing is blocked until this is resolved.
+* **Decision:** Must implement a tmpfs mount for `XDG_RUNTIME_DIR`. Four options identified:
+  - **Option A (Recommended):** Mount tmpfs at `/var/run/user` via `/etc/fstab`
+  - **Option B:** Update `start-hikari.sh` to use a verified tmpfs-backed path (e.g., `/dev/shm`)
+  - **Option C:** Replace `zroot/tmp` with tmpfs at `/tmp`
+  - **Option D:** Mount tmpfs in the wrapper script (requires privileges)
+* **Status:** Pending implementation — awaiting user direction on preferred option.
+
+---
+
 ## [2026-07-31 14:49] Decision: wlr_session Ownership — Do Not Destroy Separately
 
 * **Context:** `hikari_server_stop()` and `hikari_server_prepare_privileged()` error path both called `wlr_session_destroy()` after `wlr_backend_destroy()`. Reading the wlroots 0.20 `backend.h` header confirmed `wlr_backend_autocreate` creates a session that is **owned by the backend**. The `wlr_session` struct has an internal `event_loop_destroy` listener for cleanup. The tinywl 0.20 reference implementation never calls `wlr_session_destroy`. The double destroy is a use-after-free.
@@ -95,12 +135,14 @@
 ---
 
 ## [2026-07-29 15:16] Decision: Revert DOD SoA Tables and Object Pool Allocator
+
 * **Context:** The custom object pool allocator and DOD SoA view state/geometry tables added complexity without proven benefit. The wlr_scene migration made the custom renderer (which DOD optimized for) obsolete.
 * **Decision:** Removed pool.c/pool.h, reverted view flags to local struct field, removed all dod_id/view_state indirection.
 
 ---
 
 ## [2026-07-29 15:16] Decision: Migrate Rendering to wlr_scene Graph
+
 * **Context:** wlroots 0.18+ provides wlr_scene for automatic damage tracking and composition, eliminating the need for manual renderer passes.
 * **Decision:** Gutted renderer.c, migrated borders to wlr_scene_rect nodes, lock indicator and backgrounds to wlr_scene_buffer nodes. Scene graph handles damage tracking and output composition automatically.
 
@@ -122,9 +164,11 @@
 
 ---
 
-## [2026-07-29 04:47] Decision: Sheet Pool Capacity & Array Contiguity
+## [2026-07-29 04:47] Decision: Sheet Pool Capacity & Array Contiguity [SUPERSEDED]
+
 * **Context:** `hikari_workspace` allocates its 10 sheets simultaneously via `calloc(HIKARI_NR_OF_SHEETS, sizeof(struct hikari_sheet))` to hold them in a contiguous array format. Our Slab allocator traditionally manages single instances per block.
 * **Decision:** To guarantee array contiguity without modifying `struct hikari_workspace` pointer mechanics or breaking `wl_list`, the `sheet_pool` `item_size` in `src/server.c` is initialized to `HIKARI_NR_OF_SHEETS * sizeof(struct hikari_sheet)`. A single allocation from the pool yields the contiguous block necessary for the workspace arrays.
+* **Superseded by:** The object pool allocator (`pool.c`, `pool.h`) was removed entirely in the 2026-07-29 15:16 decision "Revert DOD SoA Tables and Object Pool Allocator". Sheet allocation now uses standard `hikari_malloc`/`calloc`.
 
 ---
 
@@ -139,6 +183,7 @@
 ---
 
 ## [2026-07-29 03:15] Decision: Devdocs Separation of Concerns
+
 * **Context:** `AGENTS.md` mandates absolute separation of AI tracking docs (`.devdocs/`) from product documentation (`docs/`) and code in root.
 * **Decision:** Keep all operational and tracking files inside `.devdocs/` and user/product technical documentation inside `.devdocs/docs/`.
 
@@ -147,6 +192,7 @@
 ## Design Implementation Requests
 
 ### 1. Non-Blocking PAM I/O for `hikari-unlocker` (Bug 6)
+
 * **Context / Clarification:** Currently, PAM authentication blocks the main `wl_event_loop`, freezing the compositor. The structural solution is to fork `hikari-unlocker` or use a pipe so the compositor can continue rendering while waiting for authentication over `wl_event_loop_add_fd`.
 * **Tabled Questions:**
   * Q: How should we bridge OpenPAM's inherently synchronous `pam_authenticate` calls with the asynchronous `wl_event_loop` in the compositor?
@@ -154,6 +200,7 @@
   * Q: Does FreeBSD provide asynchronous PAM extensions we could leverage?
 
 ### 2. PAM Verification (`hikari-unlocker`)
+
 * **Context / Clarification:** The unlocker requires root privileges to read `/etc/master.passwd` via OpenPAM on FreeBSD. We must ensure the binary is owned by `root:wheel` and has the `4555` setuid bit. Testing this requires a live FreeBSD system; it cannot be simulated inside an unprivileged sandbox.
 * **Tabled Questions:**
   * Q: Are there specific native FreeBSD testing harnesses for Wayland surfaces we should use instead of manual Wayland clients?

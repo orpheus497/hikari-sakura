@@ -1,35 +1,46 @@
 # Hikari Project Briefing
 
-*Last Updated:* 2026-07-31 15:15
+*Last Updated:* 2026-07-31 15:53
 
 ## Current Status
 
-- **Phase:** Phase 11 — Startup Wiring Deep Investigation
+- **Phase:** Phase 12 — XDG/tmpfs/ZFS Resolution & Runtime Validation
 - **Branch:** wlroots-0.17.1
-- **Overall progress:** 99% (startup fixes applied; awaiting FreeBSD build validation)
-- **Target OS:** FreeBSD 13.x/14.x+
-- **Current step:** Verifying 7 bug fixes related to seatd/session, output mode, D-Bus, and PAM unlocker.
+- **Overall progress:** 99% (clean build achieved at Phase 6; runtime blocked by tmpfs/ZFS issue)
+- **Target OS:** FreeBSD 15.1-RELEASE (ZFS root)
+- **Current step:** Resolve XDG_RUNTIME_DIR tmpfs/ZFS incompatibility before runtime validation.
 
 ## Session Briefing
 
 ### Accomplishments (this session)
-- Consolidated devdocs (merged SUMMARIES.md, TESTS.md, and reources.md into AGENTS.md compliant structure).
-- Synchronized all devdocs timestamps and phase statuses to Phase 11.
-- Analyzed startup wiring and fixed 5 bugs (session double-free, output mode, desktop file, stat stderr, Makefile install).
+
+- Deep online research into XDG_RUNTIME_DIR/tmpfs/ZFS compatibility on FreeBSD.
+- Confirmed system state: FreeBSD 15.1-RELEASE, full ZFS root (`zroot`), `/var/run/user/1001` on ZFS, `/tmp` on ZFS (`zroot/tmp`), wlroots 0.20.2 installed via pkg.
+- Discovered critical blocker: `posix_fallocate()` returns `EINVAL` on ZFS — all Wayland shared memory operations will fail.
+- Verified `pam_xdg.so` is active in `/etc/pam.d/system` — creates `/var/run/user/1001` but does NOT mount tmpfs.
+- Read every file in the codebase (120+ source files, headers, configs, devdocs).
+- Confirmed all 13+ wlroots 0.20 API breaking changes are resolved.
+- Confirmed `start-hikari.sh` fallback to `/tmp/hikari-runtime-$UID` also fails because `/tmp` is ZFS.
+- Produced comprehensive research report with 4 solution options.
 
 ### Blockers
-- Build validation is temporarily blocked by a local terminal environment error.
+
+- **CRITICAL:** `XDG_RUNTIME_DIR` (`/var/run/user/1001`) is on ZFS — `posix_fallocate()` will fail for Wayland clients. This affects the FreeBSD build runtime environment, not the compilation itself.
+- **CRITICAL:** `start-hikari.sh` fallback to `/tmp` also on ZFS — same failure.
 - BUG-6 non-blocking PAM I/O requires a future architectural change.
 
 ### Recent Decisions
-- Devdocs structure explicitly enforces 7 core files. Extraneous files merged and deprecated.
-- Session is not separately destroyed; backend owns it.
-- Output mode selection uses EDID-preferred mode instead of the first available.
+
+- Research confirmed: XDG on tmpfs with ZFS needs to be re-addressed — cannot rely on current system configuration.
+- wlroots 0.20.2 installation verified correct via pkg-config, library, and headers.
+- Four solution options identified (tmpfs on `/var/run/user` recommended).
 
 ### Next Steps
-1. Perform build validation of the compositor on FreeBSD.
-2. Runtime testing on a Wayland session.
-3. Test PAM unlocker (`hikari-unlocker`).
+
+1. **Resolve tmpfs/ZFS issue:** Implement system-level tmpfs mount or update `start-hikari.sh` to detect ZFS and use a tmpfs-backed path. (~30 min)
+2. **Build validation:** Execute `bmake` to confirm Phase 11 changes compile. (~5 min)
+3. **Runtime testing:** Launch hikari on FreeBSD Wayland session with tmpfs-backed XDG_RUNTIME_DIR. (~15 min)
+4. **PAM unlocker verification:** Test `hikari-unlocker` with OpenPAM. (~10 min)
 
 ## What Works
 
@@ -40,7 +51,7 @@
 - Makefile targets wlroots-0.20 via pkg-config.
 - Stub files (`pool.c`, `pool.h`, `renderer.c`, `renderer.h`) deleted.
 - AGENTS.md code documentation compliance prefixes added to modified source files (`cursor.c`, `output.c`, `server.c`, `switch.c`, `xdg_view.c`).
-- **Clean build:** Both `hikari` and `hikari-unlocker` compile and link successfully against wlroots 0.20.
+- **Clean build (Phase 6):** Both `hikari` and `hikari-unlocker` compiled and linked successfully against wlroots 0.20. Phase 11 fixes pending revalidation via `bmake`.
 
 ## wlroots 0.20 API Fixes Applied
 
@@ -68,5 +79,7 @@
 
 ## Remaining Work
 
-- Runtime testing on FreeBSD Wayland session (crash fix applied — needs revalidation).
+- **CRITICAL:** Resolve tmpfs/ZFS incompatibility for XDG_RUNTIME_DIR.
+- Runtime testing on FreeBSD Wayland session.
 - PAM unlocker verification.
+- Build validation (Phase 11 fixes).

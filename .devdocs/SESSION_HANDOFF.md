@@ -4,6 +4,112 @@
 
 ---
 
+## Session Date: 2026-07-31 16:17 — tmpfs/ZFS & PAM Fixes
+
+* **Phase:** Phase 12 — XDG/tmpfs/ZFS Resolution & PAM Fixes
+* **Accomplishments:**
+  - Deep research into tmpfs/ZFS incompatibility and PAM authentication on FreeBSD.
+  - **Live system testing:** Confirmed ZFS automount overrides fstab tmpfs on `/tmp`. Confirmed `posix_fallocate()` returns EOPNOTSUPP (45) on ZFS. Confirmed `shm_open()` and `memfd_create()` both work — wlroots uses `shm_open()`.
+  - **PAM config fix:** Changed `hikari-unlocker.FreeBSD` from `auth include passwd` to `auth include system`. FreeBSD's passwd PAM has no auth stack.
+  - **Non-blocking PAM I/O (BUG-6):** Replaced blocking `read()` in `submit_password()` with `wl_event_loop_add_fd()`. Added `locker_result_handler()` callback. Added `locker_event_source` field to `struct hikari_lock_mode`. Cleanup in both handler and `cancel()` path.
+  - **ZFS detection:** Added `stat -f '%T'` check in `start-hikari.sh` that warns users if `XDG_RUNTIME_DIR` is on ZFS.
+  - **README update:** Expanded ZFS/tmpfs section with step-by-step instructions (canmount, fstab, verification).
+  - **Comment standardization:** Converted `hikari_unlocker.c` prefixes to `[COMMENT]` format.
+  - **Build:** Clean `make` on FreeBSD 15.1 — both binaries compile and link.
+* **Modified Files:**
+  - `etc/pam.d/hikari-unlocker.FreeBSD` — auth include system
+  - `src/lock_mode.c` — non-blocking PAM I/O
+  - `include/hikari/lock_mode.h` — locker_event_source field
+  - `start-hikari.sh` — ZFS detection warning
+  - `README.md` — ZFS/tmpfs step-by-step fix
+  - `hikari_unlocker.c` — comment prefix standardization
+  - `.devdocs/` — PROGRESS, DECISIONS_LOG, SESSION_HANDOFF
+* **Blockers:** System admin action needed (`sudo zfs set canmount=noauto zroot/tmp`) before runtime test.
+* **Next Steps:**
+  1. Apply ZFS canmount fix and reboot to get tmpfs on `/tmp`
+  2. `make install` + set SUID on hikari-unlocker + install PAM config
+  3. Launch hikari from TTY and verify Wayland session starts
+  4. Test lock mode (Meta+L) → password entry → verify non-blocking unlock
+
+---
+
+## Session Date: 2026-07-31 15:53 — Verification & Fix Pass
+
+* **Phase:** Phase 12 — XDG/tmpfs/ZFS Resolution & Runtime Validation
+* **Accomplishments:**
+  - Verified each finding from the review against current code. Fixed still-valid issues, skipped invalid ones with reasons.
+  - **AGENTS.md:** Added trailing newline, MD022 blank lines after 9 headings, updated FOSS Compliance policy to allow pango (LGPL-2.1) and cairo (LGPL-2.1/MPL-1.1) as explicit exceptions.
+  - **README.md:** Updated 14 shell code fences to `sh` language identifier, removed Linux-specific `(e)logind` reference from privilege handling, documented wlroots 0.20 exact version.
+  - **start-hikari.sh:** Replaced all `##` prefix annotations with `# [COMMENT]` format per AGENTS.md. Removed non-standard `##Condition purpose:` annotations. Restructured XDG_RUNTIME_DIR validation to check ALL paths (caller-supplied and generated) unconditionally before exec.
+  - **Makefile:** Desktop file install now uses `sed` to substitute absolute `${PREFIX}/bin/start-hikari` path into `Exec=` value.
+  - **lock_indicator.c:** Updated `hikari_lock_indicator_fini` to destroy scene nodes on all outputs before dropping buffers. Standardized comment prefixes to `[COMMENT]` format.
+  - **output.c:** Standardized comment prefixes. Skipped `wlr_output_layout_add_output` change — `wlr_output_layout_add` is the correct wlroots 0.20 API.
+  - **server.c:** Standardized backend-cleanup comment prefixes.
+  - **BLUEPRINT.md:** Qualified TC-BUILD-01/TC-PKG-01 with Phase 6 scope. Corrected TC-DOC-01 to require only three AGENTS.md-defined prefixes. Added MD022 blank lines.
+  - **BRIEFING.md:** Added time estimates to Next Steps. Qualified clean build as Phase 6 historical. Clarified blocker scope.
+  - **PLANS.md:** Updated PAM Verification to use absolute installed path with provenance check per BLUEPRINT.md protocol.
+  - **PROGRESS.md:** Distinguished Phase 6 initial build from Phase 12 revalidation.
+  - **DECISIONS_LOG.md:** Marked Sheet Pool Capacity as [SUPERSEDED] with cross-reference to pool removal. Added MD022 blank lines after 5 headings.
+  - **SESSION_HANDOFF.md:** Added missing 15:30 session entry. Added MD022 blank lines after 10 session headings.
+* **Modified Files:**
+  - `AGENTS.md` — FOSS policy, MD022, trailing newline
+  - `README.md` — Code fences, privilege text, wlroots version
+  - `start-hikari.sh` — Comment prefixes, validation restructure
+  - `Makefile` — Desktop file absolute path install
+  - `src/lock_indicator.c` — fini cleanup, comment prefixes
+  - `src/output.c` — Comment prefixes
+  - `src/server.c` — Comment prefixes
+  - `.devdocs/BLUEPRINT.md` — Test case qualifications, TC-DOC-01 fix, MD022
+  - `.devdocs/BRIEFING.md` — Time estimates, build qualification, blocker scope
+  - `.devdocs/PLANS.md` — PAM verification absolute path
+  - `.devdocs/PROGRESS.md` — Phase 6 qualification
+  - `.devdocs/DECISIONS_LOG.md` — Sheet Pool [SUPERSEDED], MD022
+  - `.devdocs/SESSION_HANDOFF.md` — Missing entry, MD022
+* **Skipped (with reasons):**
+  - `output.c` `wlr_output_layout_add_output` — Not a wlroots 0.20 API; `wlr_output_layout_add` is correct.
+* **Remaining Work:** tmpfs/ZFS resolution, build validation, runtime test, PAM verification.
+
+---
+
+## Session Date: 2026-07-31 15:30 — Devdocs Consolidation & Synchronization
+
+* **Phase:** Phase 11 → Phase 12 transition
+* **Accomplishments:**
+  - Consolidated devdocs structure: merged `SUMMARIES.md`, `TESTS.md`, and `reources.md` into AGENTS.md-compliant 7-file structure.
+  - Synchronized all devdocs timestamps and phase statuses to Phase 11.
+  - Updated `BLUEPRINT.md` with test specifications and resource index.
+  - Updated `TODOS.md` with active task list.
+  - Updated `PLANS.md` with forward strategy.
+* **Modified Files:**
+  - `.devdocs/BRIEFING.md`, `.devdocs/BLUEPRINT.md`, `.devdocs/PLANS.md`, `.devdocs/TODOS.md`
+* **Decisions:** Devdocs structure enforces exactly 7 core files per AGENTS.md. Extraneous files merged and deprecated.
+* **Remaining Work:** XDG/tmpfs/ZFS research (initiated in next session).
+
+---
+
+## Session Date: 2026-07-31 15:46 — XDG/tmpfs/ZFS Research & Full Codebase Audit
+
+* **Phase:** Phase 12 — XDG/tmpfs/ZFS Resolution & Runtime Validation
+* **Accomplishments:**
+  - **Deep online research** into XDG_RUNTIME_DIR/tmpfs/ZFS compatibility on FreeBSD, wlroots 0.20 installation requirements, and API migration patterns.
+  - **System state confirmed:** FreeBSD 15.1-RELEASE, full ZFS root (`zroot/ROOT/default`), `/tmp` on ZFS (`zroot/tmp`), `/var/run/user/1001` on ZFS (part of root dataset), wlroots 0.20.2 installed via `wlroots020` FreeBSD package.
+  - **Critical discovery:** `posix_fallocate()` returns `EINVAL` on ZFS (by design since FreeBSD r325320, 2017). All Wayland `wl_shm` shared memory buffer allocations created inside `XDG_RUNTIME_DIR` will fail when that directory lives on ZFS. This is the **primary runtime blocker**.
+  - **`start-hikari.sh` fallback also fails:** The script falls back to `/tmp/hikari-runtime-$UID` when `XDG_RUNTIME_DIR` is unset, but `/tmp` is also a ZFS dataset (`zroot/tmp`). Additionally, `pam_xdg` sets `XDG_RUNTIME_DIR=/var/run/user/1001` (confirmed in `/etc/pam.d/system`), so the fallback never triggers anyway.
+  - **Only tmpfs on system:** `/compat/linux/dev/shm` — for Linux compatibility layer only, not native FreeBSD use.
+  - **wlroots 0.20.2 verified:** Library at `/usr/local/lib/libwlroots-0.20.so`, headers at `/usr/local/include/wlroots-0.20/wlr/`, pkg-config resolves correctly. All 13+ API breaking changes confirmed resolved in the codebase.
+  - **Full codebase read:** All 120+ source files, 64 headers, Makefile, start-hikari.sh, config files, PAM configs, protocol XMLs, and all 7 devdocs files read and audited.
+  - **Produced research report:** Comprehensive artifact with system analysis, 4 solution options (Option A recommended: tmpfs mount on `/var/run/user` via fstab), and risk assessment.
+* **Modified Files:** None — read-only research session.
+  - `.devdocs/BRIEFING.md` — Updated to Phase 12
+  - `.devdocs/SESSION_HANDOFF.md` — This entry
+  - `.devdocs/DECISIONS_LOG.md` — Added tmpfs/ZFS research finding
+  - `.devdocs/TODOS.md` — Added tmpfs resolution task
+  - `.devdocs/PROGRESS.md` — Added Phase 12 entry
+* **Decisions:** XDG_RUNTIME_DIR on ZFS confirmed incompatible with Wayland. Four options proposed; Option A (tmpfs at `/var/run/user`) recommended.
+* **Remaining Work:** Implement tmpfs fix, build validation, runtime test, PAM verification.
+
+---
+
 ## Session Date: 2026-07-31 14:49 — Startup Wiring Analysis & Critical Bug Fixes
 
 * **Phase:** Phase 11 — Startup Wiring Deep Investigation
@@ -239,6 +345,7 @@
 ---
 
 ## Session Date: 2026-07-29 15:32
+
 * **Phase:** Verification & Issue Fixes
 * **Accomplishments:**
   - Migrated `indicator_frame` from raw `wlr_box` to `wlr_scene_rect` nodes (init/fini/show/hide/refresh_geometry)
@@ -293,6 +400,7 @@
 ---
 
 ## Session Date: 2026-07-29 11:13
+
 * **Phase:** User Audit Requests & Wlroots 0.18+ / 0.20 API Migration (Continued)
 * **Accomplishments:**
   * Executed the approved implementation plan.
@@ -305,6 +413,7 @@
 ---
 
 ## Session Date: 2026-07-29 10:57
+
 * **Phase:** User Audit Requests & Wlroots 0.18+ / 0.20 API Migration (Continued)
 * **Accomplishments:**
   * Addressed user inline feedback across `.devdocs/` and `src/`.
@@ -317,6 +426,7 @@
 ---
 
 ## Session Date: 2026-07-29 06:00
+
 * **Phase:** Phase 8 DOD Struct-of-Arrays (SoA) View Table Refactoring & Phase 6 Build Verification
 * **Accomplishments:**
   * Implemented Hybrid Data-Oriented Design (DOD) geometry caching in `view.c` and hooked up O(1) visibility vector bitmasking in `workspace.c`.
@@ -326,6 +436,7 @@
 ---
 
 ## Session Date: 2026-07-29 05:03
+
 * **Phase:** Phase 5 Wlroots 0.18+ / 0.20 API Migration
 * **Accomplishments:**
   * Responded to user directive to target the latest stable `wlroots` release (`0.18+ / 0.20`) rather than the outdated `0.17`.
@@ -335,6 +446,7 @@
 ---
 
 ## Session Date: 2026-07-29 04:57
+
 * **Phase:** Phase 5 Wlroots 0.17+ API Migration & FreeBSD Dependencies
 * **Accomplishments:**
   * Responded to user directive to properly audit the `wlroots >= 0.17.0` flag introduced earlier.
@@ -344,6 +456,7 @@
 ---
 
 ## Session Date: 2026-07-29 04:43
+
 * **Phase:** Phase 4 Memory-Optimized Hybrid DOD Refactoring & FreeBSD Exclusivity
 * **Accomplishments:**
   * Adopted FreeBSD native `dev/evdev` headers over Linux evdev headers.
@@ -353,6 +466,7 @@
 ---
 
 ## Session Date: 2026-07-29 03:22
+
 * **Phase:** Phase 2 Deep Audit & FreeBSD Execution Strategy
 * **Accomplishments:**
   * Inspected all 65 header files in `include/hikari/` and 56 source files in `src/`.
@@ -362,6 +476,7 @@
 ---
 
 ## Session Date: 2026-07-29 03:17
+
 * **Phase:** Phase 2 & 3 Execution (Product Documentation & AGENTS.md Formatting)
 * **Accomplishments:**
   * Created four comprehensive technical manuals in `docs/` detailing FreeBSD system setup, architecture wiring, Data-Oriented Design (DOD) memory layouts, and modernization guidelines.
@@ -369,6 +484,7 @@
 ---
 
 ## Session Date: 2026-07-29 03:15
+
 * **Phase:** Phase 1 (Initialization & Deep Analysis)
 * **Accomplishments:**
   * Created initial `.devdocs/` operational workspace structure.

@@ -34,7 +34,7 @@ hikari_indicator_fini(struct hikari_indicator *indicator)
   hikari_indicator_bar_fini(&indicator->mark);
 }
 
-/* ##Function purpose: Finalize indicator and hide the indicator frame on the associated view. */
+// [COMMENT] Function purpose: Finalize indicator and hide the indicator frame on the associated view.
 void
 hikari_indicator_fini_for_view(
     struct hikari_indicator *indicator, struct hikari_view *view)
@@ -143,6 +143,6 @@ hikari_indicator_position(
   hikari_indicator_bar_position(&indicator->group, output, geometry);
   hikari_indicator_bar_position(&indicator->mark, output, geometry);
 
-  /* ##Action purpose: Show the indicator frame overlay around the view when indicators are active. */
+  // [COMMENT] Action purpose: Show the indicator frame overlay around the view when indicators are active.
   hikari_indicator_frame_show(&view->indicator_frame, indicator->title.color);
 }

@@ -336,7 +336,7 @@ done:
 
   struct hikari_output *output = layer->output;
 
-  /* ##Condition purpose: Skip popup damage when output is disabled. */
+  // [COMMENT] Action purpose: Skip popup damage when output is disabled.
   if (!output->enabled) {
     return;
   }

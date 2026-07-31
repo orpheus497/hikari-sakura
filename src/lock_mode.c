@@ -11,6 +11,7 @@
 #include <unistd.h>
 
 #include <wlr/types/wlr_seat.h>
+#include <errno.h>
 #include <wayland-server-core.h>
 #include <wlr/backend.h>
 
@@ -110,17 +111,41 @@ delete_char(void)
   }
 }
 
-static void
-submit_password(void)
+// [COMMENT] Function purpose: Handle the authentication result from hikari-unlocker
+// asynchronously via the Wayland event loop. This callback fires when data is
+// available on the locker result pipe, preventing the compositor from blocking
+// during PAM password verification.
+static int
+locker_result_handler(int fd, uint32_t mask, void *data)
 {
-  struct hikari_lock_mode *mode = get_mode();
-  size_t password_length = strnlen(input_buffer, 1023) + 1;
+  struct hikari_lock_mode *mode = data;
   bool success = false;
 
-  hikari_lock_indicator_set_verify(mode->lock_indicator);
-  write(locker_pipe[0][1], input_buffer, password_length);
-  clear_buffer();
-  read(locker_pipe[1][0], &success, sizeof(bool));
+  if (mask & WL_EVENT_READABLE) {
+    ssize_t n;
+    do {
+      n = read(fd, &success, sizeof(bool));
+    } while (n == -1 && errno == EINTR);
+
+    if (n <= 0) {
+      // [COMMENT] Action purpose: Treat read failure or EOF as authentication
+      // failure -- hikari-unlocker may have crashed or been killed.
+      success = false;
+    }
+  }
+
+  if (mask & WL_EVENT_HANGUP) {
+    // [COMMENT] Action purpose: Pipe closed by hikari-unlocker without sending
+    // a result -- treat as fatal authentication failure.
+    success = false;
+  }
+
+  // [COMMENT] Action purpose: Remove the fd event source now that we have a
+  // result. The source must be cleaned up before closing the pipe fds.
+  if (mode->locker_event_source != NULL) {
+    wl_event_source_remove(mode->locker_event_source);
+    mode->locker_event_source = NULL;
+  }
 
   if (success) {
     int status;
@@ -130,9 +155,36 @@ submit_password(void)
 
     hikari_server_enter_normal_mode(NULL);
   } else {
-
     hikari_lock_indicator_set_deny(mode->lock_indicator);
   }
+
+  return 0;
+}
+
+// [COMMENT] Function purpose: Send the password to hikari-unlocker and register
+// a non-blocking event source for the authentication result.
+static void
+submit_password(void)
+{
+  struct hikari_lock_mode *mode = get_mode();
+  size_t password_length = strnlen(input_buffer, 1023) + 1;
+
+  hikari_lock_indicator_set_verify(mode->lock_indicator);
+  write(locker_pipe[0][1], input_buffer, password_length);
+  clear_buffer();
+
+  // [COMMENT] Action purpose: Register the locker result pipe with the Wayland
+  // event loop for non-blocking read. The locker_result_handler will fire when
+  // hikari-unlocker writes the success/failure boolean back.
+  if (mode->locker_event_source != NULL) {
+    wl_event_source_remove(mode->locker_event_source);
+  }
+  mode->locker_event_source = wl_event_loop_add_fd(
+      hikari_server.event_loop,
+      locker_pipe[1][0],
+      WL_EVENT_READABLE | WL_EVENT_HANGUP,
+      locker_result_handler,
+      mode);
 }
 
 static void
@@ -173,7 +225,7 @@ enable_outputs(void)
   mode->outputs_disabled = false;
 }
 
-/* ##Function purpose: Handles keyboard events for lock mode authentication. */
+// [COMMENT] Function purpose: Handles keyboard events for lock mode authentication.
 static void
 key_handler(
     struct hikari_keyboard *keyboard, struct wlr_keyboard_key_event *event)
@@ -242,7 +294,7 @@ static void
 modifiers_handler(struct hikari_keyboard *keyboard)
 {}
 
-/* ##Function purpose: Ignores pointer button events during lock mode. */
+// [COMMENT] Function purpose: Ignores pointer button events during lock mode.
 static void
 button_handler(
     struct hikari_cursor *cursor, struct wlr_pointer_button_event *event)
@@ -272,6 +324,13 @@ static void
 cancel(void)
 {
   struct hikari_lock_mode *mode = get_mode();
+
+  // [COMMENT] Action purpose: Clean up the locker event source if authentication
+  // is still pending when lock mode is cancelled.
+  if (mode->locker_event_source != NULL) {
+    wl_event_source_remove(mode->locker_event_source);
+    mode->locker_event_source = NULL;
+  }
 
   wl_event_source_remove(mode->disable_outputs);
   mode->disable_outputs = NULL;
@@ -316,6 +375,7 @@ hikari_lock_mode_init(struct hikari_lock_mode *lock_mode)
   lock_mode->mode.cursor_move = cursor_move;
 
   lock_mode->lock_indicator = NULL;
+  lock_mode->locker_event_source = NULL;
 
   mlock(input_buffer, BUFFER_SIZE);
   clear_buffer();

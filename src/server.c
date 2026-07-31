@@ -1,4 +1,4 @@
-/* ##Script function and purpose: Core Hikari Wayland server initialization, signal management, and main loop handling. */
+// [COMMENT] Script function and purpose: Core Hikari Wayland server initialization, signal management, and main loop handling.
 
 #include <hikari/server.h>
 
@@ -435,7 +435,7 @@ hikari_server_node_at(double x,
 void
 hikari_server_cursor_focus(void)
 {
-  /* ##Action purpose: Retrieve monotonic clock time and convert to milliseconds for Wayland event timestamping. */
+  // [COMMENT] Action purpose: Retrieve monotonic clock time and convert to milliseconds for Wayland event timestamping.
   struct timespec now;
   clock_gettime(CLOCK_MONOTONIC, &now);
   uint32_t time_msec = (uint32_t)(now.tv_sec * 1000LL + now.tv_nsec / 1000000LL);
@@ -537,28 +537,28 @@ server_decoration_handler(struct wl_listener *listener, void *data)
 {
   struct wlr_server_decoration *wlr_decoration = data;
 
-  /* ##Condition purpose: Guard against surfaces without a role — they cannot be XDG toplevels. */
+  // [COMMENT] Action purpose: Guard against surfaces without a role — they cannot be XDG toplevels.
   if (wlr_decoration->surface->role == NULL) {
     return;
   }
 
-  /* ##Action purpose: Retrieve the XDG surface from the wlr_surface using the wlroots 0.17+ helper
-   * to safely determine if this decoration belongs to an XDG toplevel. The
-   * wl_container_of pattern cannot be used here because hikari_view embeds
-   * wlr_surface as a pointer field, not as a value. */
+  // [COMMENT] Action purpose: Retrieve the XDG surface from the wlr_surface using the wlroots 0.17+ helper
+  // to safely determine if this decoration belongs to an XDG toplevel. The
+  // wl_container_of pattern cannot be used here because hikari_view embeds
+  // wlr_surface as a pointer field, not as a value.
   struct wlr_xdg_surface *xdg_surface =
       wlr_xdg_surface_try_from_wlr_surface(wlr_decoration->surface);
 
-  /* ##Condition purpose: Guard against non-XDG surfaces (e.g. layer shell) before accessing XDG-specific data. */
+  // [COMMENT] Action purpose: Guard against non-XDG surfaces (e.g. layer shell) before accessing XDG-specific data.
   if (xdg_surface == NULL) {
     return;
   }
 
-  /* ##Action purpose: Retrieve the hikari_xdg_view back-reference stored in xdg_surface->data
-   * by hikari_xdg_view_init. This is the canonical lookup path for XDG views. */
+  // [COMMENT] Action purpose: Retrieve the hikari_xdg_view back-reference stored in xdg_surface->data
+  // by hikari_xdg_view_init. This is the canonical lookup path for XDG views.
   struct hikari_xdg_view *xdg_view = xdg_surface->data;
 
-  /* ##Condition purpose: Guard against a decoration event arriving before the xdg_view is fully initialized. */
+  // [COMMENT] Action purpose: Guard against a decoration event arriving before the xdg_view is fully initialized.
   if (xdg_view == NULL) {
     return;
   }
@@ -662,7 +662,7 @@ setup_selection(struct hikari_server *server)
   wl_signal_add(&server->seat->events.start_drag, &server->start_drag);
 }
 
-/* ##Function purpose: Handle new XDG toplevel creation. */
+// [COMMENT] Function purpose: Handle new XDG toplevel creation.
 static void
 new_toplevel_handler(struct wl_listener *listener, void *data)
 {
@@ -674,7 +674,7 @@ new_toplevel_handler(struct wl_listener *listener, void *data)
 
   struct hikari_xdg_view *xdg_view =
       hikari_malloc(sizeof(struct hikari_xdg_view));
-  /* ##Condition purpose: Guard against XDG view allocation failure. */
+  // [COMMENT] Action purpose: Guard against XDG view allocation failure.
   if (xdg_view == NULL) {
     return;
   }
@@ -811,9 +811,9 @@ hikari_server_prepare_privileged(void)
 done:
   if (!drop_privileges(server) || !success) {
     if (server->backend != NULL) {
-      /* ##Action purpose: Destroy backend, which also destroys the session
-       * internally in wlroots 0.20. Do NOT call wlr_session_destroy
-       * separately — the session is owned by the backend. */
+      // [COMMENT] Action purpose: Destroy backend, which also destroys the session
+      // internally in wlroots 0.20. Do NOT call wlr_session_destroy
+      // separately -- the session is owned by the backend.
       wlr_backend_destroy(server->backend);
     }
     if (server->display != NULL) {
@@ -824,7 +824,7 @@ done:
   }
 }
 
-/* ##Function purpose: Initialize headless fallback output for window management when no physical monitor is attached. */
+// [COMMENT] Function purpose: Initialize headless fallback output for window management when no physical monitor is attached.
 static void
 init_noop_output(struct hikari_server *server)
 {
@@ -914,9 +914,9 @@ server_init(struct hikari_server *server, char *config_path)
   wl_signal_add(&server->backend->events.new_input, &server->new_input);
 
   server->output_layout = wlr_output_layout_create(server->display);
-  /* ##Condition purpose: Guard against output layout allocation failure. */
+  // [COMMENT] Action purpose: Guard against output layout allocation failure.
   if (server->output_layout == NULL) {
-    /* ##Error purpose: Abort server initialization on output layout allocation failure. */
+    // [COMMENT] Action purpose: Abort server initialization on output layout allocation failure.
     wl_display_destroy(server->display);
     exit(EXIT_FAILURE);
   }
@@ -1101,9 +1101,9 @@ hikari_server_stop(void)
   if (server->noop_backend != NULL) {
     wlr_backend_destroy(server->noop_backend);
   }
-  /* ##Action purpose: Destroy backend, which also destroys the session
-   * internally in wlroots 0.20. Do NOT call wlr_session_destroy
-   * separately — the session is owned by the backend. */
+  // [COMMENT] Action purpose: Destroy backend, which also destroys the session
+  // internally in wlroots 0.20. Do NOT call wlr_session_destroy
+  // separately -- the session is owned by the backend.
   if (server->backend != NULL) {
     wlr_backend_destroy(server->backend);
   }
