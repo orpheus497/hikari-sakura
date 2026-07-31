@@ -1,12 +1,12 @@
 # Hikari Project Briefing
 
-*Last Updated:* 2026-07-31 13:37
+*Last Updated:* 2026-07-31 13:46
 
 ## Current Status
 
-- **Phase:** Phase 8 — Code Documentation Compliance (Runtime bugs fixed)
+- **Phase:** Phase 9 — Runtime Crash Fix & Final Validation
 - **Branch:** wlroots-0.17.1
-- **Overall progress:** 100% (All wlroots 0.20 API and FreeBSD audit issues resolved)
+- **Overall progress:** 98% (critical runtime crash fixed; FreeBSD runtime validation pending)
 - **Target OS:** FreeBSD 13.x/14.x+
 
 ## What Works
@@ -45,5 +45,5 @@
 
 ## Remaining Work
 
-- Runtime testing on FreeBSD Wayland session.
+- Runtime testing on FreeBSD Wayland session (crash fix applied — needs revalidation).
 - PAM unlocker verification.

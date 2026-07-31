@@ -4,6 +4,42 @@
 
 ---
 
+## Session Date: 2026-07-31 13:46 — Runtime Crash Fix & Comprehensive Cleanup
+
+* **Phase:** Phase 9 — Runtime Crash Fix & Final Validation
+* **Accomplishments:**
+  - **C0 (CRITICAL):** Removed `wlr_xdg_surface_ping(xdg_surface)` from `hikari_xdg_view_init` in `src/xdg_view.c:488`. This was the root cause of the `Assertion failed: (surface->initialized)` crash — in wlroots 0.20, the XDG surface is not yet initialized at the `new_toplevel` signal; calling ping triggers `schedule_configure` which asserts `initialized`. The wlroots xdg_shell module handles pings internally after the initial commit.
+  - **C1:** Fixed `request_fullscreen_handler` to pass `xdg_view->xdg_toplevel->requested.fullscreen` instead of always `false`.
+  - **O5:** Renamed `##Step purpose` to `##Action purpose` in `hikari_unlocker.c`.
+  - **O6:** Replaced single `read()` in `hikari_unlocker.c` with accumulation loop that reads byte-by-byte until the NUL frame terminator, handling partial reads, overflow, and EINTR correctly.
+  - **O7/O8:** Added missing `##Function purpose` and `##Action purpose` markers in `src/cursor.c`.
+  - **I7:** Removed Linux-specific "logind" reference from `server.c` startup diagnostics.
+  - **I8/I9:** Rewrote `start-hikari.sh` with XDG_RUNTIME_DIR ownership/permission validation and all AGENTS.md annotation prefixes.
+  - **I1:** Refreshed BRIEFING.md timestamp, phase status, removed "Linux" from remaining work.
+  - **I2:** Marked damage ring decision as [SUPERSEDED] in DECISIONS_LOG.md.
+  - **O1:** Split Phase 7 into 7a (done) / 7b (pending) in PROGRESS.md.
+  - **I4:** Fixed reources.md heading, spelling, and trailing newline.
+  - **I5/O2/O3:** Fixed duplicate headings and spacing in SESSION_HANDOFF.md and SUMMARIES.md.
+  - **I6:** Added missing 13:16 session summary to SUMMARIES.md.
+  - **O4:** Quoted `$XDG_RUNTIME_DIR` in TESTS.md.
+  - **Build:** `make` completed successfully — zero warnings, both `hikari` and `hikari-unlocker` link cleanly.
+* **Modified Files:**
+  - `src/xdg_view.c` — C0, C1
+  - `hikari_unlocker.c` — O5, O6
+  - `src/cursor.c` — O7, O8
+  - `src/server.c` — I7
+  - `start-hikari.sh` — I8, I9
+  - `.devdocs/BRIEFING.md` — I1
+  - `.devdocs/DECISIONS_LOG.md` — I2, I3
+  - `.devdocs/PROGRESS.md` — O1
+  - `.devdocs/reources.md` — I4
+  - `.devdocs/SESSION_HANDOFF.md` — I5, O2
+  - `.devdocs/SUMMARIES.md` — I6, O3
+  - `.devdocs/TESTS.md` — O4
+* **Remaining Work:** FreeBSD runtime revalidation (crash fix needs retest). PAM `hikari-unlocker` runtime verification.
+
+---
+
 ## Session Date: 2026-07-31 13:16
 
 * **Phase:** Comprehensive Audit Fix Execution — All 6 Issues Resolved

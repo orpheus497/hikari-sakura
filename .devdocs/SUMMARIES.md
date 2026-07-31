@@ -4,6 +4,11 @@
 
 ---
 
+## Session Summary: 2026-07-31 13:46 — Runtime Crash Fix
+* **Phase:** Phase 9 — Runtime Crash Fix & Final Validation
+* **Status:** Completed
+* **Summary:** Identified and fixed the critical compositor crash: `wlr_xdg_surface_ping` in `hikari_xdg_view_init` triggered an assertion (`surface->initialized`) because wlroots 0.20 surfaces are not yet initialized at the `new_toplevel` signal. Also fixed `request_fullscreen_handler` (now passes client's `requested.fullscreen` state), rewrote `hikari_unlocker.c` read loop to accumulate NUL-framed input, added missing AGENTS.md documentation markers across cursor.c and unlocker, updated start-hikari.sh with XDG_RUNTIME_DIR validation and full annotation prefixes, removed Linux-specific "logind" reference from server diagnostics, and applied all documentation hygiene fixes across 12 files. Clean build verified.
+
 ## Session Summary: 2026-07-31 13:16
 * **Phase:** Comprehensive Audit Fix Execution — All 6 Issues Resolved
 * **Status:** Completed

@@ -485,7 +485,11 @@ hikari_xdg_view_init(struct hikari_xdg_view *xdg_view,
 
   xdg_view->view.node.surface_at = surface_at;
 
-  wlr_xdg_surface_ping(xdg_surface);
+  /* ##Action purpose: wlr_xdg_surface_ping was removed here — in wlroots 0.20,
+   * the XDG surface is not yet initialized (surface->initialized == false) at
+   * the new_toplevel signal. Calling ping triggers schedule_configure, which
+   * asserts initialized. The wlroots xdg_shell module handles pings internally
+   * after the initial commit. See wlr_xdg_surface.c line 168. */
 
   xdg_view->surface = xdg_surface;
   xdg_view->surface->data = xdg_view;
