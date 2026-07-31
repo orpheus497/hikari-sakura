@@ -4,11 +4,11 @@
 
 ---
 
-## [2026-07-31 16:45] Fix: Blocking `wait()` Replaced with `waitpid(WNOHANG)` in Lock Mode
+## [2026-07-31 19:34] Fix: Blocking `waitpid()` Reaps Unlocker on All Exit Paths
 
-* **Context:** In `locker_result_handler()` (`src/lock_mode.c:154`), upon successful PAM authentication, `wait(&status)` was called to reap the `hikari-unlocker` child process. While the unlocker typically exits immediately after writing its result, `wait()` is unconditionally blocking — if the child hasn't terminated yet, the compositor event loop stalls.
-* **Decision:** Replaced with `waitpid(locker_pid, &status, WNOHANG)` using the retained child PID from `start_unlocker()`. Returns immediately if the child hasn't exited; subsequent event loop iterations will reap it.
-* **Impact:** Eliminates a potential (rare) compositor stall during screen unlock.
+* **Context:** In `locker_result_handler()` (`src/lock_mode.c`), the previous fix used `waitpid(locker_pid, &status, WNOHANG)` only on the success path. If the child hadn't exited yet, or if authentication failed/hung up, `locker_pid` was never reaped, leaving a zombie process.
+* **Decision:** Moved `waitpid(locker_pid, &status, 0)` (blocking) to execute unconditionally after removing the event source — before the success/failure branch. This guarantees the child is reaped on every code path (successful auth, failed auth, and hangup). `locker_pid` is cleared to `-1` only after the blocking wait returns.
+* **Impact:** Eliminates zombie `hikari-unlocker` processes on failed authentication attempts and pipe hangups.
 
 ## [2026-07-31 16:45] Fix: `output->server` Not Initialized in `hikari_output_init()`
 

@@ -91,7 +91,7 @@ XKB_DEFAULT_LAYOUT "de(nodeadkeys),de"
 
 ## Building
 
-`hikari` currently only works on FreeBSD and Linux. This will likely change in
+`hikari` currently only works on FreeBSD. This will likely change in
 the future when more systems adopt Wayland. When building directly from the
 repository, breaking changes might be encountered. These are documented in the
 `UPDATING` file which should be consulted before updating to a newer build.
@@ -156,24 +156,6 @@ Simply run `make`. The installation destination can be configured by setting
 
 ```sh
 make
-```
-
-`uninstall` requires the same values for prefixes.
-
-#### Building on Linux
-
-On Linux `bmake` is required which needs to be run like so:
-
-```sh
-bmake WITH_POSIX_C_SOURCE=YES
-```
-
-The installation destination can be configured by
-setting`PREFIX` (default is `/usr/local` and does not need to be given
-explicitly).
-
-```sh
-bmake PREFIX=/usr/local install
 ```
 
 `uninstall` requires the same values for prefixes.

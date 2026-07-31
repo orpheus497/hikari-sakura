@@ -60,11 +60,42 @@ clear_password(void)
 static void
 start_unlocker(void)
 {
-  pipe(locker_pipe[0]);
-  pipe(locker_pipe[1]);
+  // [COMMENT] Action purpose: Create two unidirectional pipes for IPC with
+  // hikari-unlocker: pipe[0] carries the password (parent writes, child reads),
+  // pipe[1] carries the authentication result (child writes, parent reads).
+  if (pipe(locker_pipe[0]) == -1) {
+    return;
+  }
+  if (pipe(locker_pipe[1]) == -1) {
+    close(locker_pipe[0][0]);
+    close(locker_pipe[0][1]);
+    locker_pipe[0][0] = -1;
+    locker_pipe[0][1] = -1;
+    return;
+  }
 
+  // [COMMENT] Action purpose: Fork a child process to run hikari-unlocker,
+  // which performs PAM authentication in a separate address space so the
+  // compositor event loop is never blocked by pam_authenticate().
   locker_pid = fork();
 
+  // [COMMENT] Action purpose: On fork failure, close all pipe descriptors and
+  // preserve the locked session without attempting password submission.
+  if (locker_pid == -1) {
+    close(locker_pipe[0][0]);
+    close(locker_pipe[0][1]);
+    close(locker_pipe[1][0]);
+    close(locker_pipe[1][1]);
+    locker_pipe[0][0] = -1;
+    locker_pipe[0][1] = -1;
+    locker_pipe[1][0] = -1;
+    locker_pipe[1][1] = -1;
+    locker_pid = -1;
+    return;
+  }
+
+  // [COMMENT] Action purpose: In the child process, rewire stdin/stdout to the
+  // pipe endpoints and exec hikari-unlocker for PAM authentication.
   if (locker_pid == 0) {
     close(locker_pipe[0][1]);
     close(locker_pipe[1][0]);
@@ -74,6 +105,8 @@ start_unlocker(void)
     dup2(locker_pipe[1][1], 1);
     execl("/bin/sh", "/bin/sh", "-c", "hikari-unlocker", NULL);
     exit(0);
+  // [COMMENT] Action purpose: In the parent process, close the child-side pipe
+  // endpoints that are no longer needed to avoid descriptor leaks.
   } else {
     close(locker_pipe[0][0]);
     close(locker_pipe[1][1]);
@@ -153,18 +186,18 @@ locker_result_handler(int fd, uint32_t mask, void *data)
     mode->locker_event_source = NULL;
   }
 
-  if (success) {
+  // [COMMENT] Action purpose: Reap the unlocker child process with a blocking
+  // waitpid to guarantee no zombie is left behind. This runs after the event
+  // source is removed, so the compositor will not re-enter this handler.
+  if (locker_pid > 0) {
     int status;
+    waitpid(locker_pid, &status, 0);
+    locker_pid = -1;
+  }
+
+  if (success) {
     close(locker_pipe[1][0]);
     close(locker_pipe[0][1]);
-    // [COMMENT] Action purpose: Reap the unlocker child process without blocking.
-    // Uses the retained PID to avoid reaping unrelated children. WNOHANG returns
-    // immediately if the child hasn't exited yet; in that case init will reap it.
-    if (locker_pid > 0) {
-      if (waitpid(locker_pid, &status, WNOHANG) > 0) {
-        locker_pid = -1;
-      }
-    }
 
     hikari_server_enter_normal_mode(NULL);
   } else {
