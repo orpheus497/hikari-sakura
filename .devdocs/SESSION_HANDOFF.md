@@ -4,6 +4,28 @@
 
 ---
 
+## Session Date: 2026-07-31 14:37 — Review Fix Execution
+
+* **Phase:** Phase 10 — Review Fix Pass
+* **Accomplishments:**
+  - Verified 10 review findings against current code; applied 6 still-valid fixes, skipped 4 with documented reasons.
+  - **Fix 1:** Added `## Session Briefing` section to BRIEFING.md with current step, accomplishments, blockers, decisions, and next steps per AGENTS.md Phase 2 protocol.
+  - **Fix 2:** Revised SESSION_HANDOFF.md Phase 9 C0 entry to describe `wlr_xdg_surface_ping` as an early trigger, not the final root cause.
+  - **Fix 3:** Applied matching root-cause wording correction in SUMMARIES.md Phase 9 entry.
+  - **Fix 4:** Added blank lines after 4 session headings in SUMMARIES.md (lines 12, 17, 34, 42).
+  - **Fix 5:** Added `##Condition purpose` annotations before each `if` guard in `hikari_output_enable()` event-registration block (`src/output.c`).
+  - **Fix 6:** Added NULL guard after `wlr_scene_buffer_create` in `hikari_lock_indicator_damage()` (`src/lock_indicator.c`) to prevent NULL dereference on allocation failure.
+  - **Skipped:** Unlocker overflow-flag change (logic already correct), unlocker condition comments (already present), `wlr_scene_*_create` NULL guards in output.c/xdg_view.c (compositor-fatal, no recovery), output enable/init helper extraction (insufficient duplication).
+* **Modified Files:**
+  - `.devdocs/BRIEFING.md` — Fix 1
+  - `.devdocs/SESSION_HANDOFF.md` — Fix 2
+  - `.devdocs/SUMMARIES.md` — Fixes 3, 4
+  - `src/output.c` — Fix 5
+  - `src/lock_indicator.c` — Fix 6
+* **Remaining Work:** Runtime testing on FreeBSD. PAM `hikari-unlocker` verification. Build verification (terminal unavailable during this session).
+
+---
+
 ## Session Date: 2026-07-31 14:20 — wlroots 0.20 Initial Commit Lifecycle Fix
 
 * **Phase:** Phase 10 — wlroots 0.20 Initial Commit Lifecycle Fix
@@ -26,7 +48,7 @@
 
 * **Phase:** Phase 9 — Runtime Crash Fix & Final Validation
 * **Accomplishments:**
-  - **C0 (CRITICAL):** Removed `wlr_xdg_surface_ping(xdg_surface)` from `hikari_xdg_view_init` in `src/xdg_view.c:488`. This was the root cause of the `Assertion failed: (surface->initialized)` crash — in wlroots 0.20, the XDG surface is not yet initialized at the `new_toplevel` signal; calling ping triggers `schedule_configure` which asserts `initialized`. The wlroots xdg_shell module handles pings internally after the initial commit.
+  - **C0 (CRITICAL):** Removed `wlr_xdg_surface_ping(xdg_surface)` from `hikari_xdg_view_init` in `src/xdg_view.c:488`. This was an early trigger (not the final root cause) of the `Assertion failed: (surface->initialized)` crash — in wlroots 0.20, the XDG surface is not yet initialized at the `new_toplevel` signal; calling ping triggers `schedule_configure` which asserts `initialized`. The wlroots xdg_shell module handles pings internally after the initial commit. *(Note: Phase 10 subsequently identified the missing initial-commit lifecycle pattern as the true root cause — the commit listener was registered in `map()` instead of at `new_toplevel` time, so `initialized` was never set to `true`.)*
   - **C1:** Fixed `request_fullscreen_handler` to pass `xdg_view->xdg_toplevel->requested.fullscreen` instead of always `false`.
   - **O5:** Renamed `##Step purpose` to `##Action purpose` in `hikari_unlocker.c`.
   - **O6:** Replaced single `read()` in `hikari_unlocker.c` with accumulation loop that reads byte-by-byte until the NUL frame terminator, handling partial reads, overflow, and EINTR correctly.

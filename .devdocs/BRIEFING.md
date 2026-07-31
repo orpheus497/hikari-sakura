@@ -1,6 +1,6 @@
 # Hikari Project Briefing
 
-*Last Updated:* 2026-07-31 14:20
+*Last Updated:* 2026-07-31 14:37
 
 ## Current Status
 
@@ -8,6 +8,28 @@
 - **Branch:** wlroots-0.17.1
 - **Overall progress:** 99% (critical lifecycle fix applied; awaiting FreeBSD runtime validation)
 - **Target OS:** FreeBSD 13.x/14.x+
+- **Current step:** Applying 6 approved documentation and annotation fixes from code review.
+
+## Session Briefing
+
+### Accomplishments (this session)
+- Verified 10 review findings against current code.
+- Identified 6 still-valid issues and 4 already-resolved/inapplicable issues.
+
+### Blockers
+- None — all fixes are documentation-level or minimal comment additions.
+
+### Recent Decisions
+- Skipped unlocker overflow-flag change (current logic already correct).
+- Skipped `wlr_scene_*_create` NULL guards (compositor-fatal, no clean recovery path).
+- Skipped output enable/init helper extraction (insufficient duplication to warrant).
+
+### Next Steps
+1. Apply BRIEFING.md session briefing fields (~1 min).
+2. Revise SESSION_HANDOFF.md + SUMMARIES.md root-cause wording (~2 min).
+3. Fix SUMMARIES.md heading spacing (~1 min).
+4. Add `##Condition purpose` annotations in output.c (~1 min).
+5. Add NULL guard in lock_indicator.c (~1 min).
 
 ## What Works
 

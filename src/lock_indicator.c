@@ -213,10 +213,13 @@ hikari_lock_indicator_damage(struct hikari_lock_indicator *lock_indicator)
       } else {
          wlr_scene_buffer_set_buffer(output->lock_indicator_node, lock_indicator->current);
       }
-      get_geometry(output, &geometry);
-      wlr_scene_node_set_position(&output->lock_indicator_node->node, geometry.x, geometry.y);
-      wlr_scene_node_set_enabled(&output->lock_indicator_node->node, true);
-      wlr_scene_node_raise_to_top(&output->lock_indicator_node->node);
+      /* ##Condition purpose: Guard against NULL from failed wlr_scene_buffer_create before positioning or enabling. */
+      if (output->lock_indicator_node != NULL) {
+        get_geometry(output, &geometry);
+        wlr_scene_node_set_position(&output->lock_indicator_node->node, geometry.x, geometry.y);
+        wlr_scene_node_set_enabled(&output->lock_indicator_node->node, true);
+        wlr_scene_node_raise_to_top(&output->lock_indicator_node->node);
+      }
     } else {
       /* ##Condition purpose: Guard against dereferencing a null lock indicator node when hiding. */
       if (output->lock_indicator_node != NULL) {

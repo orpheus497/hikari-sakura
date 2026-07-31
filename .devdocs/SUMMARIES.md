@@ -4,17 +4,25 @@
 
 ---
 
+## Session Summary: 2026-07-31 14:37 — Review Fix Execution
+
+* **Phase:** Phase 10 — Review Fix Pass
+* **Status:** Completed
+* **Summary:** Verified 10 code-review findings against current code. Applied 6 fixes: BRIEFING.md session briefing fields, SESSION_HANDOFF.md and SUMMARIES.md root-cause wording corrections, SUMMARIES.md heading spacing, `##Condition purpose` annotations in `src/output.c`, and a NULL guard for `wlr_scene_buffer_create` in `src/lock_indicator.c`. Skipped 4 findings (unlocker overflow logic already correct, unlocker comments already present, compositor-fatal NULL guards not recoverable, output helper extraction unwarranted). No behavioral code changes.
+
 ## Session Summary: 2026-07-31 14:20 — wlroots 0.20 Initial Commit Lifecycle Fix
 * **Phase:** Phase 10 — wlroots 0.20 Initial Commit Lifecycle Fix
 * **Status:** Completed (awaiting runtime test)
 * **Summary:** Deep analysis revealed the `surface->initialized` assertion crash was caused by a missing wlroots 0.20 lifecycle pattern, not a single bad API call. The commit listener was registered in `map()` (too late — `initial_commit` already happened), so `initialized` was never set to `true`. Fixed by: (A) moving commit listener to `hikari_xdg_view_init()` (new_toplevel time), (B) adding `initial_commit` handler calling `wlr_xdg_toplevel_set_size(0,0)`, (C) guarding `request_fullscreen_handler` with `initialized` check, (D) adding popup `initial_commit` handler. Cross-referenced against tinywl 0.20 reference. Clean build verified.
 
 ## Session Summary: 2026-07-31 13:46 — Runtime Crash Fix
+
 * **Phase:** Phase 9 — Runtime Crash Fix & Final Validation
 * **Status:** Completed
-* **Summary:** Identified and fixed the critical compositor crash: `wlr_xdg_surface_ping` in `hikari_xdg_view_init` triggered an assertion (`surface->initialized`) because wlroots 0.20 surfaces are not yet initialized at the `new_toplevel` signal. Also fixed `request_fullscreen_handler` (now passes client's `requested.fullscreen` state), rewrote `hikari_unlocker.c` read loop to accumulate NUL-framed input, added missing AGENTS.md documentation markers across cursor.c and unlocker, updated start-hikari.sh with XDG_RUNTIME_DIR validation and full annotation prefixes, removed Linux-specific "logind" reference from server diagnostics, and applied all documentation hygiene fixes across 12 files. Clean build verified.
+* **Summary:** Removed the `wlr_xdg_surface_ping` call from `hikari_xdg_view_init`, which was an early trigger (not the final root cause) of the `surface->initialized` assertion crash — the underlying cause was later identified in Phase 10 as the missing initial-commit lifecycle pattern. Also fixed `request_fullscreen_handler` (now passes client's `requested.fullscreen` state), rewrote `hikari_unlocker.c` read loop to accumulate NUL-framed input, added missing AGENTS.md documentation markers across cursor.c and unlocker, updated start-hikari.sh with XDG_RUNTIME_DIR validation and full annotation prefixes, removed Linux-specific "logind" reference from server diagnostics, and applied all documentation hygiene fixes across 12 files. Clean build verified.
 
 ## Session Summary: 2026-07-31 13:16
+
 * **Phase:** Comprehensive Audit Fix Execution — All 6 Issues Resolved
 * **Status:** Completed
 * **Summary:** Applied 6 code documentation compliance and wlroots API fixes, including resolving `clock_gettime` misuse and `wlr_drm_format` capacity field access. Verified build. PAM verification remains pending.
@@ -32,6 +40,7 @@
 ---
 
 ## Session Summary: 2026-07-31 06:34 - Runtime testing
+
 * **Phase:** Runtime testing & Debugging
 * **Status:** Completed
 * **Summary:** Investigated a runtime issue causing a black screen and unresponsive inputs upon compositor startup. Determined the root cause was an initialization order issue in `src/output.c` where `wlr_output_layout_add` triggered a damage frame before `scene_output` was created. Corrected the order of operations, restoring visual rendering and input processing.
@@ -40,6 +49,7 @@
 - Refactored `hikari_renderer` into a quad-batching system to reduce API overhead (Note: Implemented but subsequently REVERTED, as `wlr_scene` handles this natively).
 
 ## Session Summary: 2026-07-31 06:34 - wlroots 0.20 API Migration
+
 * **Phase:** wlroots 0.20 API Migration — Build Verified
 * **Status:** Completed — clean build achieved
 * **Summary:** Resolved all 7 wlroots 0.20 API breaking changes across 5 source files (`cursor.c`, `output.c`, `server.c`, `switch.c`, `xdg_view.c`). Changes included: adding `relative_direction` parameter to pointer axis notify, adapting headless backend and output layout creation signatures, migrating destroy signals from per-type to base `wlr_input_device`, replacing removed `wlr_xdg_surface_get_geometry()` with direct struct field access, and moving XDG surface map/unmap signals to `wlr_surface`. Both `hikari` and `hikari-unlocker` now compile and link cleanly. Updated all project documentation.

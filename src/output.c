@@ -193,9 +193,11 @@ hikari_output_enable(struct hikari_output *output)
   wlr_output_state_finish(&state);
 
   /* ##Action purpose: Subscribe to frame and request_state events for the output, guarding against double-registration. */
+  /* ##Condition purpose: Only add the frame listener if not already registered (empty link means unregistered). */
   if (wl_list_empty(&output->frame.link)) {
     wl_signal_add(&wlr_output->events.frame, &output->frame);
   }
+  /* ##Condition purpose: Only add the request_state listener if not already registered (empty link means unregistered). */
   if (wl_list_empty(&output->request_state.link)) {
     wl_signal_add(&wlr_output->events.request_state, &output->request_state);
   }
