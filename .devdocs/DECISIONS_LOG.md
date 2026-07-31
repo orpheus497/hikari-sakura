@@ -7,7 +7,7 @@
 ## [2026-07-31 16:45] Fix: Blocking `wait()` Replaced with `waitpid(WNOHANG)` in Lock Mode
 
 * **Context:** In `locker_result_handler()` (`src/lock_mode.c:154`), upon successful PAM authentication, `wait(&status)` was called to reap the `hikari-unlocker` child process. While the unlocker typically exits immediately after writing its result, `wait()` is unconditionally blocking — if the child hasn't terminated yet, the compositor event loop stalls.
-* **Decision:** Replaced with `waitpid(-1, &status, WNOHANG)`. Returns immediately if the child hasn't exited; the orphan will be reaped by init.
+* **Decision:** Replaced with `waitpid(locker_pid, &status, WNOHANG)` using the retained child PID from `start_unlocker()`. Returns immediately if the child hasn't exited; subsequent event loop iterations will reap it.
 * **Impact:** Eliminates a potential (rare) compositor stall during screen unlock.
 
 ## [2026-07-31 16:45] Fix: `output->server` Not Initialized in `hikari_output_init()`
@@ -223,13 +223,11 @@
 
 ## Design Implementation Requests
 
-### 1. Non-Blocking PAM I/O for `hikari-unlocker` (Bug 6)
+### 1. Non-Blocking PAM I/O for `hikari-unlocker` (Bug 6) [SUPERSEDED]
 
-* **Context / Clarification:** Currently, PAM authentication blocks the main `wl_event_loop`, freezing the compositor. The structural solution is to fork `hikari-unlocker` or use a pipe so the compositor can continue rendering while waiting for authentication over `wl_event_loop_add_fd`.
-* **Tabled Questions:**
-  * Q: How should we bridge OpenPAM's inherently synchronous `pam_authenticate` calls with the asynchronous `wl_event_loop` in the compositor?
-  * Q: Should we isolate the PAM authentication into a separate threaded worker or child process that communicates via `wl_event_loop_add_fd` pipes?
-  * Q: Does FreeBSD provide asynchronous PAM extensions we could leverage?
+* **Status:** Fully implemented (2026-07-31 16:17). See decision entry "Non-blocking PAM Authentication I/O (BUG-6 Resolved)" above.
+* **Resolution:** Child-process fork with pipe IPC and `wl_event_loop_add_fd()` callback. All tabled design questions resolved by the implementation.
+* **Remaining:** Live-test PAM non-blocking unlock on FreeBSD target to confirm end-to-end behavior.
 
 ### 2. PAM Verification (`hikari-unlocker`)
 

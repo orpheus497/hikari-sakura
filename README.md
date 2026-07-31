@@ -51,13 +51,13 @@ ZFS, therefore on ZFS-root systems you must ensure `/tmp` is backed by `tmpfs`:
 sudo zfs set canmount=noauto zroot/tmp
 ```
 
-2. Add a `tmpfs` entry to `/etc/fstab` (if not already present):
+1. Add a `tmpfs` entry to `/etc/fstab` (if not already present):
 
 ```sh
 tmpfs   /tmp   tmpfs   rw,mode=1777,size=256m   0   0
 ```
 
-3. Reboot, then verify `/tmp` is tmpfs: `stat -f '%T' /tmp` should report `tmpfs`.
+1. Reboot, then verify `/tmp` is tmpfs: `stat -f '%T' /tmp` should report `tmpfs`.
 
 > **Note:** Without step 1, ZFS automount will mount `zroot/tmp` *over* the
 > fstab tmpfs entry, and `/tmp` will still be ZFS despite the fstab line.
@@ -231,7 +231,7 @@ Virtual input support is needed for applications like `wayvnc`.
 
 ```sh
 make WITH_VIRTUAL_INPUT=YES
-```sh
+```
 
 #### Building the manpage
 

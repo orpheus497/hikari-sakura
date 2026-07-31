@@ -29,6 +29,7 @@
 static char input_buffer[BUFFER_SIZE];
 static int cursor = 0;
 static int locker_pipe[2][2] = { { -1, -1 }, { -1, -1 } };
+static pid_t locker_pid = -1;
 
 static struct hikari_lock_mode *
 get_mode(void)
@@ -62,9 +63,9 @@ start_unlocker(void)
   pipe(locker_pipe[0]);
   pipe(locker_pipe[1]);
 
-  pid_t locker = fork();
+  locker_pid = fork();
 
-  if (locker == 0) {
+  if (locker_pid == 0) {
     close(locker_pipe[0][1]);
     close(locker_pipe[1][0]);
     close(0);
@@ -120,6 +121,7 @@ locker_result_handler(int fd, uint32_t mask, void *data)
 {
   struct hikari_lock_mode *mode = data;
   bool success = false;
+  bool got_result = false;
 
   if (mask & WL_EVENT_READABLE) {
     ssize_t n;
@@ -127,16 +129,20 @@ locker_result_handler(int fd, uint32_t mask, void *data)
       n = read(fd, &success, sizeof(bool));
     } while (n == -1 && errno == EINTR);
 
-    if (n <= 0) {
-      // [COMMENT] Action purpose: Treat read failure or EOF as authentication
-      // failure -- hikari-unlocker may have crashed or been killed.
+    if (n == (ssize_t)sizeof(bool)) {
+      // [COMMENT] Action purpose: A complete authentication result was read
+      // from the unlocker pipe. Mark as received so hangup does not override.
+      got_result = true;
+    } else {
+      // [COMMENT] Action purpose: Treat read failure, EOF, or incomplete read
+      // as authentication failure -- hikari-unlocker may have crashed.
       success = false;
     }
   }
 
-  if (mask & WL_EVENT_HANGUP) {
+  if ((mask & WL_EVENT_HANGUP) && !got_result) {
     // [COMMENT] Action purpose: Pipe closed by hikari-unlocker without sending
-    // a result -- treat as fatal authentication failure.
+    // a complete result -- treat as fatal authentication failure.
     success = false;
   }
 
@@ -152,9 +158,13 @@ locker_result_handler(int fd, uint32_t mask, void *data)
     close(locker_pipe[1][0]);
     close(locker_pipe[0][1]);
     // [COMMENT] Action purpose: Reap the unlocker child process without blocking.
-    // WNOHANG returns immediately if the child hasn't exited yet; the orphan
-    // will be reaped by init. This prevents the compositor from stalling.
-    waitpid(-1, &status, WNOHANG);
+    // Uses the retained PID to avoid reaping unrelated children. WNOHANG returns
+    // immediately if the child hasn't exited yet; in that case init will reap it.
+    if (locker_pid > 0) {
+      if (waitpid(locker_pid, &status, WNOHANG) > 0) {
+        locker_pid = -1;
+      }
+    }
 
     hikari_server_enter_normal_mode(NULL);
   } else {

@@ -224,6 +224,8 @@ hikari_cursor_center(struct hikari_cursor *cursor,
   hikari_cursor_warp(cursor, x, y);
 }
 
+// [COMMENT] Function purpose: Handle absolute pointer motion events and warp the cursor
+// to the reported absolute position on the output.
 static void
 motion_absolute_handler(struct wl_listener *listener, void *data)
 {
@@ -248,6 +250,8 @@ frame_handler(struct wl_listener *listener, void *data)
   wlr_seat_pointer_notify_frame(hikari_server.seat);
 }
 
+// [COMMENT] Function purpose: Handle relative pointer motion events and move the cursor
+// by the reported delta values.
 static void
 motion_handler(struct wl_listener *listener, void *data)
 {
@@ -263,6 +267,8 @@ motion_handler(struct wl_listener *listener, void *data)
   hikari_server.mode->cursor_move(event->time_msec);
 }
 
+// [COMMENT] Function purpose: Handle pointer button press/release events and dispatch
+// to the current mode's button handler.
 static void
 button_handler(struct wl_listener *listener, void *data)
 {

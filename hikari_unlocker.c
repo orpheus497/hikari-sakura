@@ -138,6 +138,16 @@ check_password(const char *username)
 
   // [COMMENT] Action purpose: Zero out sensitive password buffer immediately after authentication attempt.
   explicit_bzero(input_buffer, INPUT_BUFFER_SIZE);
+
+  // [COMMENT] Action purpose: Distinguish fatal PAM errors from retryable
+  // authentication failures. PAM_AUTH_ERR is a normal wrong-password result
+  // that allows retry; all other non-success codes (PAM_ABORT, PAM_MAXTRIES,
+  // PAM_SERVICE_ERR, PAM_SYSTEM_ERR) indicate unrecoverable failures.
+  if (pam_status != PAM_SUCCESS && pam_status != PAM_AUTH_ERR) {
+    pam_end(auth_handle, pam_status);
+    return -1;
+  }
+
   success = (pam_status == PAM_SUCCESS);
 
   // [COMMENT] Action purpose: Write authentication success boolean result to stdout fd 1.
