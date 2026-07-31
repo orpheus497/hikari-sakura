@@ -7,23 +7,43 @@
 # Usage (installed system): start-hikari [hikari options]
 # Usage (development tree):  ./start-hikari.sh [hikari options]
 
-# Clear any leaked display variables that would cause nested-compositor bugs
+# ##Action purpose: Clear any leaked display variables that would cause nested-compositor bugs
 unset WAYLAND_DISPLAY
 unset DISPLAY
 
+# ##Action purpose: Export mandatory Wayland session environment variables
 export XDG_SESSION_TYPE=wayland
 export XDG_SESSION_CLASS=user
 
 # ##Condition purpose: Bootstrap XDG_RUNTIME_DIR if the system (pam_xdg, systemd,
 # or elogind) did not provide one. FreeBSD with seatd typically requires this.
 if [ -z "$XDG_RUNTIME_DIR" ]; then
-    export XDG_RUNTIME_DIR="/tmp/hikari-runtime-$(id -u)"
+    # ##Action purpose: Assign current UID and create secure runtime directory
+    USER_UID=$(id -u)
+    if [ $? -ne 0 ]; then
+        echo "start-hikari: failed to retrieve current UID" >&2
+        exit 1
+    fi
+    export XDG_RUNTIME_DIR="/tmp/hikari-runtime-$USER_UID"
+    
+    # ##Condition purpose: Ensure the runtime directory exists with correct ownership and permissions
     if [ ! -d "$XDG_RUNTIME_DIR" ]; then
-        mkdir -m 0700 "$XDG_RUNTIME_DIR"
+        if ! mkdir -m 0700 "$XDG_RUNTIME_DIR"; then
+            echo "start-hikari: failed to create XDG_RUNTIME_DIR" >&2
+            exit 1
+        fi
+    else
+        # Validate existing directory
+        DIR_UID=$(stat -c '%u' "$XDG_RUNTIME_DIR" 2>/dev/null || stat -f '%u' "$XDG_RUNTIME_DIR")
+        DIR_PERMS=$(stat -c '%a' "$XDG_RUNTIME_DIR" 2>/dev/null || stat -f '%OLp' "$XDG_RUNTIME_DIR")
+        if [ "$DIR_UID" != "$USER_UID" ] || [ "$DIR_PERMS" != "700" ]; then
+            echo "start-hikari: XDG_RUNTIME_DIR exists but has incorrect ownership or permissions" >&2
+            exit 1
+        fi
     fi
 fi
 
-# ##Action purpose: Resolve hikari binary — prefer system-installed binary on $PATH
+# ##Condition purpose: Resolve hikari binary — prefer system-installed binary on $PATH
 # so that installed deployments work correctly (e.g. rc.d / service scripts).
 # Fall back to ./hikari for in-tree development builds without installation.
 if command -v hikari > /dev/null 2>&1; then
@@ -31,6 +51,7 @@ if command -v hikari > /dev/null 2>&1; then
 elif [ -x "./hikari" ]; then
     HIKARI_BIN=./hikari
 else
+    # ##Action purpose: Print error and exit if no valid hikari binary is found
     echo "start-hikari: hikari binary not found on PATH or in current directory" >&2
     exit 1
 fi
@@ -38,7 +59,9 @@ fi
 # ##Condition purpose: Wrap execution in a D-Bus session if one is not already
 # active. Required for XDG portal, clipboard, and secret service functionality.
 if [ -z "$DBUS_SESSION_BUS_ADDRESS" ] && command -v dbus-run-session > /dev/null 2>&1; then
+    # ##Action purpose: Execute hikari within a new D-Bus session
     exec dbus-run-session "$HIKARI_BIN" "$@"
 else
+    # ##Action purpose: Execute hikari directly
     exec "$HIKARI_BIN" "$@"
 fi

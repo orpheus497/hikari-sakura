@@ -1,6 +1,6 @@
 # Hikari Project Briefing
 
-*Last Updated:* 2026-07-31 13:20
+*Last Updated:* 2026-07-31 13:37
 
 ## Current Status
 
@@ -45,5 +45,5 @@
 
 ## Remaining Work
 
-- Runtime testing on FreeBSD/Linux with Wayland session.
+- Runtime testing on FreeBSD Wayland session.
 - PAM unlocker verification.

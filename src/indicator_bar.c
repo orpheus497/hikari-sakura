@@ -139,6 +139,7 @@ hikari_indicator_bar_update(struct hikari_indicator_bar *indicator_bar,
     size_t mapped_stride;
     /* ##Condition purpose: Guard against failed buffer data mapping. */
     if (wlr_buffer_begin_data_ptr_access(buffer, WLR_BUFFER_DATA_PTR_ACCESS_WRITE, &mapped_data, &mapped_format, &mapped_stride)) {
+      /* ##Loop purpose: Copy rendered cairo image data into mapped buffer by row. */
       for (int y = 0; y < height; y++) {
         memcpy((char*)mapped_data + y * mapped_stride, data + y * stride, width * 4);
       }

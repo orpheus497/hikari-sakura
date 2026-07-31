@@ -1,4 +1,6 @@
-read and add these resources tot he devdocs and cross reference the content against the codebase 
+# Resources Index
+
+Read and add these resources to the devdocs and cross-reference the content against the codebase.
 
 https://gitlab.freedesktop.org/wlroots/wlroots/-/wikis/Getting-started
 

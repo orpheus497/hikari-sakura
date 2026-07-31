@@ -66,7 +66,7 @@
 
 ---
 
-## Session Date: 2026-07-31 06:34
+## Session Date: 2026-07-31 06:34 - XDG Clients & Wallpaper
 
 * **Phase:** Runtime testing & Debugging (XDG Clients & Wallpaper)
 * **Accomplishments:**
@@ -77,7 +77,7 @@
 
 ---
 
-## Session Date: 2026-07-31 06:34
+## Session Date: 2026-07-31 06:34 - Client Disconnects
 
 * **Phase:** Runtime testing & Debugging (Client Disconnects)
 * **Accomplishments:**
@@ -91,7 +91,7 @@
 
 ---
 
-## Session Date: 2026-07-31 06:34
+## Session Date: 2026-07-31 06:34 - Initialization Order
 
 * **Phase:** Runtime testing & Debugging
 * **Accomplishments:**
@@ -101,7 +101,7 @@
 * **Modified:** `src/output.c`, `.devdocs/SESSION_HANDOFF.md`, `.devdocs/TODOS.md`, `.devdocs/PROGRESS.md`, `.devdocs/DECISIONS_LOG.md`
 * **Next Steps:** Proceed with Phase 8 (AGENTS.md code documentation compliance) and test PAM unlocker.
 
-## Session Date: 2026-07-31 06:34
+## Session Date: 2026-07-31 06:34 - wlroots 0.20 API Migration
 
 * **Phase:** wlroots 0.20 API Migration — Build Verified
 * **Accomplishments:**
@@ -175,6 +175,7 @@
 ---
 
 ## Session Date: 2026-07-29 14:34 - commit 3cf8f32
+
 * **Phase:** wlr_scene Rendering Migration
 * **Accomplishments:** Migrated lock indicator and background rendering to wlr_scene buffers. Gutted renderer.c and renderer.h. Removed renderer.o from Makefile. Borders now use wlr_scene_rect nodes. Lock indicator uses wlr_scene_buffer. Mode render callbacks removed.
 * **Modified:** 29 files (see commit 3cf8f32)
@@ -183,6 +184,7 @@
 ---
 
 ## Session Date: 2026-07-29 14:02 - commit 1fccd9d  
+
 * **Phase:** Object Pool Removal
 * **Accomplishments:** Removed custom object pool allocator. Reverted all hikari_pool_alloc calls to hikari_malloc. Gutted pool.c and pool.h. Removed pool.o from Makefile. Cleaned server.h of pool struct members.
 * **Modified:** 11 files (see commit 1fccd9d)

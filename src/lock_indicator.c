@@ -218,6 +218,7 @@ hikari_lock_indicator_damage(struct hikari_lock_indicator *lock_indicator)
       wlr_scene_node_set_enabled(&output->lock_indicator_node->node, true);
       wlr_scene_node_raise_to_top(&output->lock_indicator_node->node);
     } else {
+      /* ##Condition purpose: Guard against dereferencing a null lock indicator node when hiding. */
       if (output->lock_indicator_node != NULL) {
          wlr_scene_node_set_enabled(&output->lock_indicator_node->node, false);
       }

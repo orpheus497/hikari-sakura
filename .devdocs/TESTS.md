@@ -24,7 +24,7 @@
 
 ### Test Protocol 2: Shared Memory & `XDG_RUNTIME_DIR` Allocation
 1. Mount `tmpfs` at a dedicated test mountpoint (e.g. `mount -t tmpfs tmpfs /mnt/test-tmpfs`).
-2. Set `export XDG_RUNTIME_DIR=/mnt/test-tmpfs/runtime-${USER}` and create the directory with restrictive permissions (`mkdir -p -m 0700 $XDG_RUNTIME_DIR`).
+2. Set `export XDG_RUNTIME_DIR=/mnt/test-tmpfs/runtime-${USER}` and create the directory with restrictive permissions (`mkdir -p -m 0700 "$XDG_RUNTIME_DIR"`).
 3. Launch Wayland client (e.g. `alacritty` or `firefox`).
 4. Confirm surface buffer allocations succeed via `posix_fallocate`.
 5. Add explicit cleanup to unmount the temporary filesystem after testing (`umount /mnt/test-tmpfs`).

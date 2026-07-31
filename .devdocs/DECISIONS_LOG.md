@@ -59,10 +59,10 @@
 
 ---
 
-## [2026-07-30 01:45] Decision: Track Manual Damage Ring Calls as Migration Debt
+## [2026-07-30 01:45] Decision: Track Manual Damage Ring Calls as Migration Debt [SUPERSEDED]
 
 * **Context:** `hikari_output_damage_whole()` and `hikari_output_add_effective_surface_damage()` reach into `scene_output->damage_ring` directly. Verified against tinywl and labwc — neither uses manual damage ring calls when using `wlr_scene`. The scene graph handles damage tracking internally via `wlr_scene_output_commit`.
-* **Decision:** Retain the manual calls for now (hikari is mid-migration, some damage sources may not be scene-managed). Tracked in TODOS.md for removal once all visual elements are scene graph nodes.
+* **Decision:** Retain the manual calls for now (hikari is mid-migration, some damage sources may not be scene-managed). Tracked in TODOS.md for removal once all visual elements are scene graph nodes. *(Note: Manual damage ring calls were removed in the 2026-07-31 12:21 decision once scene graph migration was fully adopted.)*
 
 ---
 
@@ -99,7 +99,9 @@
 * **Decision:** To guarantee array contiguity without modifying `struct hikari_workspace` pointer mechanics or breaking `wl_list`, the `sheet_pool` `item_size` in `src/server.c` is initialized to `HIKARI_NR_OF_SHEETS * sizeof(struct hikari_sheet)`. A single allocation from the pool yields the contiguous block necessary for the workspace arrays.
 
 ---
+
 ## [2026-07-29 03:15] Decision: Data-Oriented Design (DOD) Orientation & FreeBSD Primary Target [SUPERSEDED in part]
+
 * **Context:** The user requested modernizing the `hikari` Wayland compositor with primary focus on FreeBSD compatibility, thorough documentation inside `docs/`, and adoption of Data-Oriented Design (DOD) principles.
 * **Decision:**
   1. (Historical Intent) Structure core data layouts (views, sheets, groups, outputs, tiles) into cache-aligned contiguous arrays / struct-of-arrays (SoA) where appropriate to minimize pointer chasing during render/layout loops. *Note: The DOD architecture was superseded by the wlr_scene migration.*

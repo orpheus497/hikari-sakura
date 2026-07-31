@@ -797,7 +797,7 @@ hikari_server_prepare_privileged(void)
     fprintf(stderr, "error: could not create backend\n");
     fprintf(stderr, "--------------------------------------------------------------------------------\n");
     fprintf(stderr, "Hikari failed to acquire a Wayland backend. Common causes include:\n");
-    fprintf(stderr, "  1. Running natively without 'seatd' or 'logind' running/accessible.\n");
+    fprintf(stderr, "  1. Running natively without 'seatd' or seat management running/accessible.\n");
     fprintf(stderr, "  2. XDG_RUNTIME_DIR is not set in your environment.\n");
     fprintf(stderr, "  3. You are attempting to nest but WAYLAND_DISPLAY is invalid or inaccessible.\n");
     fprintf(stderr, "  4. You lack permission to access DRM nodes (/dev/dri/card*).\n");

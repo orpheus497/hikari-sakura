@@ -92,42 +92,51 @@ check_password(const char *username)
     return -1;
   }
 
-  /* ##Action purpose: Read password string from stdin into locked buffer. */
-  ssize_t nread;
-  /* ##Loop purpose: Retry password read on EINTR. */
+  /* ##Action purpose: Read password string from stdin into locked buffer until null terminator. */
+  ssize_t nread = 0;
+  ssize_t res;
+  char c;
+  bool overflow = false;
+  /* ##Loop purpose: Retry password read on EINTR and accumulate until frame terminator is received. */
   do {
-    nread = read(0, input_buffer, INPUT_BUFFER_SIZE - 1);
-  } while (nread == -1 && errno == EINTR);
+    res = read(0, &c, 1);
+    if (res == -1 && errno == EINTR) {
+      continue;
+    }
+    if (res <= 0) {
+      break;
+    }
+    if (c == '\0') {
+      break;
+    }
+    if (nread < INPUT_BUFFER_SIZE - 1) {
+      input_buffer[nread++] = c;
+    } else {
+      overflow = true;
+    }
+  } while (1);
 
-  /* ##Condition purpose: Check if nread failed or returned EOF. */
-  if (nread <= 0) {
-    /* ##Error purpose: Abort PAM initialization and write false to stdout on read failure. */
-    write_success(success);
-    pam_end(auth_handle, PAM_ABORT);
-    return -1;
-  }
-
-  input_buffer[nread] = '\0';
-
-  /* ##Condition purpose: Detect overlong input exceeding buffer size. */
-  if (nread == INPUT_BUFFER_SIZE - 1 && input_buffer[INPUT_BUFFER_SIZE - 2] != '\n' && input_buffer[INPUT_BUFFER_SIZE - 2] != '\0') {
-    /* ##Error purpose: Drain remaining input, abort PAM, and write false on overlong password. */
-    char c;
-    ssize_t res;
-    /* ##Loop purpose: Drain remaining stdin bytes until newline to discard overlong input. */
-    while ((res = read(0, &c, 1)) == 1 || (res == -1 && errno == EINTR)) {
-      /* ##Condition purpose: Break loop if newline is found. */
-      if (res == 1 && c == '\n') break;
+  /* ##Condition purpose: Check if read failed, returned EOF before terminator, or overflowed. */
+  if (res <= 0 || overflow) {
+    /* ##Error purpose: Abort PAM initialization and write false to stdout on read failure or overlong password. */
+    if (overflow) {
+      /* ##Loop purpose: Drain remaining stdin bytes until frame terminator to discard overlong input. */
+      while ((res = read(0, &c, 1)) == 1 || (res == -1 && errno == EINTR)) {
+        if (res == 1 && c == '\0') break;
+      }
     }
     explicit_bzero(input_buffer, INPUT_BUFFER_SIZE);
     write_success(success);
     pam_end(auth_handle, PAM_ABORT);
-    return 0;
+    return overflow ? 0 : -1;
   }
+
+  input_buffer[nread] = '\0';
+
 
   int pam_status = pam_authenticate(auth_handle, 0);
 
-  /* ##Step purpose: Zero out sensitive password buffer immediately after authentication attempt. */
+  /* ##Action purpose: Zero out sensitive password buffer immediately after authentication attempt. */
   explicit_bzero(input_buffer, INPUT_BUFFER_SIZE);
   success = (pam_status == PAM_SUCCESS);
 

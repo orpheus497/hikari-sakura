@@ -109,6 +109,7 @@ configure_bindings(struct hikari_cursor *cursor, struct wl_list *bindings)
   }
 }
 
+/* ##Function purpose: Initialize the cursor, attach it to the output layout, and pre-load xcursor themes. */
 void
 hikari_cursor_init(
     struct hikari_cursor *cursor, struct wlr_output_layout *output_layout)
@@ -198,12 +199,16 @@ hikari_cursor_deactivate(struct hikari_cursor *cursor)
 void
 hikari_cursor_set_image(struct hikari_cursor *cursor, const char *path)
 {
+  /* ##Action purpose: Remove existing surface destroy listener before resetting the cursor. */
   wl_list_remove(&cursor->surface_destroy.link);
+  /* ##Action purpose: Reinitialize the listener list link to prevent use-after-free on disconnect. */
   wl_list_init(&cursor->surface_destroy.link);
   /* ##Condition purpose: Check if valid cursor path provided. */
   if (path != NULL) {
+   /* ##Action purpose: Set the hardware/software cursor to the requested xcursor image. */
    wlr_cursor_set_xcursor(cursor->wlr_cursor, cursor->cursor_mgr, path);
   } else {
+   /* ##Action purpose: Clear the cursor image by unsetting the wlr_surface. */
    wlr_cursor_set_surface(cursor->wlr_cursor, NULL, 0, 0);
   }
 }
