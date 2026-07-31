@@ -35,8 +35,8 @@ init_indicator_circle(float color[static 4])
       border_inactive[2],
       border_inactive[3]);
   cairo_set_line_width(cairo, 5);
-  cairo_translate(cairo, size / 2, size / 2);
-  cairo_arc(cairo, 0, 0, (size - 5) / 2, 0, 2 * HIKARI_PI);
+  cairo_translate(cairo, size / 2.0, size / 2.0);
+  cairo_arc(cairo, 0, 0, (size - 5) / 2.0, 0, 2 * HIKARI_PI);
   cairo_stroke_preserve(cairo);
   cairo_set_source_rgba(cairo, color[0], color[1], color[2], color[3]);
   cairo_fill(cairo);
