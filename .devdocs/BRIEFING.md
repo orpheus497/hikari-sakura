@@ -1,35 +1,35 @@
 # Hikari Project Briefing
 
-*Last Updated:* 2026-07-31 14:37
+*Last Updated:* 2026-07-31 15:15
 
 ## Current Status
 
-- **Phase:** Phase 10 — wlroots 0.20 Initial Commit Lifecycle Fix
+- **Phase:** Phase 11 — Startup Wiring Deep Investigation
 - **Branch:** wlroots-0.17.1
-- **Overall progress:** 99% (critical lifecycle fix applied; awaiting FreeBSD runtime validation)
+- **Overall progress:** 99% (startup fixes applied; awaiting FreeBSD build validation)
 - **Target OS:** FreeBSD 13.x/14.x+
-- **Current step:** Applying 6 approved documentation and annotation fixes from code review.
+- **Current step:** Verifying 7 bug fixes related to seatd/session, output mode, D-Bus, and PAM unlocker.
 
 ## Session Briefing
 
 ### Accomplishments (this session)
-- Verified 10 review findings against current code.
-- Identified 6 still-valid issues and 4 already-resolved/inapplicable issues.
+- Consolidated devdocs (merged SUMMARIES.md, TESTS.md, and reources.md into AGENTS.md compliant structure).
+- Synchronized all devdocs timestamps and phase statuses to Phase 11.
+- Analyzed startup wiring and fixed 5 bugs (session double-free, output mode, desktop file, stat stderr, Makefile install).
 
 ### Blockers
-- None — all fixes are documentation-level or minimal comment additions.
+- Build validation is temporarily blocked by a local terminal environment error.
+- BUG-6 non-blocking PAM I/O requires a future architectural change.
 
 ### Recent Decisions
-- Skipped unlocker overflow-flag change (current logic already correct).
-- Skipped `wlr_scene_*_create` NULL guards (compositor-fatal, no clean recovery path).
-- Skipped output enable/init helper extraction (insufficient duplication to warrant).
+- Devdocs structure explicitly enforces 7 core files. Extraneous files merged and deprecated.
+- Session is not separately destroyed; backend owns it.
+- Output mode selection uses EDID-preferred mode instead of the first available.
 
 ### Next Steps
-1. Apply BRIEFING.md session briefing fields (~1 min).
-2. Revise SESSION_HANDOFF.md + SUMMARIES.md root-cause wording (~2 min).
-3. Fix SUMMARIES.md heading spacing (~1 min).
-4. Add `##Condition purpose` annotations in output.c (~1 min).
-5. Add NULL guard in lock_indicator.c (~1 min).
+1. Perform build validation of the compositor on FreeBSD.
+2. Runtime testing on a Wayland session.
+3. Test PAM unlocker (`hikari-unlocker`).
 
 ## What Works
 

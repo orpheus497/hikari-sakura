@@ -141,3 +141,19 @@
 ## [2026-07-29 03:15] Decision: Devdocs Separation of Concerns
 * **Context:** `AGENTS.md` mandates absolute separation of AI tracking docs (`.devdocs/`) from product documentation (`docs/`) and code in root.
 * **Decision:** Keep all operational and tracking files inside `.devdocs/` and user/product technical documentation inside `.devdocs/docs/`.
+
+---
+
+## Design Implementation Requests
+
+### 1. Non-Blocking PAM I/O for `hikari-unlocker` (Bug 6)
+* **Context / Clarification:** Currently, PAM authentication blocks the main `wl_event_loop`, freezing the compositor. The structural solution is to fork `hikari-unlocker` or use a pipe so the compositor can continue rendering while waiting for authentication over `wl_event_loop_add_fd`.
+* **Tabled Questions:**
+  * Q: How should we bridge OpenPAM's inherently synchronous `pam_authenticate` calls with the asynchronous `wl_event_loop` in the compositor?
+  * Q: Should we isolate the PAM authentication into a separate threaded worker or child process that communicates via `wl_event_loop_add_fd` pipes?
+  * Q: Does FreeBSD provide asynchronous PAM extensions we could leverage?
+
+### 2. PAM Verification (`hikari-unlocker`)
+* **Context / Clarification:** The unlocker requires root privileges to read `/etc/master.passwd` via OpenPAM on FreeBSD. We must ensure the binary is owned by `root:wheel` and has the `4555` setuid bit. Testing this requires a live FreeBSD system; it cannot be simulated inside an unprivileged sandbox.
+* **Tabled Questions:**
+  * Q: Are there specific native FreeBSD testing harnesses for Wayland surfaces we should use instead of manual Wayland clients?
