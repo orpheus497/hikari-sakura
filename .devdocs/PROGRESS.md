@@ -1,6 +1,6 @@
 # Project Progress tracking
 
-*Last Updated:* 2026-07-31 15:46
+*Last Updated:* 2026-07-31 16:45
 
 | Phase | Description | Status |
 |---|---|---|
@@ -9,13 +9,14 @@
 | **Phase 3** | FreeBSD header adaptations | 100% ✓ |
 | **Phase 4** | wlroots 0.20 API migration | 100% ✓ (all API breaking changes resolved) |
 | **Phase 5** | wlr_scene rendering migration | 100% ✓ (all visual elements use wlr_scene graph) |
-| **Phase 6** | Build verification (initial) | 100% ✓ (clean `make` at time of Phase 6 — pre-Phase 11 fixes; revalidation tracked under Phase 12) |
+| **Phase 6** | Build verification (initial) | 100% ✓ (clean `make` at time of Phase 6 — revalidation tracked under Phase 12) |
 | **Phase 7a** | Runtime startup fixes | 100% ✓ (resolved black screen, scene output order, environment setup) |
 | **Phase 7b** | FreeBSD runtime validation | Pending (crash fix applied — awaiting retest on FreeBSD Wayland session) |
 | **Phase 8** | AGENTS.md code documentation compliance | 100% ✓ |
 | **Phase 9** | Runtime crash fix & final validation | 100% ✓ (removed `wlr_xdg_surface_ping`, fixed fullscreen handler, fixed unlocker framing) |
 | **Phase 10** | wlroots 0.20 initial_commit lifecycle | 100% ✓ (commit listener relocated, initial_commit handler added, popup lifecycle added, review fixes applied) |
 | **Phase 11** | Startup wiring deep investigation | 100% ✓ (5/7 bugs fixed; BUG-6 non-blocking PAM resolved in Phase 12; BUG-7 no action needed) |
-| **Phase 12** | XDG/tmpfs/ZFS resolution & PAM fixes | 95% — All code changes complete. PAM config fixed (auth include system). Non-blocking PAM I/O implemented (wl_event_loop_add_fd). ZFS detection warning added to start-hikari.sh. README updated with step-by-step ZFS/tmpfs fix. Build validated 2026-07-31. Awaiting runtime test. |
+| **Phase 12** | XDG/tmpfs/ZFS resolution & PAM fixes | 100% ✓ — All code changes complete. PAM config fixed. Non-blocking PAM I/O implemented. ZFS detection in start-hikari.sh. README updated. |
+| **Phase 13** | Codebase wiring audit, bug fixes & handbook verification | 100% ✓ — Full 55-file/64-header audit scored 93% correct. Fixed: switch toggle cascading if, output cairo surface check, duplicate includes in server.c, blocking `wait()` → `waitpid(WNOHANG)` in lock_mode.c, `output->server` init robustness, main.c comment migration. FreeBSD Handbook Ch.6 cross-reference verified. |
 
 *Note: DOD SoA tables and object pool phases were implemented and subsequently REVERTED as incompatible with wlr_scene workflows.*

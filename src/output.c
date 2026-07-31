@@ -82,7 +82,7 @@ hikari_output_load_background(struct hikari_output *output,
 
   cairo_surface_t *output_surface = cairo_image_surface_create(
       CAIRO_FORMAT_ARGB32, output_width, output_height);
-  if (cairo_surface_status(image) != CAIRO_STATUS_SUCCESS) {
+  if (cairo_surface_status(output_surface) != CAIRO_STATUS_SUCCESS) {
     cairo_surface_destroy(image);
     goto done;
   }
@@ -306,6 +306,9 @@ hikari_output_init(struct hikari_output *output, struct wlr_output *wlr_output)
   bool noop = wlr_output->backend == hikari_server.noop_backend;
 
   output->wlr_output = wlr_output;
+  // [COMMENT] Action purpose: Ensure output->server is always valid after init,
+  // regardless of caller. Frame handler (output.c:263) uses output->server->scene.
+  output->server = &hikari_server;
   output->scene_output = NULL;
   output->lock_indicator_node = NULL;
   output->background = NULL;

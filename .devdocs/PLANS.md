@@ -1,6 +1,6 @@
 # Forward Strategy & Plans
 
-*Last Updated:* 2026-07-31 15:53
+*Last Updated:* 2026-07-31 16:34
 
 ## Implementations to be Fully Implemented
 
@@ -12,10 +12,19 @@
    - Launch compositor and invoke `Meta+L` to trigger the lock screen.
    - Verify input characters render correctly and PAM unlocks upon Enter.
 
-2. **Non-Blocking PAM I/O Refactor:**
-   - Architect a pipe-based communication channel between `hikari` (parent) and `hikari-unlocker` (child).
-   - Use `wl_event_loop_add_fd` to listen for the authentication result without blocking Wayland rendering.
-   - Update lock indicator UI dynamically while waiting for authentication to complete.
+2. **Final Build Validation:**
+   - Execute `bmake` on the FreeBSD target to ensure all Phase 12 syntax and Makefile modifications compile correctly without warnings.
 
-3. **Final Build Validation:**
-   - Execute `bmake` on the FreeBSD target to ensure all Phase 11 syntax and Makefile modifications compile correctly without warnings.
+3. **Runtime Testing:**
+   - Resolve tmpfs/ZFS incompatibility for XDG_RUNTIME_DIR.
+   - Launch hikari on FreeBSD Wayland session.
+   - Verify PAM non-blocking unlock (implemented — needs live test).
+
+## Completed Implementations
+
+1. **Non-Blocking PAM I/O Refactor:** ✅ Completed 2026-07-31.
+   - Replaced blocking `read()` in `submit_password()` with `wl_event_loop_add_fd()`.
+   - Added `locker_result_handler()` callback.
+   - Added `locker_event_source` field to `struct hikari_lock_mode`.
+   - Cleanup in both handler and `cancel()` path.
+

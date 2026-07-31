@@ -4,6 +4,38 @@
 
 ---
 
+## [2026-07-31 16:45] Fix: Blocking `wait()` Replaced with `waitpid(WNOHANG)` in Lock Mode
+
+* **Context:** In `locker_result_handler()` (`src/lock_mode.c:154`), upon successful PAM authentication, `wait(&status)` was called to reap the `hikari-unlocker` child process. While the unlocker typically exits immediately after writing its result, `wait()` is unconditionally blocking — if the child hasn't terminated yet, the compositor event loop stalls.
+* **Decision:** Replaced with `waitpid(-1, &status, WNOHANG)`. Returns immediately if the child hasn't exited; the orphan will be reaped by init.
+* **Impact:** Eliminates a potential (rare) compositor stall during screen unlock.
+
+## [2026-07-31 16:45] Fix: `output->server` Not Initialized in `hikari_output_init()`
+
+* **Context:** `struct hikari_output` has a `server` field used by `frame_handler` (`output.c:263`: `output->server->scene`). This field was only set by the caller in `new_output_handler` (`server.c:226`), not inside `hikari_output_init()`. If any other code path called `hikari_output_init()` without setting `output->server`, a NULL dereference would occur.
+* **Decision:** Added `output->server = &hikari_server;` inside `hikari_output_init()`. Since `hikari_server` is a global singleton, this is safe and idempotent with the caller's assignment.
+* **Impact:** Defensive robustness — init is now self-contained.
+
+## [2026-07-31 16:45] Fix: Duplicate `#include` Directives in `server.c`
+
+* **Context:** `src/server.c` had duplicate `#include <wlr/types/wlr_data_device.h>` (lines 19, 31) and `#include <wlr/types/wlr_seat.h>` (lines 25, 32). No functional impact, but violates code hygiene standards.
+* **Decision:** Removed the duplicate includes on lines 31-32.
+* **Impact:** Cosmetic cleanup — no behavioral change.
+
+---
+
+## [2026-07-31 16:34] Fix: Switch Toggle Handler Cascading If Bug
+
+* **Context:** Full codebase wiring audit discovered that `toggle_handler` in `src/switch.c` used two sequential `if` statements instead of `if/else if`. After the first block set `state = WLR_SWITCH_STATE_ON`, the second `if (state == ON)` immediately fired because there was no `else`. Both begin AND end actions executed on every toggle event.
+* **Decision:** Changed the second `if` to `else if` so only one branch executes per toggle event.
+* **Impact:** Switch-based operations (e.g., laptop lid toggle actions) now fire correctly — begin on OFF→ON, end on ON→OFF.
+
+## [2026-07-31 16:34] Fix: Output Cairo Surface Status Check (Wrong Surface)
+
+* **Context:** In `hikari_output_load_background()` (`src/output.c:85`), after creating `output_surface` via `cairo_image_surface_create`, the status check was `cairo_surface_status(image)` instead of `cairo_surface_status(output_surface)`. This meant an `output_surface` allocation failure would go undetected if `image` was valid.
+* **Decision:** Changed to `cairo_surface_status(output_surface)`.
+* **Impact:** Prevents use of a failed cairo surface for background rendering.
+
 ## [2026-07-31 16:17] Decision: Non-blocking PAM Authentication I/O (BUG-6 Resolved)
 
 * **Context:** `submit_password()` in `lock_mode.c` used a synchronous `read(locker_pipe[1][0], &success, sizeof(bool))` that blocked the entire Wayland event loop during `pam_authenticate()`. PAM's `pam_unix.so` may delay 1-3 seconds on failure, freezing all rendering and input.

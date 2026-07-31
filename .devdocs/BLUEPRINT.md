@@ -1,6 +1,6 @@
 # Hikari Project Blueprint
 
-*Last Updated:* 2026-07-31 15:53
+*Last Updated:* 2026-07-31 16:45
 
 ## 1. Subsystem Architecture
 
@@ -48,6 +48,9 @@
 * **wlroots 0.20 Migration:** Resolved 13+ API-breaking changes across `cursor.c`, `output.c`, `server.c`, `switch.c`, and `xdg_view.c`.
 * **FreeBSD Adaptations:** Native evdev headers adopted, Makefile points to wlroots 0.20 via pkg-config with epoll-shim conditional.
 * **DOD Reverted:** Struct-of-Arrays (SoA) and Object Pool implementations were removed as they added unnecessary complexity and are incompatible with `wlr_scene` workflows.
+* **Non-Blocking PAM I/O:** Replaced blocking `read()` with `wl_event_loop_add_fd()` in lock mode. Added `locker_result_handler` callback.
+* **Phase 13 Audit Fixes:** Switch toggle cascading-if bug, output cairo surface check, duplicate includes, blocking `wait()` → `waitpid(WNOHANG)`, `output->server` initialization robustness, `main.c` comment prefix migration.
+* **Handbook Verification:** FreeBSD Handbook Ch.6 §6.1-6.4 cross-referenced — all requirements verified correct.
 * **Test Specifications:** Added build compilation (TC-BUILD-01), pkg-config dependencies (TC-PKG-01), and manual protocols for Evdev, Shared Memory, and PAM.
 
 ## 4. Test Specifications & Verification Framework
@@ -56,7 +59,7 @@
 |--------------|-------------|-------------|------------------|--------|
 | `TC-BUILD-01` | `Makefile` (`bmake`) | FreeBSD build compilation test (wlroots 0.20, Phase 6) | Clean compilation of `hikari` and `hikari-unlocker` | Passed ✓ (Phase 6 — pre-Phase 11 fixes; revalidation pending) |
 | `TC-PKG-01` | `pkg-config` | Resolve dependencies: `wlroots-0.20`, `pango`, `cairo`, `pixman`, `xkbcommon`, `libinput`, `libucl`, `epoll-shim` | All CFLAGS and LIBS resolved without missing packages | Passed ✓ (Phase 6 — dependency set unchanged) |
-| `TC-DOC-01` | `AGENTS.md` Linter | Source prefix audit: every script/source, standalone function, and specific action block has the exact `[COMMENT] Script function and purpose:`, `[COMMENT] Function purpose:`, or `[COMMENT] Action purpose:` prefix annotation | All modified files comply with the three defined prefixes | Pending |
+| `TC-DOC-01` | `AGENTS.md` Linter | Source prefix audit: every script/source, standalone function, and specific action block has the exact `[COMMENT] Script function and purpose:`, `[COMMENT] Function purpose:`, or `[COMMENT] Action purpose:` prefix annotation | All modified files comply with the three defined prefixes | Passed ✓ (Phase 13 — all modified files verified, `main.c` `##` prefixes migrated) |
 | `TC-FORMAT-01` | `clang-format` | Code formatting compliance | Zero formatting diffs against `.clang-format` rules | Pending |
 
 ### FreeBSD Manual Verification Protocol

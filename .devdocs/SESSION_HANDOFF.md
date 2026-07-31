@@ -4,6 +4,55 @@
 
 ---
 
+## Session Date: 2026-07-31 16:34 — Codebase Wiring Audit, Bug Fixes & Handbook Verification
+
+### Accomplishments
+
+1. **Full Codebase Wiring Audit:** Read and cross-referenced all 55 source files, 64 headers, Makefile, start-hikari.sh, hikari_unlocker.c, PAM configs, and hikari.desktop against wlroots 0.20 tinywl patterns.
+2. **Published comprehensive audit report** scoring codebase at ~93% correctly wired.
+3. **Fixed BUG (Medium): Switch toggle handler** (`src/switch.c:45`) — Changed cascading `if` to `else if`.
+4. **Fixed BUG (Low): Output cairo surface check** (`src/output.c:85`) — Checked wrong surface.
+5. **Fixed: Duplicate includes** (`src/server.c:31-32`) — Removed duplicate `wlr_data_device.h` and `wlr_seat.h`.
+6. **Fixed: Blocking wait()** (`src/lock_mode.c:154`) — Replaced `wait()` with `waitpid(-1, &status, WNOHANG)`.
+7. **Fixed: output->server init** (`src/output.c:308`) — Added `output->server = &hikari_server` inside `hikari_output_init()` for robustness.
+8. **Migrated main.c comments** — All `##` prefixes replaced with `[COMMENT]` format.
+9. **FreeBSD Handbook Cross-Reference Audit:** Read Ch.6 §6.1-6.4 and verified every requirement. Implementation exceeds handbook coverage.
+10. **Updated all devdocs:** PLANS.md, TODOS.md, DECISIONS_LOG.md, PROGRESS.md, BLUEPRINT.md, BRIEFING.md — all current.
+
+### Modified Files
+
+- `src/switch.c` — `else if` fix for toggle handler
+- `src/output.c` — Cairo surface check fix + `output->server` init
+- `src/server.c` — Removed duplicate includes
+- `src/lock_mode.c` — `wait()` → `waitpid(WNOHANG)`
+- `main.c` — Comment prefix migration to `[COMMENT]` format
+- `.devdocs/PLANS.md` — Non-blocking PAM marked complete, runtime testing added
+- `.devdocs/TODOS.md` — All fixes tracked, active items updated
+- `.devdocs/DECISIONS_LOG.md` — Five new entries
+- `.devdocs/PROGRESS.md` — Phase 13 added
+- `.devdocs/BLUEPRINT.md` — Implementation registry updated, TC-DOC-01 passed
+
+### Key Decisions
+
+- Switch toggle handler had a logic bug — cascading if statements caused dual-fire
+- Output background loading had a surface check bug — checking wrong cairo surface
+- `wait()` in lock_mode.c was a potential blocking point — replaced with WNOHANG
+- `output->server` was set by caller only — made init self-contained for robustness
+- FreeBSD Handbook §6.4 is outdated (old wlroots API) — requirements still valid, implementation correct
+
+### Next Steps
+
+1. Resolve tmpfs/ZFS incompatibility for XDG_RUNTIME_DIR on FreeBSD target
+2. Execute `bmake` build validation on FreeBSD
+3. Live-test PAM non-blocking unlock via `start-hikari.sh`
+4. Run `clang-format` compliance check (TC-FORMAT-01)
+
+### Blockers
+
+- **Environmental only:** ZFS-backed XDG_RUNTIME_DIR prevents Wayland client `wl_shm` allocations. Requires tmpfs overlay.
+
+---
+
 ## Session Date: 2026-07-31 16:17 — tmpfs/ZFS & PAM Fixes
 
 * **Phase:** Phase 12 — XDG/tmpfs/ZFS Resolution & PAM Fixes

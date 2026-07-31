@@ -42,7 +42,10 @@ toggle_handler(struct wl_listener *listener, void *data)
     swtch->state = WLR_SWITCH_STATE_ON;
   }
 
-  if (swtch->state == WLR_SWITCH_STATE_ON) {
+  // [COMMENT] Action purpose: Use else-if to prevent cascading — without it,
+  // both begin and end actions fire on every toggle because the first block
+  // sets state=ON, which immediately satisfies the second check.
+  else if (swtch->state == WLR_SWITCH_STATE_ON) {
     struct hikari_event_action *end = &swtch->action->end;
     if (end != NULL) {
       execute_action(end->action, end->arg);

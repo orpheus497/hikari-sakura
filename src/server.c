@@ -28,8 +28,6 @@
 #include <wlr/types/wlr_xdg_shell.h>
 #include <wlr/types/wlr_scene.h>
 #include <wlr/types/wlr_subcompositor.h>
-#include <wlr/types/wlr_data_device.h>
-#include <wlr/types/wlr_seat.h>
 
 #ifdef HAVE_LAYERSHELL
 #include <wlr/types/wlr_layer_shell_v1.h>

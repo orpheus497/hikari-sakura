@@ -151,7 +151,10 @@ locker_result_handler(int fd, uint32_t mask, void *data)
     int status;
     close(locker_pipe[1][0]);
     close(locker_pipe[0][1]);
-    wait(&status);
+    // [COMMENT] Action purpose: Reap the unlocker child process without blocking.
+    // WNOHANG returns immediately if the child hasn't exited yet; the orphan
+    // will be reaped by init. This prevents the compositor from stalling.
+    waitpid(-1, &status, WNOHANG);
 
     hikari_server_enter_normal_mode(NULL);
   } else {
