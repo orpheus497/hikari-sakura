@@ -4,6 +4,11 @@
 
 ---
 
+## Session Summary: 2026-07-31 14:20 — wlroots 0.20 Initial Commit Lifecycle Fix
+* **Phase:** Phase 10 — wlroots 0.20 Initial Commit Lifecycle Fix
+* **Status:** Completed (awaiting runtime test)
+* **Summary:** Deep analysis revealed the `surface->initialized` assertion crash was caused by a missing wlroots 0.20 lifecycle pattern, not a single bad API call. The commit listener was registered in `map()` (too late — `initial_commit` already happened), so `initialized` was never set to `true`. Fixed by: (A) moving commit listener to `hikari_xdg_view_init()` (new_toplevel time), (B) adding `initial_commit` handler calling `wlr_xdg_toplevel_set_size(0,0)`, (C) guarding `request_fullscreen_handler` with `initialized` check, (D) adding popup `initial_commit` handler. Cross-referenced against tinywl 0.20 reference. Clean build verified.
+
 ## Session Summary: 2026-07-31 13:46 — Runtime Crash Fix
 * **Phase:** Phase 9 — Runtime Crash Fix & Final Validation
 * **Status:** Completed
