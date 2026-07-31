@@ -230,20 +230,7 @@ output_geometry(struct hikari_output *output)
   }
 }
 
-/* static void */
-/* mode_handler(struct wl_listener *listener, void *data) */
-/* { */
-/* #if !defined(NDEBUG) */
-/*   printf("MODE\n"); */
-/* #endif */
 
-/*   struct hikari_output *output = wl_container_of( */
-/*       listener, */
-/*       output, */
-/*       mode); */
-
-/*   output_geometry(output); */
-/* } */
 
 #ifdef HAVE_LAYERSHELL
 static void
@@ -291,7 +278,7 @@ destroy_handler(struct wl_listener *listener, void *data)
   struct hikari_output *output = wl_container_of(listener, output, destroy);
 
 #ifndef NDEBUG
-  printf("DESTORY OUTPUT %p\n", output);
+  printf("DESTROY OUTPUT %p\n", output);
 #endif
 
   hikari_output_fini(output);

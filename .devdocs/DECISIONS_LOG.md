@@ -4,6 +4,65 @@
 
 ---
 
+## [2026-08-01 01:20] Phase 14: Comprehensive Codebase Audit — Bug Fixes and Cleanup
+
+* **Context:** Deep file-by-file investigation of all 55 source files, 64 headers, Makefile, start-hikari.sh, hikari_unlocker.c, PAM config, and desktop entry. The audit verified wiring, memory handling, D-Bus/IPC/XDG systems, FreeBSD integration, wlroots 0.20 API compliance, and searched for stubs/placeholders/fake logic.
+
+### BUG-1 (MEDIUM): `move_resize_view()` dx/dy confusion
+
+* **File:** `src/server.c:1617`
+* **Bug:** Both `lx` and `ly` added `dy`. The `lx` calculation should add `dx`. This caused incorrect output-crossing detection during resize-and-move operations (e.g., `decrease_view_size_right`, `increase_view_size_left`).
+* **Fix:** Changed `+ dy` to `+ dx` in the `lx` calculation.
+
+### BUG-2 (LOW): `outputs_disabled` stale state in lock mode
+
+* **File:** `src/lock_mode.c`
+* **Bug:** `outputs_disabled` was never initialized in `hikari_lock_mode_init()` and never reset in `cancel()`. After a lock-cancel cycle where outputs were disabled, re-entering lock mode could inherit stale state because `enable_outputs()` checks `!mode->outputs_disabled` and returns early.
+* **Fix:** Added `outputs_disabled = false` in both `hikari_lock_mode_init()` and `cancel()`.
+
+### BUG-3 (LOW): `command.c` waitpid infinite loop
+
+* **File:** `src/command.c:24-31`
+* **Bug:** The waitpid loop checked `errno == EINTR` unconditionally after `waitpid()`, but `errno` is only meaningful when `waitpid` returns `-1`. A stale `EINTR` from a prior syscall could cause an infinite loop.
+* **Fix:** Replaced with `while (waitpid(child, &status, 0) == -1 && errno == EINTR) {}`.
+
+### BUG-4 (LOW): Stale debug comment in server.c
+
+* **File:** `src/server.c:451`
+* **Bug:** `// CAN FAIL WITH NULL POINTER. HOW?` — misleading comment indicating an unresolved crash. `event->source` can be NULL (client clearing selection), which is valid.
+* **Fix:** Removed the comment.
+
+### Security: Password buffer zeroing
+
+* **File:** `src/lock_mode.c:48`
+* **Issue:** `memset(input_buffer, 0, BUFFER_SIZE)` could be optimized away by the compiler since the buffer is immediately reused. The unlocker correctly uses `explicit_bzero`.
+* **Fix:** Replaced with `explicit_bzero(input_buffer, BUFFER_SIZE)`.
+
+### Robustness: Unchecked pipe write
+
+* **File:** `src/lock_mode.c:244`
+* **Issue:** `write()` to the unlocker pipe had no return value check. If the pipe is broken or full, the password is silently lost.
+* **Fix:** Added EINTR-retrying write with stderr warning on failure.
+
+### Cleanup: Missing listener removal in `hikari_server_stop()`
+
+* **File:** `src/server.c`
+* **Issue:** `new_decoration`, `new_toplevel_decoration`, `new_layer_shell_surface`, `new_virtual_keyboard`, and `new_virtual_pointer` listeners were registered but never removed in `hikari_server_stop()`.
+* **Fix:** Added `wl_list_remove()` for all five, with proper `#ifdef` guards.
+
+### Cleanup: Dead code removal
+
+* **Files:** `include/hikari/render.h`, `src/output.c`, `include/hikari/output.h`, `include/hikari/xdg_view.h`, `include/hikari/server.h`
+* **Removed:** Empty render.h (vestige of removed renderer), commented-out `mode_handler` block, commented-out `struct wl_listener mode` member, unused `request_move`/`request_resize`/`request_maximize` listener declarations in `hikari_xdg_view`, "DESTORY" typo → "DESTROY".
+* **Migrated:** `server.h` comment prefixes from `##` to `[COMMENT]` per AGENTS.md.
+
+### Desktop entry and gitignore
+
+* Added `DesktopNames=Hikari` to `hikari.desktop` for XDG portal backend identification.
+* Updated `.gitignore` with `*.core` wildcard, `compile_flags.txt`, and `.clangd`.
+
+---
+
 ## [2026-07-31 20:38] Cleanup: Remove glibc-isms from hikari-unlocker and dead Linux PAM file
 
 * **Context:** Full FreeBSD stack audit revealed `_GNU_SOURCE`, `_DEFAULT_SOURCE`, and a manual `void explicit_bzero(void *, size_t)` prototype in `hikari_unlocker.c`. These are glibc-specific — on FreeBSD, `explicit_bzero` is declared in `<strings.h>` (already included) without feature macros. Additionally, `etc/pam.d/hikari-unlocker.Linux` remains despite Linux support being removed from the project.

@@ -448,7 +448,6 @@ request_set_primary_selection_handler(struct wl_listener *listener, void *data)
 
   struct wlr_seat_request_set_primary_selection_event *event = data;
 
-  // CAN FAIL WITH NULL POINTER. HOW?
   wlr_seat_set_primary_selection(server->seat, event->source, event->serial);
 }
 
@@ -1088,8 +1087,17 @@ hikari_server_stop(void)
   wl_list_remove(&server->request_start_drag.link);
   wl_list_remove(&server->start_drag.link);
   wl_list_remove(&server->output_layout_change.link);
+  wl_list_remove(&server->new_decoration.link);
+  wl_list_remove(&server->new_toplevel_decoration.link);
+#ifdef HAVE_LAYERSHELL
+  wl_list_remove(&server->new_layer_shell_surface.link);
+#endif
 #ifdef HAVE_XWAYLAND
   wl_list_remove(&server->new_xwayland_surface.link);
+#endif
+#ifdef HAVE_VIRTUAL_INPUT
+  wl_list_remove(&server->new_virtual_keyboard.link);
+  wl_list_remove(&server->new_virtual_pointer.link);
 #endif
 
   if (server->shutdown_timer != NULL) {
@@ -1614,7 +1622,7 @@ move_resize_view(int dx, int dy, int dwidth, int dheight)
   struct hikari_output *view_output = focus_view->output;
   struct wlr_box *geometry = hikari_view_geometry(focus_view);
 
-  double lx = view_output->geometry.x + geometry->x + dy;
+  double lx = view_output->geometry.x + geometry->x + dx;
   double ly = view_output->geometry.y + geometry->y + dy;
 
   struct wlr_output *wlr_output =

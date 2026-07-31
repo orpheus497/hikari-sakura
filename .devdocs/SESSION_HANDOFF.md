@@ -4,6 +4,56 @@
 
 ---
 
+## Session Date: 2026-08-01 01:24 — Phase 14: Comprehensive Audit Bug Fixes & Dead Code Cleanup
+
+### Accomplishments
+
+1. Completed deep file-by-file audit of entire codebase (55 source files, 64 headers, build system, scripts, PAM config, desktop entry).
+2. Published comprehensive audit report as artifact (`implementation_plan.md`).
+3. Fixed BUG-1 (MEDIUM): `move_resize_view()` dx/dy confusion in server.c — lx used dy instead of dx.
+4. Fixed BUG-2 (LOW): `outputs_disabled` stale state in lock_mode — added init in `hikari_lock_mode_init()` and reset in `cancel()`.
+5. Fixed BUG-3 (LOW): `command.c` waitpid infinite loop — inverted errno check.
+6. Fixed BUG-4 (LOW): Removed stale "CAN FAIL WITH NULL POINTER" debug comment.
+7. Security: Replaced `memset` with `explicit_bzero` for password buffer zeroing in lock_mode.c.
+8. Robustness: Added EINTR-retrying write + error check for lock_mode pipe write.
+9. Added 5 missing `wl_list_remove()` calls in `hikari_server_stop()` for decoration, layer shell, and virtual input listeners.
+10. Removed dead code: empty render.h, commented-out mode_handler, commented-out struct members, unused xdg_view listener declarations.
+11. Fixed "DESTORY" typo → "DESTROY" in output.c.
+12. Migrated server.h comment prefixes from `##` to `[COMMENT]`.
+13. Added `DesktopNames=Hikari` to hikari.desktop.
+14. Updated .gitignore with `*.core`, `compile_flags.txt`, `.clangd`.
+
+### Modified Files
+
+| File | Change |
+|---|---|
+| `src/server.c` | BUG-1 dx fix, BUG-4 comment removal, 5 new listener removals in stop() |
+| `src/command.c` | BUG-3 waitpid fix |
+| `src/lock_mode.c` | BUG-2 outputs_disabled init, explicit_bzero, write() check |
+| `src/output.c` | Removed dead mode_handler block, fixed DESTORY typo |
+| `include/hikari/output.h` | Removed dead `struct wl_listener mode` comment |
+| `include/hikari/xdg_view.h` | Removed 3 unused listener members |
+| `include/hikari/server.h` | Comment prefix migration |
+| `share/wayland-sessions/hikari.desktop` | Added DesktopNames |
+| `.gitignore` | Consolidated core dumps, added IDE files |
+
+### Key Decisions
+
+- All empty handlers in lock_mode.c confirmed intentional (mode vtable no-ops, not stubs).
+- `hikari_output_add_damage()` region parameter is unused (scene graph handles damage) — left for API compat, not removed.
+- `wlr_output_effective_resolution()` in layer_shell.c flagged for build-time verification — may be deprecated in wlroots 0.20.
+- `include/hikari/render.h` needs manual `rm` — file tools cannot delete files.
+
+### Next Steps for Next Agent
+
+1. **Manual file deletions:** `rm include/hikari/render.h`, `rm etc/pam.d/hikari-unlocker.Linux`, `rm *.core` from repo root.
+2. **Build validation:** Run `bmake` to confirm all Phase 13-14 fixes compile cleanly against wlroots 0.20.
+3. **Verify `wlr_output_effective_resolution()`** exists in installed wlroots 0.20 headers (layer_shell.c dependency).
+4. **Resolve tmpfs/ZFS issue** for XDG_RUNTIME_DIR on FreeBSD.
+5. **Runtime testing** on FreeBSD Wayland session.
+
+---
+
 ## Session Date: 2026-07-31 16:34 — Codebase Wiring Audit, Bug Fixes & Handbook Verification
 
 ### Accomplishments

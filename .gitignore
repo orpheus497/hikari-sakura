@@ -7,7 +7,9 @@ version\.h
 hikari.*\.tar\.gz
 wlr-layer-shell-unstable-v1-protocol.h
 
-hikari.core
-systemsettings.core
-kitty.core
-libuv-worker.core
+# Core dumps
+*.core
+
+# IDE/tooling
+compile_flags.txt
+.clangd

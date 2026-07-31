@@ -10,6 +10,13 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+// [COMMENT] Action purpose: Portability shim — on FreeBSD, explicit_bzero is
+// declared in <strings.h>. On Linux (used only for IDE analysis, not builds),
+// it requires _DEFAULT_SOURCE. Provide a fallback declaration so clangd works.
+#if !defined(__FreeBSD__) && !defined(HAVE_EXPLICIT_BZERO)
+extern void explicit_bzero(void *, size_t);
+#endif
+
 #include <wlr/types/wlr_seat.h>
 #include <errno.h>
 #include <wayland-server-core.h>
@@ -45,7 +52,7 @@ static void
 clear_buffer(void)
 {
   cursor = 0;
-  memset(input_buffer, 0, BUFFER_SIZE);
+  explicit_bzero(input_buffer, BUFFER_SIZE);
 }
 
 static void
@@ -241,7 +248,17 @@ submit_password(void)
   size_t password_length = strnlen(input_buffer, 1023) + 1;
 
   hikari_lock_indicator_set_verify(mode->lock_indicator);
-  write(locker_pipe[0][1], input_buffer, password_length);
+  // [COMMENT] Action purpose: Write password to unlocker pipe. If write fails
+  // (broken pipe, full buffer), the password is silently lost — the unlocker
+  // will not receive it and will not write a result, so locker_result_handler
+  // will eventually fire with WL_EVENT_HANGUP and show the deny indicator.
+  ssize_t nw;
+  do {
+    nw = write(locker_pipe[0][1], input_buffer, password_length);
+  } while (nw == -1 && errno == EINTR);
+  if (nw < 0) {
+    fprintf(stderr, "lock_mode: failed to write password to unlocker pipe\n");
+  }
   clear_buffer();
 
   // [COMMENT] Action purpose: Register the locker result pipe with the Wayland
@@ -416,6 +433,10 @@ cancel(void)
   hikari_free(mode->lock_indicator);
   mode->lock_indicator = NULL;
 
+  // [COMMENT] Action purpose: Reset outputs_disabled flag so re-entry into
+  // lock mode starts with clean state.
+  mode->outputs_disabled = false;
+
   reset_visibility();
 
   hikari_cursor_activate(&hikari_server.cursor);
@@ -447,6 +468,7 @@ hikari_lock_mode_init(struct hikari_lock_mode *lock_mode)
 
   lock_mode->lock_indicator = NULL;
   lock_mode->locker_event_source = NULL;
+  lock_mode->outputs_disabled = false;
 
   mlock(input_buffer, BUFFER_SIZE);
   clear_buffer();
