@@ -4,6 +4,24 @@
 
 ---
 
+## Session Date: 2026-07-31 14:20 — wlroots 0.20 Initial Commit Lifecycle Fix
+
+* **Phase:** Phase 10 — wlroots 0.20 Initial Commit Lifecycle Fix
+* **Accomplishments:**
+  - **Root cause identified:** The `surface->initialized` assertion crash was NOT caused by a single bad API call — it was a missing wlroots 0.20 lifecycle pattern. The commit listener was registered in `map()` instead of at `new_toplevel` time, so `initial_commit` was never handled, `initialized` was never set to `true`, and any subsequent configure call crashed.
+  - **Fix A:** Moved commit listener registration from `map()` to `hikari_xdg_view_init()` (lines 538-539).
+  - **Fix B:** Added `initial_commit` guard at top of `commit_handler` — calls `wlr_xdg_toplevel_set_size(0, 0)` and returns early (lines 58-68).
+  - **Fix C:** Guarded `request_fullscreen_handler` with `surface->initialized` check (lines 451-456).
+  - **Fix D:** Added `popup_commit_handler` function (lines 338-351) and registered popup commit listener in `xdg_popup_create` (lines 424-428). Added `struct wl_listener commit` to `hikari_xdg_popup` in `xdg_view.h`.
+  - **Build:** `make` completed successfully — zero warnings, both binaries link cleanly.
+* **Modified Files:**
+  - `include/hikari/xdg_view.h` — added `commit` listener to popup struct
+  - `src/xdg_view.c` — all 4 lifecycle fixes
+  - `.devdocs/BRIEFING.md`, `.devdocs/DECISIONS_LOG.md`, `.devdocs/PROGRESS.md`, `.devdocs/SESSION_HANDOFF.md`, `.devdocs/SUMMARIES.md`
+* **Remaining Work:** `./start-hikari.sh` runtime test on FreeBSD. PAM `hikari-unlocker` verification.
+
+---
+
 ## Session Date: 2026-07-31 13:46 — Runtime Crash Fix & Comprehensive Cleanup
 
 * **Phase:** Phase 9 — Runtime Crash Fix & Final Validation
