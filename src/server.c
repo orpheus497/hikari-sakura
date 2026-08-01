@@ -690,7 +690,25 @@ static void
 setup_scene_graph(struct hikari_server *server)
 {
   server->scene = wlr_scene_create();
-  server->scene_layout = wlr_scene_attach_output_layout(server->scene, server->output_layout);
+  // [COMMENT] Action purpose: Guard against scene root allocation failure.
+  // All rendering depends on the scene tree; a NULL scene cannot be used.
+  if (server->scene == NULL) {
+    fprintf(stderr, "error: could not create scene graph\n");
+    wl_display_destroy(server->display);
+    exit(EXIT_FAILURE);
+  }
+
+  server->scene_layout = wlr_scene_attach_output_layout(
+      server->scene, server->output_layout);
+  // [COMMENT] Action purpose: Guard against output-layout attachment failure.
+  // Without a valid scene_layout, scene outputs cannot be registered and
+  // frame commits will crash on a null pointer.
+  if (server->scene_layout == NULL) {
+    fprintf(stderr, "error: could not attach output layout to scene graph\n");
+    wlr_scene_node_destroy(&server->scene->tree.node);
+    wl_display_destroy(server->display);
+    exit(EXIT_FAILURE);
+  }
 }
 
 static void
@@ -1149,6 +1167,11 @@ hikari_server_stop(void)
   // separately -- the session is owned by the backend.
   if (server->backend != NULL) {
     wlr_backend_destroy(server->backend);
+  }
+  // [COMMENT] Action purpose: Destroy scene root before output layout so all
+  // scene outputs are released while the layout is still valid.
+  if (server->scene != NULL) {
+    wlr_scene_node_destroy(&server->scene->tree.node);
   }
   wlr_output_layout_destroy(server->output_layout);
   wl_display_destroy(server->display);

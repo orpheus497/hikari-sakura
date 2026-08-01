@@ -46,7 +46,15 @@ fi
 
 # [COMMENT] Action purpose: Validate XDG_RUNTIME_DIR ownership and permissions.
 # Both caller-supplied and generated paths are checked before exec. The path
-# must be an existing directory owned by the current user with mode 0700.
+# must be an absolute path, an existing directory owned by the current user
+# with mode 0700.
+case "$XDG_RUNTIME_DIR" in
+    /*) ;;
+    *)
+        echo "start-hikari: XDG_RUNTIME_DIR ($XDG_RUNTIME_DIR) is not an absolute path" >&2
+        exit 1
+        ;;
+esac
 USER_UID=$(id -u) || { echo "start-hikari: failed to determine current UID" >&2; exit 1; }
 DIR_UID=$(stat -c '%u' "$XDG_RUNTIME_DIR" 2>/dev/null || stat -f '%u' "$XDG_RUNTIME_DIR" 2>/dev/null)
 DIR_PERMS=$(stat -c '%a' "$XDG_RUNTIME_DIR" 2>/dev/null || stat -f '%OLp' "$XDG_RUNTIME_DIR" 2>/dev/null)
