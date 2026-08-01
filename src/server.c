@@ -832,7 +832,11 @@ done:
 static void
 init_noop_output(struct hikari_server *server)
 {
-  server->noop_backend = wlr_headless_backend_create(wl_display_get_event_loop(server->display));
+  // [COMMENT] Action purpose: In wlroots 0.18+, wlr_headless_backend_create takes
+  // a struct wl_display * (not struct wl_event_loop *). Pass server->display directly.
+  // wlr_backend_autocreate (main backend) still takes event_loop -- only the headless
+  // API changed.
+  server->noop_backend = wlr_headless_backend_create(server->display);
 
   // [COMMENT] Action purpose: Guard against headless backend allocation failure.
   // Without a noop backend, the compositor cannot manage views when no physical

@@ -450,11 +450,17 @@ cancel(void)
     close(locker_pipe[1][0]);
     locker_pipe[1][0] = -1;
   }
+  // [COMMENT] Action purpose: Non-blocking reap attempt. The child will exit shortly
+  // after stdin receives EOF (pipe write-end closed above). If it hasn't exited yet
+  // (WNOHANG returns 0), retain locker_pid and defer the final blocking waitpid to
+  // hikari_lock_mode_fini so cancel() never blocks the compositor event loop.
   if (locker_pid > 0) {
     int status;
-    while (waitpid(locker_pid, &status, 0) == -1 && errno == EINTR)
-      ;
-    locker_pid = -1;
+    pid_t result = waitpid(locker_pid, &status, WNOHANG);
+    if (result == locker_pid || result == -1) {
+      locker_pid = -1;
+    }
+    // result == 0: child still running; locker_pid retained for fini reap
   }
 
   wl_event_source_remove(mode->disable_outputs);
@@ -514,6 +520,16 @@ hikari_lock_mode_init(struct hikari_lock_mode *lock_mode)
 void
 hikari_lock_mode_fini(struct hikari_lock_mode *lock_mode)
 {
+  // [COMMENT] Action purpose: Deferred reap for any unlocker child that was still
+  // running when cancel() used WNOHANG and got result == 0. The child exits
+  // shortly after its stdin received EOF (pipe write-end was closed in cancel()),
+  // so this blocking wait returns almost immediately.
+  if (locker_pid > 0) {
+    int status;
+    while (waitpid(locker_pid, &status, 0) == -1 && errno == EINTR)
+      ;
+    locker_pid = -1;
+  }
   munlock(input_buffer, BUFFER_SIZE);
 }
 

@@ -18,6 +18,13 @@ unset DISPLAY
 export XDG_SESSION_TYPE=wayland
 export XDG_SESSION_CLASS=user
 
+# [COMMENT] Action purpose: Export XDG_CURRENT_DESKTOP so that xdg-desktop-portal
+# selects the correct portal backend for Hikari. Without this, portal clients
+# (file picker, screen share, secret service) fall back to the GTK or generic
+# portal which may reject compositor-specific requests. Matches the DesktopNames
+# field in hikari.desktop so display-manager and TTY sessions are consistent.
+export XDG_CURRENT_DESKTOP=Hikari
+
 # [COMMENT] Action purpose: Bootstrap XDG_RUNTIME_DIR if the system (pam_xdg,
 # systemd, or elogind) did not provide one. FreeBSD with seatd typically
 # requires this. Creates a secure runtime directory at /tmp/hikari-runtime-$UID.
