@@ -438,6 +438,25 @@ cancel(void)
     mode->locker_event_source = NULL;
   }
 
+  // [COMMENT] Action purpose: Close pipe FDs and reap the unlocker child if
+  // authentication was still in flight when cancel is called (e.g. compositor
+  // shutdown while locked). Closing the write end of the password pipe causes
+  // the child to receive EOF on its stdin and exit cleanly.
+  if (locker_pipe[0][1] != -1) {
+    close(locker_pipe[0][1]);
+    locker_pipe[0][1] = -1;
+  }
+  if (locker_pipe[1][0] != -1) {
+    close(locker_pipe[1][0]);
+    locker_pipe[1][0] = -1;
+  }
+  if (locker_pid > 0) {
+    int status;
+    while (waitpid(locker_pid, &status, 0) == -1 && errno == EINTR)
+      ;
+    locker_pid = -1;
+  }
+
   wl_event_source_remove(mode->disable_outputs);
   mode->disable_outputs = NULL;
 

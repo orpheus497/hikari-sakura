@@ -1650,7 +1650,7 @@ move_resize_view(int dx, int dy, int dwidth, int dheight)
     hikari_view_move_resize(focus_view, dx, dy, dwidth, dheight);
   } else {
     hikari_server_migrate_focus_view(wlr_output->data, lx, ly, false);
-    hikari_view_resize(focus_view, dheight, dwidth);
+    hikari_view_resize(focus_view, dwidth, dheight);
   }
 }
 
