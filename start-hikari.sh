@@ -63,7 +63,7 @@ fi
 # posix_fallocate() returns EOPNOTSUPP on ZFS, causing Wayland wl_shm buffer
 # allocations to fail for clients. The fix is to mount tmpfs over the path or
 # disable ZFS automount for the dataset (e.g. zfs set canmount=noauto zroot/tmp).
-FS_TYPE=$(stat -f '%T' "$XDG_RUNTIME_DIR" 2>/dev/null)
+FS_TYPE=$(df -T "$XDG_RUNTIME_DIR" 2>/dev/null | awk 'NR==2{print $2}')
 if [ "$FS_TYPE" = "zfs" ]; then
     echo "start-hikari: WARNING: XDG_RUNTIME_DIR ($XDG_RUNTIME_DIR) is on ZFS." >&2
     echo "  posix_fallocate() is not supported on ZFS -- Wayland clients may fail." >&2

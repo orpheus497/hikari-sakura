@@ -861,6 +861,8 @@ init_noop_output(struct hikari_server *server)
   // what new_output_handler does for real outputs. Without this, any rendering
   // path that touches the noop output will fail.
   if (!wlr_output_init_render(wlr_output, server->allocator, server->renderer)) {
+    fprintf(stderr, "error: could not initialize render for noop output\n");
+    wl_display_destroy(server->display);
     exit(EXIT_FAILURE);
   }
 
