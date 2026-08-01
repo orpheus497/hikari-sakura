@@ -860,7 +860,9 @@ init_noop_output(struct hikari_server *server)
   // [COMMENT] Action purpose: Initialize render backend for the noop output, matching
   // what new_output_handler does for real outputs. Without this, any rendering
   // path that touches the noop output will fail.
-  wlr_output_init_render(wlr_output, server->allocator, server->renderer);
+  if (!wlr_output_init_render(wlr_output, server->allocator, server->renderer)) {
+    exit(EXIT_FAILURE);
+  }
 
   struct hikari_output *noop_output =
       hikari_malloc(sizeof(struct hikari_output));

@@ -426,6 +426,9 @@ reset_visibility(void)
   }
 }
 
+// [COMMENT] Function purpose: Tear down active lock mode state, restoring outputs and
+// compositor focus to normal operation. Called on authentication success or forced
+// cancellation (e.g. compositor shutdown while locked).
 static void
 cancel(void)
 {
@@ -456,8 +459,11 @@ cancel(void)
   // hikari_lock_mode_fini so cancel() never blocks the compositor event loop.
   if (locker_pid > 0) {
     int status;
-    pid_t result = waitpid(locker_pid, &status, WNOHANG);
-    if (result == locker_pid || result == -1) {
+    pid_t result;
+    do {
+      result = waitpid(locker_pid, &status, WNOHANG);
+    } while (result == -1 && errno == EINTR);
+    if (result > 0 || (result == -1 && errno == ECHILD)) {
       locker_pid = -1;
     }
     // result == 0: child still running; locker_pid retained for fini reap
@@ -517,6 +523,9 @@ hikari_lock_mode_init(struct hikari_lock_mode *lock_mode)
   clear_buffer();
 }
 
+// [COMMENT] Function purpose: Final cleanup of lock mode resources, including a
+// deferred blocking reap of any unlocker child that cancel() could not collect
+// non-blockingly, and unlocking the password buffer from RAM.
 void
 hikari_lock_mode_fini(struct hikari_lock_mode *lock_mode)
 {
