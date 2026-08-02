@@ -4,6 +4,49 @@
 
 ---
 
+## Session Date: 2026-08-02 13:23 — Phase 15: Review Fix — start-hikari.sh Binary Resolution & Documentation Audit
+
+### Accomplishments
+
+1. **Verified review finding** against current code: binary resolution block (lines 68-78) used `command -v hikari` (PATH) first and `./hikari` (CWD-relative) as fallback. The `./hikari` fallback is fragile — it resolves relative to the caller's working directory, not the script's location.
+2. **Applied fix:** Added `SCRIPT_DIR` derivation using `$(cd -- "$(dirname -- "$0")" && pwd)` to resolve the wrapper's own directory. Changed resolution order to: `${SCRIPT_DIR}/hikari` (sibling) → PATH → `./hikari` (legacy edge case). Updated error message to include `${SCRIPT_DIR}` in diagnostic output.
+3. **Rationale confirmed:** Makefile installs both `start-hikari` and `hikari` to `${PREFIX}/bin/` — they are siblings. The `SCRIPT_DIR` approach is the correct portable pattern for both installed and in-tree development scenarios.
+4. **Full documentation audit** — verified all 7 devdocs files and README against current code state:
+   - **README.md:** Fixed stale Linux PAM reference (Linux PAM file was deleted), typo "staring"→"starting", missing `export` in XKB example, outdated PATH requirement, added ZFS detection/validation/SCRIPT_DIR to Launching feature list.
+   - **BRIEFING.md:** Updated to Phase 15, refreshed timestamp, fixed stale SCRIPT_DIR description, added Phase 15 accomplishments.
+   - **PROGRESS.md:** Updated timestamp.
+   - **PLANS.md:** Moved completed items (ZFS detection, PAM config, start-hikari fix) from pending to completed. Added API verification and formatting tasks to pending.
+   - **TODOS.md:** Removed already-completed ZFS detection from active list. Added Phase 15, ZFS detection, XDG validation, and PAM config fix to completed. Added API check and manual cleanup to active.
+   - **BLUEPRINT.md:** Updated timestamp, added Phase 14-15 to Implementation Registry.
+   - **DECISIONS_LOG.md:** Added Phase 15 SCRIPT_DIR decision entry.
+
+### Modified Files
+
+| File | Change |
+|---|---|
+| `start-hikari.sh` | Added SCRIPT_DIR derivation, three-tier binary resolution |
+| `README.md` | Fixed stale Linux PAM ref, typo, missing export, PATH claim, expanded Launching list |
+| `.devdocs/BRIEFING.md` | Updated to Phase 15, refreshed all sections |
+| `.devdocs/PROGRESS.md` | Updated timestamp, Phase 15 already added |
+| `.devdocs/PLANS.md` | Reorganized pending vs completed, added missing tasks |
+| `.devdocs/TODOS.md` | Fixed active/completed accuracy, added missing items |
+| `.devdocs/BLUEPRINT.md` | Updated timestamp, added Phase 14-15 to registry |
+| `.devdocs/DECISIONS_LOG.md` | Added Phase 15 decision entry |
+| `.devdocs/SESSION_HANDOFF.md` | This entry |
+
+### Key Decisions
+
+- `SCRIPT_DIR` uses `cd -- "$(dirname -- "$0")" && pwd` — POSIX-portable, resolves symlinks to real directory, works on FreeBSD `/bin/sh`.
+- `./hikari` kept as final fallback for edge cases where the script was copied without its sibling binary.
+- Removed all stale Linux references from README since `hikari-unlocker.Linux` was deleted and the project is FreeBSD-only.
+
+### Next Steps
+
+1. Build validation (`bmake`) to confirm no regressions.
+2. Runtime testing on FreeBSD Wayland session.
+
+---
+
 ## Session Date: 2026-08-01 01:24 — Phase 14: Comprehensive Audit Bug Fixes & Dead Code Cleanup
 
 ### Accomplishments

@@ -1,6 +1,6 @@
 # Project Progress tracking
 
-*Last Updated:* 2026-08-01 01:24
+*Last Updated:* 2026-08-02 13:25
 
 | Phase | Description | Status |
 |---|---|---|
@@ -19,5 +19,6 @@
 | **Phase 12** | XDG/tmpfs/ZFS resolution & PAM fixes | 100% ✓ — All code changes complete. PAM config fixed. Non-blocking PAM I/O implemented. ZFS detection in start-hikari.sh. README updated. |
 | **Phase 13** | Codebase wiring audit, bug fixes & handbook verification | 100% ✓ — Full 55-file/64-header audit scored 93% correct. Fixed: switch toggle cascading if, output cairo surface check, duplicate includes in server.c, blocking `wait()` → `waitpid(WNOHANG)` in lock_mode.c, `output->server` init robustness, main.c comment migration. FreeBSD Handbook Ch.6 cross-reference verified. |
 | **Phase 14** | Comprehensive audit bug fixes & dead code cleanup | 100% ✓ — Fixed: BUG-1 move_resize_view dx/dy, BUG-2 outputs_disabled stale state, BUG-3 command.c waitpid, BUG-4 stale comment. Security: explicit_bzero. Robustness: write() check. Added 5 missing listener cleanups. Removed dead code (render.h deleted, mode_handler, unused struct members). Updated desktop entry and gitignore. |
+| **Phase 15** | Review fix: start-hikari.sh binary resolution | 100% ✓ — Added SCRIPT_DIR derivation so sibling hikari binary is found regardless of CWD. Three-tier lookup: ${SCRIPT_DIR}/hikari → PATH → ./hikari. |
 
 *Note: DOD SoA tables and object pool phases were implemented and subsequently REVERTED as incompatible with wlr_scene workflows.*

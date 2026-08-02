@@ -80,15 +80,23 @@ if [ "$FS_TYPE" = "zfs" ]; then
     echo "  See README.md for details." >&2
 fi
 
-# [COMMENT] Action purpose: Resolve hikari binary — prefer system-installed
-# binary on $PATH so that installed deployments work correctly (e.g. rc.d /
-# service scripts). Fall back to ./hikari for in-tree development builds.
-if command -v hikari > /dev/null 2>&1; then
+# [COMMENT] Action purpose: Derive the directory that contains this wrapper
+# script so that a co-installed hikari binary (sibling executable) is found
+# regardless of the caller's working directory.
+SCRIPT_DIR=$(cd -- "$(dirname -- "$0")" && pwd)
+
+# [COMMENT] Action purpose: Resolve hikari binary — prefer the sibling
+# executable at ${SCRIPT_DIR}/hikari (covers both installed /usr/local/bin and
+# in-tree development layouts). Fall back to $PATH, then ./hikari for edge
+# cases where the script was copied without its sibling.
+if [ -x "${SCRIPT_DIR}/hikari" ]; then
+    HIKARI_BIN="${SCRIPT_DIR}/hikari"
+elif command -v hikari > /dev/null 2>&1; then
     HIKARI_BIN=hikari
 elif [ -x "./hikari" ]; then
     HIKARI_BIN=./hikari
 else
-    echo "start-hikari: hikari binary not found on PATH or in current directory" >&2
+    echo "start-hikari: hikari binary not found in ${SCRIPT_DIR}, on PATH, or in current directory" >&2
     exit 1
 fi
 

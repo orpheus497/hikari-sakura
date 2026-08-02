@@ -75,18 +75,17 @@ mkdir -p -m 0700 "$XDG_RUNTIME_DIR"
 ### Setting up PAM
 
 Setting up PAM is needed to give `hikari` the ability to unlock the screen when
-using the screen locker. Copy the appropriate `hikari-unlocker` file from the
-`pam.d` folder to `/usr/local/etc/pam.d` (or `/etc/pam.d` on most Linux
-systems).
+using the screen locker. Copy `etc/pam.d/hikari-unlocker.FreeBSD` from the
+source tree to `/usr/local/etc/pam.d/hikari-unlocker`.
 
 ### Setting up the keyboard layout
 
 `hikari` gets its keyboard settings from `xkb` environment variables. To select
-a layout set the `XKB_DEFAULT_LAYOUT` to the desired value before staring
+a layout set the `XKB_DEFAULT_LAYOUT` to the desired value before starting
 `hikari`.
 
 ```sh
-XKB_DEFAULT_LAYOUT "de(nodeadkeys),de"
+export XKB_DEFAULT_LAYOUT="de(nodeadkeys),de"
 ```
 
 ## Building
@@ -116,7 +115,7 @@ a `start-hikari` wrapper script. `hikari-unlocker` is used to check credentials
 for unlocking the screen, which needs to be installed with root setuid.
 `hikari` can rely on `seatd` to gain root privileges when required; however, if
 needed it can also be installed with root setuid — see "Installing with SUID"
-below. All three files need to be located in your `PATH`.
+below. All three files are installed to `${PREFIX}/bin` by `make install`.
 
 ### Launching
 
@@ -125,6 +124,9 @@ session environment before executing the `hikari` binary:
 
 * Clears leaked `WAYLAND_DISPLAY` / `DISPLAY` variables
 * Creates `XDG_RUNTIME_DIR` if the system did not provide one
+* Validates `XDG_RUNTIME_DIR` ownership (current user) and permissions (`0700`)
+* Warns if `XDG_RUNTIME_DIR` resides on ZFS (incompatible with `posix_fallocate`)
+* Resolves the `hikari` binary from the script's own directory, `$PATH`, or `./`
 * Wraps execution in a D-Bus session if one is not already active
 
 ```sh

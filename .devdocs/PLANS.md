@@ -1,6 +1,6 @@
 # Forward Strategy & Plans
 
-*Last Updated:* 2026-07-31 16:34
+*Last Updated:* 2026-08-02 13:25
 
 ## Implementations to be Fully Implemented
 
@@ -13,12 +13,18 @@
    - Verify input characters render correctly and PAM unlocks upon Enter.
 
 2. **Final Build Validation:**
-   - Execute `bmake` on the FreeBSD target to ensure all Phase 12 syntax and Makefile modifications compile correctly without warnings.
+   - Execute `bmake` on the FreeBSD target to ensure all Phase 13-15 fixes compile correctly without warnings.
 
 3. **Runtime Testing:**
    - Resolve tmpfs/ZFS incompatibility for XDG_RUNTIME_DIR.
    - Launch hikari on FreeBSD Wayland session.
    - Verify PAM non-blocking unlock (implemented — needs live test).
+
+4. **API Verification:**
+   - Verify `wlr_output_effective_resolution()` exists in installed wlroots 0.20 headers (`src/layer_shell.c:177` depends on it).
+
+5. **Code Formatting:**
+   - Run `clang-format` compliance check (TC-FORMAT-01).
 
 ## Completed Implementations
 
@@ -28,3 +34,14 @@
    - Added `locker_event_source` field to `struct hikari_lock_mode`.
    - Cleanup in both handler and `cancel()` path.
 
+2. **start-hikari.sh Binary Resolution:** ✅ Completed 2026-08-02.
+   - Added `SCRIPT_DIR` derivation for reliable sibling binary resolution.
+   - Three-tier lookup: `${SCRIPT_DIR}/hikari` → PATH → `./hikari`.
+   - Error message includes `${SCRIPT_DIR}` for diagnostics.
+
+3. **ZFS Detection Warning:** ✅ Completed 2026-07-31.
+   - `start-hikari.sh` detects ZFS-backed `XDG_RUNTIME_DIR` and warns users.
+   - README updated with step-by-step tmpfs fix instructions.
+
+4. **PAM Config Fix:** ✅ Completed 2026-07-31.
+   - Changed `hikari-unlocker.FreeBSD` from `auth include passwd` to `auth include system`.

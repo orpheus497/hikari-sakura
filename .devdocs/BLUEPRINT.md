@@ -1,6 +1,6 @@
 # Hikari Project Blueprint
 
-*Last Updated:* 2026-07-31 16:45
+*Last Updated:* 2026-08-02 13:25
 
 ## 1. Subsystem Architecture
 
@@ -50,6 +50,8 @@
 * **DOD Reverted:** Struct-of-Arrays (SoA) and Object Pool implementations were removed as they added unnecessary complexity and are incompatible with `wlr_scene` workflows.
 * **Non-Blocking PAM I/O:** Replaced blocking `read()` with `wl_event_loop_add_fd()` in lock mode. Added `locker_result_handler` callback.
 * **Phase 13 Audit Fixes:** Switch toggle cascading-if bug, output cairo surface check, duplicate includes, blocking `wait()` → `waitpid(WNOHANG)`, `output->server` initialization robustness, `main.c` comment prefix migration.
+* **Phase 14 Comprehensive Audit:** BUG-1 `move_resize_view()` dx/dy fix, BUG-2 `outputs_disabled` stale state, BUG-3 `command.c` waitpid errno, BUG-4 stale comment removal. Security: `explicit_bzero`. Robustness: EINTR-retrying pipe write. 5 missing listener cleanups in `hikari_server_stop()`. Dead code removal (render.h, mode_handler, unused struct members). Desktop entry `DesktopNames=Hikari`.
+* **Phase 15 Binary Resolution Fix:** `start-hikari.sh` derives `SCRIPT_DIR` from script's own location and checks sibling `${SCRIPT_DIR}/hikari` before PATH or `./hikari`.
 * **Handbook Verification:** FreeBSD Handbook Ch.6 §6.1-6.4 cross-referenced — all requirements verified correct.
 * **Test Specifications:** Added build compilation (TC-BUILD-01), pkg-config dependencies (TC-PKG-01), and manual protocols for Evdev, Shared Memory, and PAM.
 

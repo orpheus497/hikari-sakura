@@ -4,6 +4,14 @@
 
 ---
 
+## [2026-08-02 13:23] Phase 15: start-hikari.sh SCRIPT_DIR Binary Resolution
+
+* **Context:** Review finding identified that `start-hikari.sh` resolved the `hikari` binary by checking PATH first (`command -v hikari`), then `./hikari` relative to the caller's CWD. The `./hikari` fallback is fragile — it only works if the user's working directory is the build tree. The Makefile installs both `start-hikari` and `hikari` as siblings in `${PREFIX}/bin/`, so the script should look beside itself first.
+* **Decision:** Added `SCRIPT_DIR=$(cd -- "$(dirname -- "$0")" && pwd)` to derive the wrapper's own directory. Changed resolution order to: `${SCRIPT_DIR}/hikari` (sibling) → PATH (`command -v hikari`) → `./hikari` (legacy edge case). Updated error message to include `${SCRIPT_DIR}` for diagnostics.
+* **Impact:** Reliable binary resolution in both installed (`/usr/local/bin/start-hikari` + `/usr/local/bin/hikari`) and in-tree development (`./start-hikari.sh` + `./hikari`) scenarios, regardless of the caller's working directory.
+
+---
+
 ## [2026-08-01 01:20] Phase 14: Comprehensive Codebase Audit — Bug Fixes and Cleanup
 
 * **Context:** Deep file-by-file investigation of all 55 source files, 64 headers, Makefile, start-hikari.sh, hikari_unlocker.c, PAM config, and desktop entry. The audit verified wiring, memory handling, D-Bus/IPC/XDG systems, FreeBSD integration, wlroots 0.20 API compliance, and searched for stubs/placeholders/fake logic.
