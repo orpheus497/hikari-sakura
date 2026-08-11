@@ -57,7 +57,15 @@ sudo zfs set canmount=noauto zroot/tmp
 tmpfs   /tmp   tmpfs   rw,mode=1777,size=256m   0   0
 ```
 
-1. Reboot, then verify `/tmp` is tmpfs: `stat -f '%T' /tmp` should report `tmpfs`.
+1. Reboot, then verify `/tmp` is mounted as `tmpfs`:
+
+   ```sh
+   mount | grep ' on /tmp '
+   ```
+
+   The output should show `tmpfs` as the filesystem type, for example:
+   `tmpfs on /tmp (tmpfs, ...)`. A line showing `zfs` instead means step 1
+   was not applied correctly.
 
 > **Note:** Without step 1, ZFS automount will mount `zroot/tmp` *over* the
 > fstab tmpfs entry, and `/tmp` will still be ZFS despite the fstab line.

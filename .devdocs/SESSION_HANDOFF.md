@@ -4,6 +4,38 @@
 
 ---
 
+## Session Date: 2026-08-11 11:42 — Phase 16: Review Fix — SCRIPT_DIR Guard & README tmpfs Check
+
+### Accomplishments
+
+1. **Verified finding 1** (`start-hikari.sh` lines 83–101): `SCRIPT_DIR=$(cd -- "$(dirname -- "$0")" && pwd)` had no error handling — if the `cd` or `pwd` failed (e.g. directory deleted after script launch), `SCRIPT_DIR` silently became empty and the three-tier `HIKARI_BIN` lookup ran with a blank prefix. **Fix applied**: appended `|| { echo ...; exit 1; }` to the assignment so the script terminates with a clear diagnostic before reaching the lookup block. Resolution order (sibling → PATH → `./hikari`) is unchanged.
+2. **Verified finding 2** (`README.md` line 60): `stat -f '%T' /tmp` is macOS-BSD-only; on FreeBSD `stat -f '%T'` reports the file *type* (e.g. `directory`), not the filesystem type — making the documented check both wrong and misleading. **Fix applied**: replaced with `mount | grep ' on /tmp '`, which works on FreeBSD, is unambiguous about filesystem type, and clearly distinguishes `tmpfs` from `zfs`.
+
+### Modified Files
+
+| File | Change |
+|---|---|
+| `start-hikari.sh` | Added `|| { echo ...; exit 1; }` guard on `SCRIPT_DIR` derivation |
+| `README.md` | Replaced `stat -f '%T' /tmp` with `mount | grep ' on /tmp '` verification step |
+| `.devdocs/PROGRESS.md` | Added Phase 16 row |
+| `.devdocs/SESSION_HANDOFF.md` | This entry |
+
+### Key Decisions
+
+- Error guard uses POSIX `||` with a compound command to stay `/bin/sh`-portable on FreeBSD — no `bash`-isms introduced.
+- `mount | grep ' on /tmp '` (with spaces) avoids false matches on paths like `/tmp/hikari-runtime-1001`.
+
+### Skipped
+
+None — both findings were confirmed valid against current code.
+
+### Next Steps
+
+1. Build validation (`bmake`) to confirm no regressions from prior and current phases.
+2. Runtime testing on FreeBSD Wayland session.
+
+---
+
 ## Session Date: 2026-08-02 13:23 — Phase 15: Review Fix — start-hikari.sh Binary Resolution & Documentation Audit
 
 ### Accomplishments

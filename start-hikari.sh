@@ -82,8 +82,14 @@ fi
 
 # [COMMENT] Action purpose: Derive the directory that contains this wrapper
 # script so that a co-installed hikari binary (sibling executable) is found
-# regardless of the caller's working directory.
-SCRIPT_DIR=$(cd -- "$(dirname -- "$0")" && pwd)
+# regardless of the caller's working directory. The cd/pwd pipeline can fail if
+# the script's directory has been removed or is inaccessible after the script
+# was launched (e.g. a deleted tmpfs mount). Treat any such failure as fatal so
+# that the HIKARI_BIN lookup below never runs with an empty SCRIPT_DIR.
+SCRIPT_DIR=$(cd -- "$(dirname -- "$0")" && pwd) || {
+    echo "start-hikari: cannot resolve script directory from \$0='$0'" >&2
+    exit 1
+}
 
 # [COMMENT] Action purpose: Resolve hikari binary — prefer the sibling
 # executable at ${SCRIPT_DIR}/hikari (covers both installed /usr/local/bin and
