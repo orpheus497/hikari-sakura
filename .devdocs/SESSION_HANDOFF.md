@@ -4,6 +4,134 @@
 
 ---
 
+## Session Date: 2026-08-13 05:41 — Phase 18b: Remediation Execution & Clean-Build Revalidation
+
+*(Timestamp source: environment clock, corroborated by build artifact mtimes; user approved command execution for the approved build steps.)*
+
+### Accomplishments
+
+1. **Applied the full approved remediation plan** (report §8) — 14 fixes across 11 files, each annotated per the AGENTS.md comment standard: P0-1 xkb symbol, P0-2 `wlr_backend_start` check + diagnostic, P0-3 headless-create argument (`server->event_loop`), P0-4 default `etc/hikari/hikari.conf` authored against the verified parser grammar + wallpaper install guard + `version.h` regeneration rule, P1-5 keymap type tag, P1-6 numeric mouse keycode storage, P1-7 layer-shell scene attachment (`wlr_scene_layer_surface_v1_create` + z-order + positioning + map/unmap visibility + fini teardown), P2-8 global list re-init removal, P2-9/P2-10 stderr diagnostics, P2-11 dead focus params, P2-13 stale comment prefixes.
+2. **Found and fixed 3 additional stale-API defects via the first-ever full-feature build of this tree:** popup geometry field removal (`popup->current.geometry`, after the linker proved `wlr_xdg_popup_get_geometry` also gone), xwayland size-hints type change (`xcb_size_hints_t`), xwayland map/unmap signal removal (deferred registration via `associate`/`dissociate`; header gained the listeners).
+3. **TC-BUILD-01 honestly revalidated:** `make clean && make` → 0 errors. New **TC-BUILD-02** (full-feature): 0 errors, clean link, both binaries produced.
+4. **Updated all devdocs** to reflect remediation state.
+
+### Modified Files
+
+| File | Change |
+|---|---|
+| `src/keyboard_config.c` | P0-1 symbol fix; P1-5 type tag fix |
+| `src/server.c` | P0-2 backend-start check; P0-3 headless arg; P2-9/P2-10 diagnostics |
+| `src/binding_config.c` | P1-6 numeric mouse keycode stored |
+| `src/workspace.c` | P2-8 removed global list re-init |
+| `src/layer_shell.c` | P1-7 scene attach; P1-16 popup geometry 0.20 migration |
+| `include/hikari/layer_shell.h` | `scene_layer_surface` field |
+| `src/xwayland_view.c` | P1-17 xcb size hints; P1-18 associate/deferred map-unmap; P2-11 dead param |
+| `include/hikari/xwayland_view.h` | associate/dissociate listeners |
+| `src/xdg_view.c` | P2-11 dead focus param |
+| `include/hikari/view.h` | P2-13 comment prefixes |
+| `etc/hikari/hikari.conf` | **New** — default configuration (P0-4) |
+| `Makefile` | wallpaper install guard; version.h regenerate rule |
+| `.devdocs/*` | Phase 18/18b records (report register, handoff, decisions, progress, briefing, todos, plans, blueprint) |
+
+### Key Decisions
+
+- Layer-shell scene nodes parent at scene root with z-order by layer class (overlay/top raised, bottom/background lowered) — minimal correct integration with hikari's existing flat scene usage; lock indicator still outranks everything at show time.
+- Xwayland map/unmap deferred to `associate` because `wlr_xwayland_surface.surface` is NULL at `new_surface` time in the 0.20 lifecycle — immediate registration would NULL-deref on the first X11 client.
+- `wlr_xdg_popup_get_geometry()` was tried first for the popup migration and abandoned after the linker disproved its existence — direct `popup->current.geometry` field access matches the codebase's established style and the header-documented semantics.
+
+### Next Steps
+
+1. Live TTY runtime test: `start-hikari` with seatd running — expect either a working session or a loud stderr diagnostic (no more silent zombie state).
+2. Resolve tmpfs/ZFS `XDG_RUNTIME_DIR` (still the environmental P0 for client shm).
+3. PAM unlock live verification (`Meta+L` path), then layer-client spot check (e.g. a panel) now that scene attachment exists.
+4. Optional: silence the two benign enum-compare warnings (`dnd_mode.c:63`, `move_mode.c:78`).
+
+---
+
+## Session Date: 2026-08-13 04:40 — Phase 18: Runtime Failure Root-Cause Investigation
+
+*(Timestamp source: environment clock — user declined shell command execution; `date` unavailable this session.)*
+
+### Accomplishments
+
+1. **Executed the user-directed deep dive** into post-login failure (symptom A: crash/fail; symptom B: black screen, dead keypresses, frozen mouse). Pure static analysis — no commands, no code changes. 30+ files read end-to-end across server/output/input/view/xdg/layer/lock/config/build; remaining files verified through call sites and representative samples.
+2. **Published full report:** `.devdocs/INVESTIGATION_RUNTIME_FAILURE.md` — symptom model, 4 P0 + 3 P1 + 8 P2 defects with file:line evidence, verified-real contrast set, devdocs truth corrections, root-cause attribution, 9-step remediation plan.
+3. **Headline findings:**
+   - **P0-1** `src/keyboard_config.c:354` — hallucinated `xkb_map_new_from_names` (removed from libxkbcommon ≥ 1.0) → clean build cannot link; running binary necessarily predates the tree; TC-BUILD-01 claim invalidated.
+   - **P0-2** `src/server.c:1054` — `wlr_backend_start()` result discarded; failure leaves a live event loop with zero outputs/inputs/cursor = symptom B exactly.
+   - **P0-3** `src/server.c:857` — `wlr_headless_backend_create(server->display)` type error with a comment asserting a false API contract; contradicts BRIEFING's own Phase-4 fix record (`wl_event_loop *`). UB every launch.
+   - **P0-4** — `etc/hikari/hikari.conf` and `share/backgrounds/hikari/hikari_wallpaper.png` referenced by install/dist but absent from tree → mid-rule install aborts / missing-config exits / empty-config dead-key sessions.
+   - **P1** — xkb-file type-tag lie (`keyboard_config.c:112`), unstored numeric mouse bindings (`binding_config.c:136-148`), layer-shell surfaces never scene-attached (`layer_shell.c`).
+4. **Devdocs truth corrections:** TC-BUILD-01 reverted to Pending-revalidation; "93–99% wired" claims superseded; `wlr_output_effective_resolution` closure basis marked invalid (build claim suspect).
+
+### Modified Files
+
+| File | Change |
+|---|---|
+| `.devdocs/INVESTIGATION_RUNTIME_FAILURE.md` | New — full investigation report |
+| `.devdocs/BRIEFING.md` | Phase 18; status reset to BLOCKED; findings summary |
+| `.devdocs/PROGRESS.md` | Phase 18 row; timestamp |
+| `.devdocs/SESSION_HANDOFF.md` | This entry |
+| `.devdocs/DECISIONS_LOG.md` | Phase 18 investigation entry |
+| `.devdocs/TODOS.md` | P0/P1 remediation items added to Active List |
+| `.devdocs/PLANS.md` | Phase 18 remediation plan added |
+| `.devdocs/BLUEPRINT.md` | Implementation registry + TC-BUILD-01 status correction |
+
+### Key Decisions
+
+- No product-code changes made — remediation awaits explicit user approval per AGENTS.md Ask→Explain→Justify→Wait→Execute.
+- P0-2 attributed as primary symptom-B root cause (only defect simultaneously removing outputs, inputs, and cursor while keeping the process alive).
+
+### Next Steps
+
+1. Obtain approval; apply remediation set in report §8 order (P0-1 → P0-2 → P0-3 → P0-4 → P1s).
+2. `make clean && make` — honest TC-BUILD-01 revalidation from a pristine tree.
+3. Runtime test from TTY with seatd running; capture stderr (backend-start diagnostics will now be visible once P0-2 lands).
+4. Then resume tmpfs/ZFS XDG_RUNTIME_DIR work and PAM live verification.
+
+---
+
+## Session Date: 2026-08-13 02:29 — Phase 17: Review Fix — Table Pipe Escaping & README tmpfs Troubleshooting
+
+### Accomplishments
+
+1. **Verified finding 1** (`.devdocs/SESSION_HANDOFF.md` lines 18–19): the Phase 16 Modified Files table embedded unescaped literal pipe characters inside code spans — the `||` error guard in the start-hikari.sh row and `mount | grep` in the README.md row. GFM parses table-cell pipes before inline code spans, so markdownlint counted these rows as having extra columns. A repo-wide sweep confirmed these were the only two offending cells. **Fix applied:** escaped as `\|\|` and `mount \| grep`, preserving the documented shell syntax and the two-column structure.
+2. **Verified finding 2** (`README.md` lines 66–68): the tmpfs troubleshooting text attributed a `zfs` mount result solely to step 1 (`canmount=noauto`), but a missing `/etc/fstab` entry (step 2) or a skipped reboot (step 3) produces the identical symptom. **Fix applied:** the text now states `/tmp` is still backed by ZFS and directs users to re-check every setup step, including the `/etc/fstab` entry, and to confirm the system has been rebooted.
+3. **Build state clarified:** a `bmake` failure observed in the agent sandbox (`ucl.h` not found — `libucl` absent from the sandbox pkg-config path) is an environment artifact; the user confirmed `make` builds fine on the FreeBSD target. No code defect.
+4. **Deep codebase wiring verification (user-directed, 2026-08-13 03:57):** independently verified all 14 claimed engineering fixes against the source — structure (56 objects, zero orphans), listener symmetry, 11-mode init block, PAM/desktop/unlocker wiring — all present and correct. Corrected three untrue devdocs meta-claims (user-approved, docs-only): Phase 8 comment-compliance overstated (10/57 sources headered); BLUEPRINT modal index phantom `grab_keyboard_mode.c` dropped and missing `dnd_mode` row added; stale API-check and obsolete `.core`-cleanup TODOs closed. No code changes.
+
+### Modified Files
+
+| File | Change |
+|---|---|
+| `.devdocs/SESSION_HANDOFF.md` | Escaped literal pipes in Phase 16 Modified Files table; this entry |
+| `README.md` | tmpfs troubleshooting: `/tmp` still ZFS — re-check all steps incl. fstab + reboot |
+| `.devdocs/BRIEFING.md` | Updated to Phase 17, build validation noted |
+| `.devdocs/PROGRESS.md` | Added Phase 17 row, refreshed timestamp |
+| `.devdocs/DECISIONS_LOG.md` | Added Phase 17 entry plus retroactive Phase 16 entry |
+| `.devdocs/TODOS.md` | Moved build validation + Phase 17 items to completed |
+| `.devdocs/PLANS.md` | Moved final build validation to completed |
+| `.devdocs/BLUEPRINT.md` | TC-BUILD-01 revalidated; Phase 16-17 registry entries |
+
+### Key Decisions
+
+- Escaping (`\|`) chosen over rephrasing to preserve the exact shell syntax documented in the table cells; GFM-compliant and renders as a literal pipe.
+- README Note block on the step-1/ZFS-automount interaction retained — still accurate; the fix only broadens the inline diagnosis.
+- `BRIEFING.md` branch label left untouched — the git branch could not be verified this session (no git metadata available).
+
+### Skipped
+
+None — both findings were confirmed valid against current files.
+
+### Next Steps
+
+1. Runtime testing on FreeBSD Wayland session (tmpfs/ZFS resolution remains the P0 blocker).
+2. PAM unlocker live verification (setuid 4555).
+3. TC-FORMAT-01 clang-format compliance run.
+4. Optional: comment-header rollout to the 48 non-compliant `src/` files (deferred — awaiting user direction).
+
+---
+
 ## Session Date: 2026-08-11 11:42 — Phase 16: Review Fix — SCRIPT_DIR Guard & README tmpfs Check
 
 ### Accomplishments
@@ -15,8 +143,8 @@
 
 | File | Change |
 |---|---|
-| `start-hikari.sh` | Added `|| { echo ...; exit 1; }` guard on `SCRIPT_DIR` derivation |
-| `README.md` | Replaced `stat -f '%T' /tmp` with `mount | grep ' on /tmp '` verification step |
+| `start-hikari.sh` | Added `\|\| { echo ...; exit 1; }` guard on `SCRIPT_DIR` derivation |
+| `README.md` | Replaced `stat -f '%T' /tmp` with `mount \| grep ' on /tmp '` verification step |
 | `.devdocs/PROGRESS.md` | Added Phase 16 row |
 | `.devdocs/SESSION_HANDOFF.md` | This entry |
 

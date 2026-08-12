@@ -1,6 +1,6 @@
 # Forward Strategy & Plans
 
-*Last Updated:* 2026-08-02 13:25
+*Last Updated:* 2026-08-13 05:41 (environment clock, corroborated by build mtimes)
 
 ## Implementations to be Fully Implemented
 
@@ -12,21 +12,23 @@
    - Launch compositor and invoke `Meta+L` to trigger the lock screen.
    - Verify input characters render correctly and PAM unlocks upon Enter.
 
-2. **Final Build Validation:**
-   - Execute `bmake` on the FreeBSD target to ensure all Phase 13-15 fixes compile correctly without warnings.
-
-3. **Runtime Testing:**
+2. **Runtime Testing:**
    - Resolve tmpfs/ZFS incompatibility for XDG_RUNTIME_DIR.
    - Launch hikari on FreeBSD Wayland session.
    - Verify PAM non-blocking unlock (implemented — needs live test).
 
-4. **API Verification:**
+3. **API Verification:**
    - Verify `wlr_output_effective_resolution()` exists in installed wlroots 0.20 headers (`src/layer_shell.c:177` depends on it).
 
-5. **Code Formatting:**
+4. **Code Formatting:**
    - Run `clang-format` compliance check (TC-FORMAT-01).
 
 ## Completed Implementations
+
+0. **Phase 18/18b Runtime Failure Investigation & Remediation:** ✅ Completed 2026-08-13.
+   - Full static root-cause report (`.devdocs/INVESTIGATION_RUNTIME_FAILURE.md`): 4 P0 + 3 P1 + 8 P2 defects with file:line evidence; 3 further build-discovered defects fixed during validation.
+   - All 18 items remediated and annotated; default `etc/hikari/hikari.conf` authored against the verified parser grammar; layer-shell scene integration implemented; xwayland 0.20 lifecycle migrated.
+   - TC-BUILD-01 (default) and TC-BUILD-02 (full-feature) pass from clean trees with 0 errors.
 
 1. **Non-Blocking PAM I/O Refactor:** ✅ Completed 2026-07-31.
    - Replaced blocking `read()` in `submit_password()` with `wl_event_loop_add_fd()`.
@@ -45,3 +47,7 @@
 
 4. **PAM Config Fix:** ✅ Completed 2026-07-31.
    - Changed `hikari-unlocker.FreeBSD` from `auth include passwd` to `auth include system`.
+
+5. **Final Build Validation:** ✅ Completed 2026-08-13.
+   - User-confirmed `make` builds clean on the FreeBSD target (includes all Phase 13-17 fixes).
+   - Agent-sandbox `bmake` failure was an environment artifact (missing `libucl` pkg-config entry), not a project defect.

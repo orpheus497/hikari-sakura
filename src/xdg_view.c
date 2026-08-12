@@ -131,7 +131,7 @@ get_app_id(struct hikari_xdg_view *xdg_view)
 }
 
 static void
-first_map(struct hikari_xdg_view *xdg_view, bool *focus)
+first_map(struct hikari_xdg_view *xdg_view)
 {
   struct wlr_xdg_surface *xdg_surface = xdg_view->surface;
   assert(xdg_surface->role == WLR_XDG_SURFACE_ROLE_TOPLEVEL);
@@ -207,14 +207,15 @@ map_handler(struct wl_listener *listener, void *data)
   struct hikari_xdg_view *xdg_view = wl_container_of(listener, xdg_view, map);
 
   struct hikari_view *view = (struct hikari_view *)xdg_view;
-  bool focus = false;
 
+  /* [COMMENT] Action purpose: Configure the view on its first map. Focus is
+  resolved from the view configuration inside hikari_view_map() -- the removed
+  focus out-parameter was never written and is intentionally gone. */
   if (hikari_view_is_unmanaged(view)) {
-    first_map(xdg_view, &focus);
+    first_map(xdg_view);
   }
 
-
-  map(view, focus);
+  map(view, false);
 }
 
 static void

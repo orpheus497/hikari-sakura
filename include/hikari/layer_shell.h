@@ -8,6 +8,7 @@
 struct hikari_output;
 struct hikari_layer;
 struct hikari_layer_popup;
+struct wlr_scene_layer_surface_v1;
 
 enum hikari_layer_node_type {
   HIKARI_LAYER_NODE_TYPE_LAYER,
@@ -29,6 +30,11 @@ struct hikari_layer {
   struct wl_list layer_surfaces;
 
   struct wlr_layer_surface_v1 *surface;
+
+  /* [COMMENT] Scene-graph attachment for this layer surface. Created in
+  hikari_layer_init() via wlr_scene_layer_surface_v1_create(); without it the
+  surface is configured but never rendered. */
+  struct wlr_scene_layer_surface_v1 *scene_layer_surface;
 
   struct wl_listener commit;
   struct wl_listener destroy;

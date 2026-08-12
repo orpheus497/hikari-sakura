@@ -4,6 +4,8 @@
 #include <assert.h>
 #include <stdlib.h>
 
+#include <xcb/xcb_icccm.h>
+
 #include <wlr/types/wlr_cursor.h>
 #include <wlr/xwayland.h>
 
@@ -146,7 +148,7 @@ get_class(struct wlr_xwayland_surface *surface)
 }
 
 static void
-first_map(struct hikari_xwayland_view *xwayland_view, bool *focus)
+first_map(struct hikari_xwayland_view *xwayland_view)
 {
   struct hikari_view *view = (struct hikari_view *)xwayland_view;
   struct wlr_xwayland_surface *xwayland_surface = xwayland_view->surface;
@@ -199,13 +201,15 @@ map_handler(struct wl_listener *listener, void *data)
       wl_container_of(listener, xwayland_view, map);
 
   struct hikari_view *view = (struct hikari_view *)xwayland_view;
-  bool focus = false;
 
+  /* [COMMENT] Action purpose: Configure the view on its first map. Focus is
+  resolved from the view configuration inside hikari_view_map() -- the removed
+  focus out-parameter was never written and is intentionally gone. */
   if (hikari_view_is_unmanaged(view)) {
-    first_map(xwayland_view, &focus);
+    first_map(xwayland_view);
   }
 
-  map(view, focus);
+  map(view, false);
 }
 
 static void
@@ -254,6 +258,11 @@ destroy_handler(struct wl_listener *listener, void *data)
     wlr_scene_node_destroy(&xwayland_view->scene_tree->node);
   }
 
+  /* [COMMENT] Action purpose: Remove all listeners. map/unmap links were
+  wl_list_init()ed at init and only attached after `associate`, so removal is
+  safe in both states. */
+  wl_list_remove(&xwayland_view->associate.link);
+  wl_list_remove(&xwayland_view->dissociate.link);
   wl_list_remove(&xwayland_view->map.link);
   wl_list_remove(&xwayland_view->unmap.link);
   wl_list_remove(&xwayland_view->destroy.link);
@@ -367,7 +376,10 @@ constraints(struct hikari_view *view,
   struct hikari_output *output = view->output;
   struct wlr_xwayland_surface *surface = xwayland_view->surface;
 
-  struct wlr_xwayland_surface_size_hints *size_hints = surface->size_hints;
+  /* [COMMENT] Action purpose: Read ICCCM size hints via the raw XCB type.
+  wlroots 0.20 replaced the opaque wlr_xwayland_surface_size_hints struct with
+  the public xcb_size_hints_t; field names are unchanged. */
+  xcb_size_hints_t *size_hints = surface->size_hints;
 
   if (size_hints != NULL) {
     *min_width = size_hints->min_width > 0 ? size_hints->min_width : 0;
@@ -383,6 +395,51 @@ constraints(struct hikari_view *view,
     *min_height = 0;
     *max_height = output->geometry.height;
   }
+}
+
+/* [COMMENT] Function purpose: Attach map/unmap listeners to the underlying
+wlr_surface once wlroots associates it with the X11 surface. wlroots 0.20
+removed wlr_xwayland_surface.events.map/unmap; these signals now come from
+the associated wlr_surface. */
+static void
+attach_surface_listeners(struct hikari_xwayland_view *xwayland_view)
+{
+  struct wlr_xwayland_surface *xwayland_surface = xwayland_view->surface;
+
+  xwayland_view->map.notify = map_handler;
+  wl_signal_add(
+      &xwayland_surface->surface->events.map, &xwayland_view->map);
+
+  xwayland_view->unmap.notify = unmap_handler;
+  wl_signal_add(
+      &xwayland_surface->surface->events.unmap, &xwayland_view->unmap);
+}
+
+/* [COMMENT] Function purpose: wlroots 0.20 xwayland lifecycle hook -- the
+wlr_surface only becomes valid when `associate` fires (it is NULL between
+new_surface and associate). */
+static void
+associate_handler(struct wl_listener *listener, void *data)
+{
+  struct hikari_xwayland_view *xwayland_view =
+      wl_container_of(listener, xwayland_view, associate);
+
+  attach_surface_listeners(xwayland_view);
+}
+
+/* [COMMENT] Function purpose: Drop map/unmap listeners when wlroots
+dissociates the wlr_surface (e.g. X11 surface recreation); links are
+re-initialised so destroy and a later re-associate stay safe. */
+static void
+dissociate_handler(struct wl_listener *listener, void *data)
+{
+  struct hikari_xwayland_view *xwayland_view =
+      wl_container_of(listener, xwayland_view, dissociate);
+
+  wl_list_remove(&xwayland_view->map.link);
+  wl_list_init(&xwayland_view->map.link);
+  wl_list_remove(&xwayland_view->unmap.link);
+  wl_list_init(&xwayland_view->unmap.link);
 }
 
 void
@@ -411,11 +468,23 @@ hikari_xwayland_view_init(struct hikari_xwayland_view *xwayland_view,
   hikari_border_init(&xwayland_view->view.border, xwayland_view->scene_tree);
   hikari_indicator_frame_init(&xwayland_view->view.indicator_frame, xwayland_view->scene_tree);
 
-  xwayland_view->map.notify = map_handler;
-  wl_signal_add(&xwayland_surface->events.map, &xwayland_view->map);
+  /* [COMMENT] Action purpose: Defer map/unmap registration to the associate
+  signal when the wlr_surface does not exist yet; attach immediately when it
+  is already associated. Links are pre-initialised so removal is always safe. */
+  wl_list_init(&xwayland_view->map.link);
+  wl_list_init(&xwayland_view->unmap.link);
 
-  xwayland_view->unmap.notify = unmap_handler;
-  wl_signal_add(&xwayland_surface->events.unmap, &xwayland_view->unmap);
+  xwayland_view->associate.notify = associate_handler;
+  wl_signal_add(
+      &xwayland_surface->events.associate, &xwayland_view->associate);
+
+  xwayland_view->dissociate.notify = dissociate_handler;
+  wl_signal_add(
+      &xwayland_surface->events.dissociate, &xwayland_view->dissociate);
+
+  if (xwayland_surface->surface != NULL) {
+    attach_surface_listeners(xwayland_view);
+  }
 
   xwayland_view->destroy.notify = destroy_handler;
   wl_signal_add(&xwayland_surface->events.destroy, &xwayland_view->destroy);

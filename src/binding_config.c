@@ -146,6 +146,12 @@ hikari_binding_config_button_parse(
           remaining);
       goto done;
     }
+
+    /* [COMMENT] Action purpose: Store the parsed numeric button code. The value
+    was previously validated and then discarded, leaving keycode zero-initialised
+    so numeric mouse bindings (e.g. "L-272") could never fire. Mouse button codes
+    are raw evdev codes -- no xkb +8 offset like keyboard keycodes. */
+    binding_key->value.keycode = (uint32_t)value;
   } else {
     goto done;
   }

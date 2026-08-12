@@ -39,8 +39,11 @@ void
 hikari_workspace_init(
     struct hikari_workspace *workspace, struct hikari_output *output)
 {
+  /* [COMMENT] Action purpose: Initialise per-workspace state only. The global
+  hikari_server.visible_groups list head is owned by server_init() and must NOT
+  be re-initialised here -- doing so on every output hotplug would orphan all
+  previously linked visible-group entries (list corruption). */
   wl_list_init(&workspace->views);
-  wl_list_init(&hikari_server.visible_groups);
   workspace->output = output;
   workspace->focus_view = NULL;
   workspace->sheets =

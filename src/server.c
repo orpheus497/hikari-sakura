@@ -225,6 +225,10 @@ new_output_handler(struct wl_listener *listener, void *data)
 
   if (!wlr_output_init_render(
           wlr_output, server->allocator, server->renderer)) {
+    /* [COMMENT] Action purpose: Report which output failed render init before
+    bailing out -- a silent exit is indistinguishable from a crash in logs. */
+    fprintf(stderr, "error: could not initialize rendering for output \"%s\"\n",
+        wlr_output->name);
     exit(EXIT_FAILURE);
   }
 
@@ -850,11 +854,13 @@ done:
 static void
 init_noop_output(struct hikari_server *server)
 {
-  // [COMMENT] Action purpose: In wlroots 0.18+, wlr_headless_backend_create takes
-  // a struct wl_display * (not struct wl_event_loop *). Pass server->display directly.
-  // wlr_backend_autocreate (main backend) still takes event_loop -- only the headless
-  // API changed.
-  server->noop_backend = wlr_headless_backend_create(server->display);
+  // [COMMENT] Action purpose: Create the headless fallback backend. wlroots 0.20
+  // wlr_headless_backend_create() takes the compositor's struct wl_event_loop *
+  // (NOT the wl_display *). Passing the display is an incompatible-pointer-type
+  // error that compiles to a warning and corrupts the backend's event loop
+  // usage at runtime (undefined behavior). server->event_loop was captured in
+  // hikari_server_prepare_privileged() via wl_display_get_event_loop().
+  server->noop_backend = wlr_headless_backend_create(server->event_loop);
 
   // [COMMENT] Action purpose: Guard against headless backend allocation failure.
   // Without a noop backend, the compositor cannot manage views when no physical
@@ -909,6 +915,10 @@ server_init(struct hikari_server *server, char *config_path)
   hikari_configuration_init(hikari_configuration);
 
   if (!hikari_configuration_load(hikari_configuration, config_path)) {
+    /* [COMMENT] Action purpose: Emit a hikari-side diagnostic on configuration
+    failure (covers non-parse failures such as keymap compilation errors that
+    print nothing themselves) so startup never exits silently. */
+    fprintf(stderr, "error: could not load configuration \"%s\"\n", config_path);
     hikari_configuration_fini(hikari_configuration);
     hikari_free(hikari_configuration);
 
@@ -1051,7 +1061,21 @@ hikari_server_start(char *config_path, char *autostart)
   server_init(&hikari_server, config_path);
   signal(SIGTERM, sig_handler);
 
-  wlr_backend_start(hikari_server.backend);
+  // [COMMENT] Action purpose: Verify the backend actually started before entering
+  // the event loop. wlr_backend_start() returns false when the session/DRM/
+  // libinput side fails (seatd down, VT or DRM-node permission errors, etc.).
+  // Continuing anyway would run the compositor with zero outputs and zero input
+  // devices -- a live process presenting a black screen with dead keyboard and
+  // frozen mouse. Fail loudly instead so the user gets a diagnostic on stderr.
+  if (!wlr_backend_start(hikari_server.backend)) {
+    fprintf(stderr, "error: could not start backend\n");
+    fprintf(stderr,
+        "verify that seatd (or another seat manager) is running and that "
+        "this user can access DRM/input devices\n");
+    wlr_backend_destroy(hikari_server.backend);
+    wl_display_destroy(hikari_server.display);
+    exit(EXIT_FAILURE);
+  }
 
   if (autostart != NULL) {
     run_autostart(autostart);

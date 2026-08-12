@@ -64,8 +64,9 @@ tmpfs   /tmp   tmpfs   rw,mode=1777,size=256m   0   0
    ```
 
    The output should show `tmpfs` as the filesystem type, for example:
-   `tmpfs on /tmp (tmpfs, ...)`. A line showing `zfs` instead means step 1
-   was not applied correctly.
+   `tmpfs on /tmp (tmpfs, ...)`. A line showing `zfs` instead means `/tmp`
+   is still backed by ZFS — re-check every setup step above, including the
+   `/etc/fstab` entry, and make sure the system has been rebooted.
 
 > **Note:** Without step 1, ZFS automount will mount `zroot/tmp` *over* the
 > fstab tmpfs entry, and `/tmp` will still be ZFS despite the fstab line.

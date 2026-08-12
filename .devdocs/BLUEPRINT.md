@@ -1,6 +1,6 @@
 # Hikari Project Blueprint
 
-*Last Updated:* 2026-08-02 13:25
+*Last Updated:* 2026-08-13 05:41 (environment clock, corroborated by build mtimes)
 
 ## 1. Subsystem Architecture
 
@@ -39,7 +39,7 @@
 | **Mark Select Mode** | `src/mark_select_mode.c` | Modal prompt for jumping focus to tagged view mark. |
 | **Layout Select Mode** | `src/layout_select_mode.c` | Modal prompt for applying tile layout algorithms. |
 | **Input Grab Mode** | `src/input_grab_mode.c` | Redirects input to explicit client surface request. |
-| **Grab Keyboard Mode**| `src/grab_keyboard_mode.c` | Exclusively forwards raw keyboard events to target application. |
+| **DnD Mode** | `src/dnd_mode.c` | Tracks drag-and-drop offers while a drag operation is active. |
 
 ## 3. Implementation Registry
 
@@ -52,6 +52,10 @@
 * **Phase 13 Audit Fixes:** Switch toggle cascading-if bug, output cairo surface check, duplicate includes, blocking `wait()` → `waitpid(WNOHANG)`, `output->server` initialization robustness, `main.c` comment prefix migration.
 * **Phase 14 Comprehensive Audit:** BUG-1 `move_resize_view()` dx/dy fix, BUG-2 `outputs_disabled` stale state, BUG-3 `command.c` waitpid errno, BUG-4 stale comment removal. Security: `explicit_bzero`. Robustness: EINTR-retrying pipe write. 5 missing listener cleanups in `hikari_server_stop()`. Dead code removal (render.h, mode_handler, unused struct members). Desktop entry `DesktopNames=Hikari`.
 * **Phase 15 Binary Resolution Fix:** `start-hikari.sh` derives `SCRIPT_DIR` from script's own location and checks sibling `${SCRIPT_DIR}/hikari` before PATH or `./hikari`.
+* **Phase 16 Review Fixes:** Fatal error guard on `SCRIPT_DIR` derivation; README tmpfs verification switched from macOS-only `stat -f '%T'` to portable `mount | grep`.
+* **Phase 17 Review Fixes:** Markdown table pipe escaping in `SESSION_HANDOFF.md` (GFM/markdownlint compliance); README tmpfs troubleshooting broadened to cover all setup steps (fstab entry, reboot), not just step 1.
+* **Phase 18 Runtime Failure Investigation:** Full static root-cause analysis of post-login crash / black-screen+dead-input symptoms — report at `.devdocs/INVESTIGATION_RUNTIME_FAILURE.md`. Identified 4 release-blockers (hallucinated `xkb_map_new_from_names` symbol; unchecked `wlr_backend_start()`; wrong `wlr_headless_backend_create()` argument with false API comment; missing `etc/hikari/hikari.conf` + wallpaper assets), 3 P1 and 8 P2 defects.
+* **Phase 18b Remediation:** All 15 investigation defects + 3 build-discovered defects fixed and annotated (register: report §9). New default `etc/hikari/hikari.conf` authored against the verified parser grammar. Layer shell integrated with the scene graph (`wlr_scene_layer_surface_v1_create`, z-order by layer class, layout-global positioning, map/unmap visibility). Xwayland migrated to the wlroots 0.20 lifecycle (`associate`-deferred map/unmap registration, `xcb_size_hints_t` constraints). Popup geometry migrated to `popup->current.geometry`. TC-BUILD-01/02 both pass from clean trees.
 * **Handbook Verification:** FreeBSD Handbook Ch.6 §6.1-6.4 cross-referenced — all requirements verified correct.
 * **Test Specifications:** Added build compilation (TC-BUILD-01), pkg-config dependencies (TC-PKG-01), and manual protocols for Evdev, Shared Memory, and PAM.
 
@@ -59,7 +63,8 @@
 
 | Test Case ID | Test Target | Description | Expected Outcome | Status |
 |--------------|-------------|-------------|------------------|--------|
-| `TC-BUILD-01` | `Makefile` (`bmake`) | FreeBSD build compilation test (wlroots 0.20, Phase 6) | Clean compilation of `hikari` and `hikari-unlocker` | Passed ✓ (Phase 6 — pre-Phase 11 fixes; revalidation pending) |
+| `TC-BUILD-01` | `Makefile` (`bmake`) | FreeBSD build compilation test (wlroots 0.20, Phase 6) | Clean compilation of `hikari` and `hikari-unlocker` | Passed ✓ (2026-08-13 05:41 — `make clean && make`, 0 errors, both binaries linked; revalidated after P0-1 fix) |
+| `TC-BUILD-02` | `Makefile` full-feature flags | Compilation of all feature-gated paths (`WITH_XWAYLAND/LAYERSHELL/SCREENCOPY/GAMMACONTROL/VIRTUAL_INPUT=YES`) | Clean compilation + link | Passed ✓ (2026-08-13 05:38 — 0 errors; first time feature configs ever compiled in this tree; surfaced and fixed P1-16/17/18) |
 | `TC-PKG-01` | `pkg-config` | Resolve dependencies: `wlroots-0.20`, `pango`, `cairo`, `pixman`, `xkbcommon`, `libinput`, `libucl`, `epoll-shim` | All CFLAGS and LIBS resolved without missing packages | Passed ✓ (Phase 6 — dependency set unchanged) |
 | `TC-DOC-01` | `AGENTS.md` Linter | Source prefix audit: every script/source, standalone function, and specific action block has the exact `[COMMENT] Script function and purpose:`, `[COMMENT] Function purpose:`, or `[COMMENT] Action purpose:` prefix annotation | All modified files comply with the three defined prefixes | Passed ✓ (Phase 13 — all modified files verified, `main.c` `##` prefixes migrated) |
 | `TC-FORMAT-01` | `clang-format` | Code formatting compliance | Zero formatting diffs against `.clang-format` rules | Pending |

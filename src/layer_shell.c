@@ -5,6 +5,7 @@
 #include <stdio.h>
 #endif
 
+#include <wlr/types/wlr_scene.h>
 #include <wlr/types/wlr_seat.h>
 #include <wlr/types/wlr_xdg_shell.h>
 
@@ -205,6 +206,35 @@ hikari_layer_init(
 
   wlr_layer_surface->output = output->wlr_output;
 
+  /* [COMMENT] Action purpose: Attach the layer surface to the scene graph.
+  Since the wlr_scene migration, damage calls are schedule-only shims -- a
+  surface without a scene node is configured and mapped yet never rendered.
+  wlr_scene_layer_surface_v1_create() also manages subsurfaces and popups of
+  this layer surface automatically. */
+  layer->scene_layer_surface = wlr_scene_layer_surface_v1_create(
+      &hikari_server.scene->tree, wlr_layer_surface);
+
+  /* [COMMENT] Action purpose: Scene tree allocation only fails on OOM. Reject
+  the client surface and bail out before listeners are registered; the destroy
+  signal then has no hikari-side state to clean up. */
+  if (layer->scene_layer_surface == NULL) {
+    fprintf(stderr, "error: could not create scene node for layer surface\n");
+    wlr_layer_surface_v1_destroy(wlr_layer_surface);
+    return;
+  }
+
+  /* [COMMENT] Action purpose: Establish stacking order per layer: overlay/top
+  render above views, bottom/background below views. The node starts disabled;
+  map() enables it once the surface has content. */
+  struct wlr_scene_node *scene_node = &layer->scene_layer_surface->tree->node;
+  if (layer->layer == ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY ||
+      layer->layer == ZWLR_LAYER_SHELL_V1_LAYER_TOP) {
+    wlr_scene_node_raise_to_top(scene_node);
+  } else {
+    wlr_scene_node_lower_to_bottom(scene_node);
+  }
+  wlr_scene_node_set_enabled(scene_node, false);
+
   layer->commit.notify = commit_handler;
   wl_signal_add(&wlr_layer_surface->surface->events.commit, &layer->commit);
 
@@ -223,6 +253,13 @@ void
 hikari_layer_fini(struct hikari_layer *layer)
 {
   assert(!layer->mapped);
+
+  /* [COMMENT] Action purpose: Detach the layer surface (and its scene-managed
+  popups) from the scene graph so nothing references the freed layer. */
+  if (layer->scene_layer_surface != NULL) {
+    wlr_scene_node_destroy(&layer->scene_layer_surface->tree->node);
+    layer->scene_layer_surface = NULL;
+  }
 
   wl_list_remove(&layer->layer_surfaces);
 
@@ -309,8 +346,14 @@ damage_popup(struct hikari_layer_popup *layer_popup, bool whole)
   struct wlr_xdg_popup *popup = layer_popup->popup;
   struct wlr_surface *surface = popup->base->surface;
 
-  int ox = popup->geometry.x - popup->base->current.geometry.x;
-  int oy = popup->geometry.y - popup->base->current.geometry.y;
+  /* [COMMENT] Action purpose: Compute the popup origin relative to the parent
+  surface's window geometry. wlroots 0.20 moved the flat wlr_xdg_popup.geometry
+  field into the popup state struct (popup->current.geometry -- documented as
+  "position of the popup relative to the upper left corner of the window
+  geometry of the parent surface"); wlr_xdg_popup_get_geometry() no longer
+  exists. */
+  int ox = popup->current.geometry.x - popup->base->current.geometry.x;
+  int oy = popup->current.geometry.y - popup->base->current.geometry.y;
 
   struct hikari_layer *layer;
   struct hikari_layer_popup *current = layer_popup;
@@ -324,8 +367,10 @@ damage_popup(struct hikari_layer_popup *layer_popup, bool whole)
 
       case HIKARI_LAYER_NODE_TYPE_POPUP:
         current = current->parent.node.popup;
-        ox += current->popup->geometry.x - current->popup->base->current.geometry.x;
-        oy += current->popup->geometry.y - current->popup->base->current.geometry.y;
+        /* [COMMENT] Action purpose: Accumulate nested popup offsets via the
+        0.20 popup-state geometry field (see note above). */
+        ox += current->popup->current.geometry.x - current->popup->base->current.geometry.x;
+        oy += current->popup->current.geometry.y - current->popup->base->current.geometry.y;
         break;
     }
   }
@@ -441,6 +486,12 @@ map(struct hikari_layer *layer)
 
   layer->mapped = true;
 
+  /* [COMMENT] Action purpose: Make the scene node visible now that the surface
+  has mapped content. */
+  if (layer->scene_layer_surface != NULL) {
+    wlr_scene_node_set_enabled(&layer->scene_layer_surface->tree->node, true);
+  }
+
   damage(layer, true);
 
   hikari_server_cursor_focus();
@@ -475,6 +526,12 @@ unmap(struct hikari_layer *layer)
   wl_signal_add(&layer->surface->surface->events.map, &layer->map);
 
   layer->mapped = false;
+
+  /* [COMMENT] Action purpose: Hide the scene node while unmapped so no stale
+  buffer remains on screen. */
+  if (layer->scene_layer_surface != NULL) {
+    wlr_scene_node_set_enabled(&layer->scene_layer_surface->tree->node, false);
+  }
 
   damage(layer, true);
 
@@ -558,6 +615,15 @@ calculate_geometry(struct hikari_layer *layer)
   }
 
   layer->geometry = geometry;
+
+  /* [COMMENT] Action purpose: Position the scene node in layout-global
+  coordinates. layer->geometry is output-local, so translate by the output's
+  position in the output layout. */
+  if (layer->scene_layer_surface != NULL) {
+    wlr_scene_node_set_position(&layer->scene_layer_surface->tree->node,
+        output->geometry.x + geometry.x,
+        output->geometry.y + geometry.y);
+  }
 
   wlr_layer_surface_v1_configure(
       layer->surface, geometry.width, geometry.height);

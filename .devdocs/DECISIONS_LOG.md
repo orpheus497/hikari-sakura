@@ -4,6 +4,48 @@
 
 ---
 
+## [2026-08-13 05:41] Phase 18b: Remediation Execution & Build Revalidation
+
+* **Context:** User approved the Phase 18 remediation plan. Execution covered all 9 plan steps plus the recorded P2 batch, followed by clean-tree build validation in both the default and full-feature configurations.
+* **Decision:** Applied 14 fixes across 11 files (register in `.devdocs/INVESTIGATION_RUNTIME_FAILURE.md` §9). Notable engineering choices: (1) default `etc/hikari/hikari.conf` authored against the verified parser grammar — every action verb cross-checked against `src/action.c`, every colorscheme key against `parse_colorscheme`, `PREFIX` token retained for the install-time sed; (2) layer-shell scene integration parents layer surfaces at the scene root with z-order by layer class and layout-global positioning in `calculate_geometry()`; (3) xwayland map/unmap registration deferred to the `associate` event because `wlr_xwayland_surface.surface` is NULL at `new_surface` time under the 0.20 lifecycle; (4) popup geometry migrated to `popup->current.geometry` after the linker disproved `wlr_xdg_popup_get_geometry()` — verified against the installed 0.20 header's documented semantics.
+* **Impact:** TC-BUILD-01 passed (default clean build, 0 errors); new TC-BUILD-02 passed (full-feature clean build + link, 0 errors). Three further stale-API defects (P1-16 popup geometry, P1-17 xcb_size_hints_t, P1-18 associate lifecycle) found and fixed during validation — the feature configurations had never compiled in this tree before. Compositor should now fail loudly (diagnostic + exit) instead of presenting a black screen with dead input when the backend cannot start.
+
+---
+
+## [2026-08-13 04:40] Phase 18: Runtime Failure Root-Cause Investigation
+
+*(Timestamp source: environment clock — user declined shell command execution.)*
+
+* **Context:** User reported that after login hikari either (A) crashes/fails or (B) loads to a black screen with dead keypresses and a frozen mouse, and directed an "extremely deep and analytical investigation" of wiring, false-vs-real logic, stubs, placeholders, simulations, simplifications, poor implementations, and hallucinations. Static-only investigation (no shell access this session); full evidence in `.devdocs/INVESTIGATION_RUNTIME_FAILURE.md`.
+* **Decision:** Recorded 15 defects (4 P0, 3 P1, 8 P2) with file:line citations. P0-1: hallucinated `xkb_map_new_from_names` symbol (`src/keyboard_config.c:354`) — tree cannot link cleanly; deployed binary predates tree. P0-2: unchecked `wlr_backend_start()` (`src/server.c:1054`) — primary symptom-B root cause. P0-3: `wlr_headless_backend_create(server->display)` type error + false API comment (`src/server.c:853-857`) — contradicts the Phase-4 fix record in BRIEFING.md. P0-4: `etc/hikari/hikari.conf` and wallpaper asset missing though referenced by install/dist. P1: xkb-file type-tag lie, unstored numeric mouse bindings, layer shell never scene-attached. Documentation-only session: no product code touched; remediation plan (report §8) awaits user approval.
+* **Impact:** Devdocs truth ledger corrected — TC-BUILD-01 back to Pending (clean-tree revalidation required), prior "93–99% wired" assessments superseded, BRIEFING status set to BLOCKED on 4 P0s. Runtime symptoms now have deterministic, testable attributions: A ← P0-1/P0-3/P0-4/P1-5; B ← P0-2 (primary), P0-4-empty-config (secondary).
+
+---
+
+## [2026-08-13 03:57] Phase 17b: Deep Codebase Wiring Verification & Devdocs Truth Corrections
+
+* **Context:** User-directed independent verification of every engineering claim in the devdocs against the actual codebase: Makefile↔source↔header structure (exact 1:1, zero orphans), all 14 claimed fixes from Phases 4-16 (BUG-1/2/3, explicit_bzero, non-blocking PAM, switch else-if, wlroots 0.20 initial_commit lifecycle, 7-arg axis notify, preferred-mode output state, listener symmetry in `hikari_server_stop`, PAM/desktop/unlocker wiring, 11-mode init block). All verified present and correct in code. Three meta-claims were untrue: (1) Phase 8 "100% comment compliance" — only 10/57 sources carry the mandated script-purpose header; (2) BLUEPRINT modal index listed phantom `src/grab_keyboard_mode.c` (a 169-byte vestigial header with zero references tree-wide) while omitting the existing `src/dnd_mode.c`; (3) the `wlr_output_effective_resolution()` API-check TODO was stale — the successful user build proves the symbol exists.
+* **Decision:** Amended the PROGRESS Phase 8 row to reflect actual scope; corrected the BLUEPRINT modal index (dropped phantom Grab Keyboard row, added DnD Mode row); closed the stale API-check and obsolete `.core`-cleanup TODOs; recorded the optional comment-header rollout as a deferred TODO. No code changes (user-approved scope).
+* **Impact:** devdocs meta-claims now match the verified state of the codebase. Engineering claims were ~95% accurate; the codebase wiring itself is sound.
+
+---
+
+## [2026-08-13 02:29] Phase 17: Review Fixes — Markdown Table Pipes & README tmpfs Troubleshooting
+
+* **Context:** Two review findings verified against current files. (1) `SESSION_HANDOFF.md` Phase 16 Modified Files table embedded unescaped literal pipes inside code spans (the `||` error guard and `mount | grep`), which GFM parses as column separators before inline code spans — markdownlint counted the rows as having extra columns. A repo-wide sweep confirmed these were the only two offending cells. (2) `README.md` attributed a `zfs` mount result for `/tmp` solely to step 1 (`canmount=noauto`), though a missing fstab entry (step 2) or skipped reboot (step 3) produces the identical symptom.
+* **Decision:** Escaped the offending pipes (backslash-pipe) inside the table cells, preserving the exact shell syntax while restoring the two-column structure. Rewrote the README diagnosis to state `/tmp` is still ZFS-backed and to direct users to re-check every setup step, including `/etc/fstab` and the reboot.
+* **Impact:** markdownlint-clean handoff ledger; troubleshooting guidance no longer misdiagnoses non-step-1 causes.
+
+---
+
+## [2026-08-11 11:42] Phase 16: Review Fixes — SCRIPT_DIR Guard & README tmpfs Verification
+
+* **Context:** Two review findings verified against current code. (1) `start-hikari.sh` derived `SCRIPT_DIR` via a `cd`/`pwd` pipeline with no error handling — on failure the variable would be silently empty and the binary lookup would run with a blank prefix. (2) `README.md` documented `stat -f '%T' /tmp` as the tmpfs verification, which is macOS-BSD-only; on FreeBSD `%T` reports the file type, not the filesystem type.
+* **Decision:** Appended a fatal `|| { echo ...; exit 1; }` guard to the `SCRIPT_DIR` assignment (POSIX-portable, no bash-isms). Replaced the verification command with `mount | grep ' on /tmp '` (spaced pattern avoids false matches such as `/tmp/hikari-runtime-1001`).
+* **Impact:** Wrapper fails loudly instead of mis-resolving the binary; the documented verification now works on FreeBSD.
+
+---
+
 ## [2026-08-02 13:23] Phase 15: start-hikari.sh SCRIPT_DIR Binary Resolution
 
 * **Context:** Review finding identified that `start-hikari.sh` resolved the `hikari` binary by checking PATH first (`command -v hikari`), then `./hikari` relative to the caller's CWD. The `./hikari` fallback is fragile — it only works if the user's working directory is the build tree. The Makefile installs both `start-hikari` and `hikari` as siblings in `${PREFIX}/bin/`, so the script should look beside itself first.

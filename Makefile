@@ -186,8 +186,11 @@ PROTOCOL_HEADERS += wlr-layer-shell-unstable-v1-protocol.h
 
 all: hikari hikari-unlocker
 
+# [COMMENT] Action purpose: Regenerate version.h atomically on every build.
+# Appending (>>) would accumulate duplicate HIKARI_VERSION defines across
+# rebuilds without `make clean`, producing macro-redefinition warnings.
 version.h:
-	echo "#define HIKARI_VERSION \"${VERSION}\"" >> version.h
+	echo "#define HIKARI_VERSION \"${VERSION}\"" > version.h
 
 hikari: version.h ${PROTOCOL_HEADERS} ${OBJS}
 	${CC} ${LDFLAGS} ${CFLAGS} ${INCLUDES} -o ${.TARGET} ${OBJS} ${LIBS}
@@ -261,7 +264,15 @@ install: hikari hikari-unlocker share/man/man1/hikari.1
 	install -m 555 start-hikari.sh ${DESTDIR}/${PREFIX}/bin/start-hikari
 	install -m 4555 hikari-unlocker ${DESTDIR}/${PREFIX}/bin
 	install -m 644 share/man/man1/hikari.1 ${DESTDIR}/${PREFIX}/share/man/man1
-	install -m 644 share/backgrounds/hikari/hikari_wallpaper.png ${DESTDIR}/${PREFIX}/share/backgrounds/hikari/hikari_wallpaper.png
+	# [COMMENT] Action purpose: Install the wallpaper only when the asset is
+	# present in the tree. The default config references it, but the runtime
+	# background loader skips a missing PNG gracefully -- a missing asset must
+	# not abort the whole install rule.
+	if test -f share/backgrounds/hikari/hikari_wallpaper.png; then \
+		install -m 644 share/backgrounds/hikari/hikari_wallpaper.png ${DESTDIR}/${PREFIX}/share/backgrounds/hikari/hikari_wallpaper.png; \
+	else \
+		echo "warning: share/backgrounds/hikari/hikari_wallpaper.png missing; skipping wallpaper install"; \
+	fi
 	# [COMMENT] Action purpose: Rewrite the desktop entry Exec= value to use the
 	# absolute installed path so display managers resolve the wrapper correctly.
 	sed "s,Exec=start-hikari,Exec=${PREFIX}/bin/start-hikari," share/wayland-sessions/hikari.desktop > ${DESTDIR}/${PREFIX}/share/wayland-sessions/hikari.desktop

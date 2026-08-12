@@ -109,7 +109,12 @@ load_xkb_file(struct hikari_xkb *xkb, const char *xkb_file)
     goto done;
   }
 
-  xkb->type = HIKARI_XKB_TYPE_RULES;
+  /* [COMMENT] Action purpose: Tag the union member that was actually stored.
+  A file-loaded keymap lives in value.keymap, therefore the type tag must be
+  HIKARI_XKB_TYPE_KEYMAP. Tagging it RULES makes compile_keymap()/xkb_fini()
+  reinterpret the keymap pointer as a rules struct (garbage fields, invalid
+  free() calls) -- a crash/corruption path. */
+  xkb->type = HIKARI_XKB_TYPE_KEYMAP;
   xkb->value.keymap = keymap;
 
   success = true;
@@ -350,8 +355,12 @@ compile_keymap(struct hikari_xkb_config *xkb_config)
   rules.options = xkb_config->options.value;
 
   struct xkb_context *context = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
+  /* [COMMENT] Action purpose: Compile rules into a keymap via the real
+  xkbcommon entry point xkb_keymap_new_from_names(). The previously used
+  "xkb_map_new_from_names" does not exist in libxkbcommon >= 1.0 -- it fails
+  to link on any clean build. */
   struct xkb_keymap *keymap =
-      xkb_map_new_from_names(context, &rules, XKB_KEYMAP_COMPILE_NO_FLAGS);
+      xkb_keymap_new_from_names(context, &rules, XKB_KEYMAP_COMPILE_NO_FLAGS);
   xkb_context_unref(context);
 
   return keymap;
