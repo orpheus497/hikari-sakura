@@ -80,7 +80,7 @@ OBJS += \
 
 WAYLAND_PROTOCOLS != ${PKG_CONFIG} --variable pkgdatadir wayland-protocols
 
-.PHONY: distclean clean clean-doc doc dist install uninstall
+.PHONY: distclean clean clean-doc doc dist install uninstall FORCE
 .PATH: src
 
 # Allow specification of /extra/ CFLAGS and LDFLAGS
@@ -186,11 +186,15 @@ PROTOCOL_HEADERS += wlr-layer-shell-unstable-v1-protocol.h
 
 all: hikari hikari-unlocker
 
-# [COMMENT] Action purpose: Regenerate version.h atomically on every build.
-# Appending (>>) would accumulate duplicate HIKARI_VERSION defines across
-# rebuilds without `make clean`, producing macro-redefinition warnings.
-version.h:
-	echo "#define HIKARI_VERSION \"${VERSION}\"" > version.h
+# [COMMENT] Action purpose: Regenerate version.h on every build. The phony
+# FORCE prerequisite keeps the target permanently out of date; the header is
+# written to a temporary file and atomically renamed, so an interrupted build
+# can never leave a partial or empty version.h behind (the rename only runs
+# after the write succeeds).
+version.h: FORCE
+	echo "#define HIKARI_VERSION \"${VERSION}\"" > version.h.tmp && mv version.h.tmp version.h
+
+FORCE:
 
 hikari: version.h ${PROTOCOL_HEADERS} ${OBJS}
 	${CC} ${LDFLAGS} ${CFLAGS} ${INCLUDES} -o ${.TARGET} ${OBJS} ${LIBS}
@@ -264,15 +268,10 @@ install: hikari hikari-unlocker share/man/man1/hikari.1
 	install -m 555 start-hikari.sh ${DESTDIR}/${PREFIX}/bin/start-hikari
 	install -m 4555 hikari-unlocker ${DESTDIR}/${PREFIX}/bin
 	install -m 644 share/man/man1/hikari.1 ${DESTDIR}/${PREFIX}/share/man/man1
-	# [COMMENT] Action purpose: Install the wallpaper only when the asset is
-	# present in the tree. The default config references it, but the runtime
-	# background loader skips a missing PNG gracefully -- a missing asset must
-	# not abort the whole install rule.
-	if test -f share/backgrounds/hikari/hikari_wallpaper.png; then \
-		install -m 644 share/backgrounds/hikari/hikari_wallpaper.png ${DESTDIR}/${PREFIX}/share/backgrounds/hikari/hikari_wallpaper.png; \
-	else \
-		echo "warning: share/backgrounds/hikari/hikari_wallpaper.png missing; skipping wallpaper install"; \
-	fi
+	# [COMMENT] Action purpose: Install the default wallpaper to the path the
+	# sed-rewritten outputs.background configuration points at
+	# (${PREFIX}/share/backgrounds/hikari/hikari_wallpaper.png).
+	install -m 644 share/backgrounds/hikari/hikari_wallpaper.png ${DESTDIR}/${PREFIX}/share/backgrounds/hikari/hikari_wallpaper.png
 	# [COMMENT] Action purpose: Rewrite the desktop entry Exec= value to use the
 	# absolute installed path so display managers resolve the wrapper correctly.
 	sed "s,Exec=start-hikari,Exec=${PREFIX}/bin/start-hikari," share/wayland-sessions/hikari.desktop > ${DESTDIR}/${PREFIX}/share/wayland-sessions/hikari.desktop

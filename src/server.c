@@ -211,6 +211,10 @@ setup_virtual_pointer(struct hikari_server *server)
 }
 #endif
 
+/* [COMMENT] Function purpose: Listener for the backend's new_output signal --
+allocate and initialise the hikari_output wrapper for a hotplugged
+physical/virtual output, wire up rendering, and reset the cursor image.
+Exits loudly when render init fails. */
 static void
 new_output_handler(struct wl_listener *listener, void *data)
 {
@@ -901,6 +905,10 @@ init_noop_output(struct hikari_server *server)
   hikari_server.mode = (struct hikari_mode *)&hikari_server.normal_mode;
 }
 
+/* [COMMENT] Function purpose: One-time initialisation of the server
+singleton -- configuration, wayland globals, scene graph, shells, input, and
+the noop fallback output. Called by hikari_server_start before the backend
+is started. */
 static void
 server_init(struct hikari_server *server, char *config_path)
 {
@@ -1055,6 +1063,9 @@ run_autostart(char *autostart)
   free(autostart);
 }
 
+/* [COMMENT] Function purpose: Compositor entry point invoked from main --
+initialise the server, start the backend (failing loudly when the session
+side is broken), run the autostart command, and enter the event loop. */
 void
 hikari_server_start(char *config_path, char *autostart)
 {

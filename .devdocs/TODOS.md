@@ -1,21 +1,36 @@
 # Granular Task List
 
-*Last Updated:* 2026-08-13 05:41 (environment clock, corroborated by build mtimes)
+*Last Updated:* 2026-08-13 17:08
 
 ## Active List
 
-- [ ] **Live TTY runtime test:** `start-hikari` with seatd running — expect a working session or a loud stderr diagnostic (P0-2 killed the silent zombie path). Verify keyboard bindings (default config), cursor movement, client launch, lock/unlock.
-- [ ] **tmpfs/ZFS Resolution (P0):** Implement tmpfs mount for `XDG_RUNTIME_DIR` — `/var/run/user/1001` is on ZFS, `posix_fallocate()` will fail. Recommended: tmpfs at `/var/run/user` via `/etc/fstab` or `sudo zfs set canmount=noauto zroot/tmp`.
-- [ ] **PAM Verification:** Verify `hikari-unlocker` works correctly with OpenPAM setuid 4555 on a live FreeBSD Wayland session.
-- [ ] **Layer-client spot check:** run a panel/bar (or swaybg) with a `WITH_LAYERSHELL=YES` build to exercise the new scene attachment.
-- [ ] **Wallpaper asset:** `share/backgrounds/hikari/hikari_wallpaper.png` still absent — install rule is guarded and skips with a warning; restore the PNG or drop the outputs section from `etc/hikari/hikari.conf`.
+- [ ] **Phase 24 P0 (config strictness):** Unknown `outputs` keys must fail parse, not just log (`src/configuration.c` unknown-key branch currently falls through to success).
+- [ ] **Phase 24 P1 (resource lifecycle):** Add missing iterator free in `parse_switches` (`src/configuration.c`, `ucl_object_iterate_new(switches_obj)` path).
+- [ ] **Phase 24 P1 (lock helper semantics):** In `src/lock_mode.c`, child path after failed `execl("hikari-unlocker")` must not `exit(0)`; return non-zero/fatal semantics and improve diagnosability.
+- [ ] **Phase 24 P1 (output failure observability):** Add loud stderr diagnostic for failed output commit early return (`src/output.c:350-353`) including output name/context.
+- [ ] **Phase 24 P2 (damage granularity):** Replace TODO-marked CSD whole-output damage fallback with granular damage in `src/view.c` (`hikari_view_damage_whole`, `hikari_view_damage_surface`).
+- [ ] **Phase 24 P2 (allocation policy):** Decide and implement allocation hardening strategy (fail-fast wrappers vs caller checks) for `hikari_malloc`/`hikari_calloc` callsites.
+- [ ] **Phase 24 P3 (docs hygiene):** Fix changelog `wloots` typos to `wlroots` (`CHANGELOG.md`).
+
+- [ ] **Runtime diagnostics (user-run, Phase 19 matrix):** (1) `make DEBUG=YES` rebuild + rerun `./start-hikari.sh` — wlroots debug log names the exact swapchain failure step (release builds compile out `wlr_log_init(WLR_DEBUG)`, `main.c:236`); (2) `kldstat` + `dmesg | grep -Ei 'drm|i915|amdgpu'`; (3) `pkg info -x mesa drm-kmod wlroots` (mesa-dri coherence); (4) `ls -l /dev/dri`; (5) `drm_info` (IN_FORMATS for eDP-1 planes); (6) `eglinfo -B` (EGL_EXT_device_drm presence); (7) `LIBGL_DEBUG=verbose ./start-hikari.sh`.
+- [ ] **Resolve eDP-1 scanout swapchain failure (blocked on the diagnostics above):** expected Mesa/GBM/drm-kmod layer (hypotheses H1/H2/H3 — DECISIONS_LOG Phase 19); not a hikari code defect.
+- [ ] **tmpfs/ZFS Resolution (P0, escalated):** Implement tmpfs mount for `XDG_RUNTIME_DIR` — `/var/run/user/1001` is on ZFS, `posix_fallocate()` fails there. Escalated because the EGL device-query failure removes dmabuf device feedback, forcing clients onto wl_shm. Recommended: tmpfs at `/var/run/user` via `/etc/fstab` or `sudo zfs set canmount=noauto zroot/tmp`.
+- [ ] **Output-commit failure diagnostic (optional hardening):** add loud stderr message + output name to the silent early return at `src/output.c:350-353` (same silent-zombie class as the fixed P0-2).
+- [ ] **P2-14 runtime verification (blocked on runtime bring-up):** confirm wlroots retains `current_mode` across output disable/enable — `hikari_output_enable()` re-enables without setting a mode (`src/output.c`); if the mode was cleared on disable, lock-mode Ctrl+C leaves outputs dark. (Salvaged from the retired investigation report, Phase 22.)
+- [ ] **PAM Verification (blocked on runtime bring-up):** Verify `hikari-unlocker` works correctly with OpenPAM setuid 4555 on a live FreeBSD Wayland session.
+- [ ] **Layer-client spot check (blocked on runtime bring-up):** run a panel/bar (or swaybg) with a `WITH_LAYERSHELL=YES` build to exercise the new scene attachment.
 - [ ] **TC-FORMAT-01:** Run `clang-format` compliance check against `.clang-format` rules.
 - [ ] **Comment-header rollout (optional, deferred):** 48 of 55 `src/` files lack the `[COMMENT] Script function and purpose:` header mandated by AGENTS.md (Phase 8 claim amended 2026-08-13). Rollout awaits user direction.
 - [ ] **Cosmetic:** silence enum-compare warnings at `src/dnd_mode.c:63` and `src/move_mode.c:78` (value-identical constants; harmless).
 
 ## Recently Completed
 
-- [x] **Phase 18b remediation (2026-08-13):** P0-1 xkb symbol, P0-2 backend-start check, P0-3 headless-create argument, P0-4 default config + install guards, P1-5 keymap type tag, P1-6 numeric mouse keycode, P1-7 layer-shell scene attach, P2-8 global list re-init, P2-9/P2-10 diagnostics, P2-11 dead focus params, P2-12 version.h rule, P2-13 comment prefixes — all applied and annotated (register: INVESTIGATION_RUNTIME_FAILURE.md §9).
+- [x] **Review-findings batch (2026-08-13, Phase 23):** version.h FORCE + atomic regeneration; strtol end-pointer rejection for numeric mouse bindings; layer popup offsets via flat `base->geometry`; xwayland `wlr_scene_tree_create` NULL bailout; 17 function-purpose comment headers. 4 further review findings verified stale and skipped (evidence in SESSION_HANDOFF Phase 23).
+- [x] **Wallpaper asset restored (2026-08-13, Phase 23):** `share/backgrounds/hikari/hikari_wallpaper.png` generated (1920x1080 8-bit RGB gradient on the config's `0x282C34` background) and now installed unconditionally by `make install`.
+- [x] **Devdocs consolidation (2026-08-13, Phase 22):** archived runtime investigation content redistributed; launcher analysis → BLUEPRINT §6, corrected eDP-1 analysis → BLUEPRINT §5, P2-14 → active list above, P2-15 → BLUEPRINT known limitations. 7-file AGENTS.md structure restored.
+- [x] **Launcher-architecture analysis & report validity audit (2026-08-13, Phase 21):** User question (why `start-hikari` *and* `hikari`; shouldn't the compositor natively resolve dbus/seatd/PAM/XDG/portals) answered with file:line evidence — consolidated into BLUEPRINT §6 in Phase 22. Residual open set tracked above (P2-14 added from the archived investigation).
+- [x] **Live TTY runtime test (2026-08-13, Phase 19):** Executed via `start-hikari` with seatd up. Session → backend start → renderer → allocator → connector probe all verified live; startup halts at the eDP-1 scanout swapchain test (Mesa/GBM/drm-kmod layer — not hikari). Full triage: SESSION_HANDOFF Phase 19.
+- [x] **Phase 18b remediation (2026-08-13):** P0-1 xkb symbol, P0-2 backend-start check, P0-3 headless-create argument, P0-4 default config + install guards, P1-5 keymap type tag, P1-6 numeric mouse keycode, P1-7 layer-shell scene attach, P2-8 global list re-init, P2-9/P2-10 diagnostics, P2-11 dead focus params, P2-12 version.h rule, P2-13 comment prefixes — all applied and annotated (register: SESSION_HANDOFF Phase 18b; standalone report retired in Phase 22).
 - [x] **Build-discovered fixes (2026-08-13):** P1-16 popup geometry → `popup->current.geometry`; P1-17 `xcb_size_hints_t`; P1-18 xwayland associate/dissociate lifecycle.
 - [x] **TC-BUILD-01 revalidated (2026-08-13):** `make clean && make` — 0 errors, both binaries linked.
 - [x] **TC-BUILD-02 (2026-08-13):** full-feature clean build (`WITH_XWAYLAND/LAYERSHELL/SCREENCOPY/GAMMACONTROL/VIRTUAL_INPUT=YES`) — 0 errors, clean link. First time feature configs compiled in this tree.

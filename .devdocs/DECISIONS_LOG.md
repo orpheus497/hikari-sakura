@@ -4,10 +4,64 @@
 
 ---
 
+## [2026-08-13 17:08] Phase 24: Deep Wiring Audit Ingested into Devdocs (Docs-Only)
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
+
+* **Context:** User requested that the full deep analysis be persisted in `.devdocs/` per `AGENTS.md` after an extensive static audit of documentation and implementation wiring.
+* **Decision:** Recorded the audit across all devdocs trackers with zero product-code edits. Canonical verdict: core compositor wiring is concrete and operational across startup, output/scene, input/mode dispatch, config/action parser, and FreeBSD launcher/PAM/session boundaries. No simulated or fake subsystem implementations were found in active code paths. Empty callbacks were reviewed and classified as predominantly intentional modal no-op handlers (input suppression), not unimplemented feature stubs.
+* **Actionable backlog captured:**
+  1. Unknown `outputs` configuration keys currently log but do not fail parse (`src/configuration.c:1432` path).
+  2. `parse_switches` iterator lifecycle needs explicit free (`src/configuration.c:1260` block).
+  3. Lock helper child process uses `exit(0)` after failed `execl("hikari-unlocker")` (`src/lock_mode.c:118-119`).
+  4. Failed output commit path remains too quiet in the modeset failure branch (`src/output.c:350-353`).
+  5. Two TODO-tagged CSD damage paths over-damage whole output instead of granular regions (`src/view.c:558`, `src/view.c:1746`).
+  6. Allocation wrappers are pass-through; many callers assume success (reliability hardening opportunity under memory pressure).
+* **Documentation drift noted:** `CHANGELOG.md` still contains `wloots` typo entries while the code/docs/build target wlroots 0.20.
+* **Impact:** Devdocs now contain the complete analysis and remediation plan in the mandated 7-file structure. No runtime or source behavior changed in this phase.
+
+---
+
+## [2026-08-13 16:50] Phase 23: Review-Findings Verification — 6 Fixed, 4 Skipped as Stale
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
+
+* **Context:** User supplied 10 review findings (documentation + code) with a verify-first directive: fix only still-valid issues, skip the rest with reasons, keep changes minimal, validate.
+* **Decision:** Every finding re-verified against the current tree before any edit. Fixed: (1) `version.h` rule gained a phony `FORCE` prerequisite plus write-to-`version.h.tmp`/atomic-rename (the old comment claimed atomicity that was never implemented); (2) `binding_config.c` numeric mouse bindings validate `strtol` via end pointer — no-digits and trailing-junk specs rejected, errno + UINT32 checks retained; (3) `layer_shell.c` popup damage offsets use the flat `base->geometry` (tree's 0.20 convention, matching `xdg_view.c`; both fields confirmed present in installed wlroots 0.20.2 headers); (4) `xwayland_view.c` validates `wlr_scene_tree_create` and bails through the destroy path's cleanup (`hikari_view_fini` + `hikari_free`, both verified safe before listener registration) — the caller holds no reference; (5) wallpaper PNG authored (1920x1080 8-bit gradient on the config's own `0x282C34` background; the cairo loader at `src/output.c:76` needs 8-bit) and the install rule made unconditional; (6) 17 missing `[COMMENT] Function purpose:` headers added across 8 files (`init_noop_output` already compliant). Skipped as stale: "future-dated timestamps" (system clock 16:50 postdates all stamps, max 14:35; no date >= 2026-08-14 anywhere in `.devdocs/`; newest-first ordering intact); `INVESTIGATION_RUNTIME_FAILURE.md` (retired in Phase 22); PLANS/BRIEFING `wlr_output_effective_resolution` duplicates (already removed in Phase 22 — only audit annotations remain); SESSION_HANDOFF line-referenced records (stale line numbers; historical timestamps are past, sequential, and provenance-noted — retroactively re-sourcing them would falsify the sequence).
+* **Impact:** Default and full-feature clean builds pass with 0 errors; `version.h` regenerates every build with atomic rename and no residue; wallpaper installs to the config-referenced path. Historical ledger timestamps deliberately untouched; this entry's stamp is `date`-sourced.
+
+---
+
+## [2026-08-13 14:00] Phase 22: Devdocs Consolidation — Standalone Report Retired, 7-File Structure Restored
+
+*(Timestamp source: environment clock — user barred shell commands this session.)*
+
+* **Context:** User directive: too many bloated reports — consolidate into the AGENTS.md devdocs structure with no repetition, verifying everything against the actual codebase. The only file outside the mandated 7 was `the archived runtime investigation` (the Phase-20 analysis artifact had already been merged into BLUEPRINT.md and removed).
+* **Decision:** Archived runtime investigation content was redistributed and redistributed its still-valid content with zero repetition: launcher/session architecture analysis → BLUEPRINT.md §6; corrected eDP-1 failure analysis → BLUEPRINT.md §5; residual open item P2-14 → TODOS active list; P2-15 → BLUEPRINT known limitations. The fixed-defect catalog remains recorded in the Phase 18/18b SESSION_HANDOFF and DECISIONS_LOG entries. All earlier `the archived runtime investigation` references in the historical ledgers (SESSION_HANDOFF, DECISIONS_LOG) are superseded pointers to these consolidated locations; living trackers (BRIEFING/PROGRESS/TODOS/PLANS/BLUEPRINT) were updated in place. During consolidation the Phase-20 BLUEPRINT §5 draft was found factually wrong — failure misattributed to `wlr_backend_start` (live-proven to succeed), a non-existent diagnostic string quoted (`error: failed to start backend`; actual: `error: could not start backend`, `src/server.c:1071`), and permissions/seatd listed as candidate causes though ruled out live in Phase 19 — and was corrected. Codebase re-verification this session: mlock/munlock present (`src/lock_mode.c:522/542`); double-fork+setsid exec (`src/command.c:14-21`); layer-shell exclusive zones (`src/layer_shell.c:88-172`); 26-mark registry (`src/mark.c:10-50`); sheet array (`include/hikari/workspace.h:22`).
+* **Impact:** Devdocs are back to the mandated 7 files; the archived runtime investigation has been deleted after its content was redistributed. No product code changed.
+
+---
+
+## [2026-08-13 13:44] Phase 21: Launcher Duality Confirmed as Architecture; Report Validity Audit
+
+* **Context:** User asked why both `start-hikari` and `hikari` exist, and whether a PAM-using Wayland compositor should "naturally and natively" resolve dbus, seatd, PAM, the XDG socket, and portals. Full evidence-backed analysis added to `the archived runtime investigation` §10–§11.
+* **Decision:** The duality stands. Verified native in-tree: seat/seatd (`wlr_backend_autocreate` → libseat, `src/server.c:821`); Wayland socket (`wl_display_add_socket_auto`, `src/server.c:961`) with `WAYLAND_DISPLAY` exported to children (`src/server.c:967`) and `DISPLAY` under XWayland (`src/server.c:507`); PAM usage is auth-only (`pam_start`/`pam_authenticate`/`pam_end`, `hikari_unlocker.c:85/134/153`). Verified absent tree-wide (grep): any dbus usage; `pam_open_session`/`pam_setcred`/`pam_acct_mgmt`. The D-Bus session bus, portal activation environment (`XDG_CURRENT_DESKTOP`), and XDG_RUNTIME_DIR creation are session-layer responsibilities (login PAM stack/pam_xdg, dbus-daemon, display manager) that precede or surround the compositor; the Phase 11 `setup_env()` native-bootstrap experiment was correctly reverted 2026-07-31 12:47 and that revert is now re-affirmed on complete evidence rather than architectural appeal. The wrapper's blocks are conditional/idempotent — under a DM it reduces to a pass-through plus the dbus guard; on a bare TTY it supplies the missing link between the PAM login and the compositor.
+* **Impact:** No product-code changes. Report §10 records the current validity of every Phase 18 finding (all P0/P1 remain fixed; P2-14 open pending a usable session; P2-15 present by design inheritance; §7 attributions superseded by Phase 19 live evidence). Residual open set unchanged: eDP-1 swapchain failure (environmental), output-commit silent-return hardening, tmpfs/ZFS XDG_RUNTIME_DIR, wallpaper PNG.
+
+---
+
+## [2026-08-13 07:34] Phase 19: Live Runtime Test — Failure Localized Below hikari; Diagnostics-First
+
+* **Context:** First live TTY run after Phase 18b remediation (user-pasted logs; triage session was read-only). Two wlroots errors: `eglQueryDeviceStringEXT(EGL_DRM_DEVICE_FILE_EXT) failed` (non-fatal — dmabuf device feedback lost, clients degrade to wl_shm) and `Swapchain for output 'eDP-1' failed test` (output-fatal). Session, backend start, renderer, allocator, and connector probe verified working live for the first time.
+* **Decision:** Classified as environmental/driver-layer (Mesa/EGL/GBM ↔ drm-kmod), not a hikari defect — the enable+mode commit sequence (`src/output.c:350`) matches the wlroots 0.20 contract. Ranked hypotheses: H1 (Mesa DRI/GBM broken — explains both log lines), H2 (`IN_FORMATS` modifier mismatch), H3 (FB-import EINVAL). Discrimination requires a `DEBUG=YES` rebuild (release compiles out `wlr_log_init(WLR_DEBUG)`, `main.c:236`) plus system checks — full matrix in TODOS. No product code changed. Run-1 anomaly (direct `./hikari`: no swapchain error, 28s idle) attributed to nested-backend selection from leaked display vars, which `start-hikari.sh:13-14` exists to prevent. Tabled optional hardening: loud diagnostic on the silent failed-commit return (`src/output.c:351-353`) — same zombie class as the fixed P0-2. Note: branch label `wlroots-0.17.1` is stale; the tree builds against installed wlroots 0.20.x.
+* **Impact:** Runtime blocker queue re-ordered: (1) eDP-1 scanout swapchain failure, (2) tmpfs/ZFS `XDG_RUNTIME_DIR` (escalated — Error 1 forces clients onto wl_shm). Awaits user-run diagnostics before any remediation is proposed.
+
+---
+
 ## [2026-08-13 05:41] Phase 18b: Remediation Execution & Build Revalidation
 
 * **Context:** User approved the Phase 18 remediation plan. Execution covered all 9 plan steps plus the recorded P2 batch, followed by clean-tree build validation in both the default and full-feature configurations.
-* **Decision:** Applied 14 fixes across 11 files (register in `.devdocs/INVESTIGATION_RUNTIME_FAILURE.md` §9). Notable engineering choices: (1) default `etc/hikari/hikari.conf` authored against the verified parser grammar — every action verb cross-checked against `src/action.c`, every colorscheme key against `parse_colorscheme`, `PREFIX` token retained for the install-time sed; (2) layer-shell scene integration parents layer surfaces at the scene root with z-order by layer class and layout-global positioning in `calculate_geometry()`; (3) xwayland map/unmap registration deferred to the `associate` event because `wlr_xwayland_surface.surface` is NULL at `new_surface` time under the 0.20 lifecycle; (4) popup geometry migrated to `popup->current.geometry` after the linker disproved `wlr_xdg_popup_get_geometry()` — verified against the installed 0.20 header's documented semantics.
+* **Decision:** Applied 14 fixes across 11 files (register in `the archived runtime investigation` §9). Notable engineering choices: (1) default `etc/hikari/hikari.conf` authored against the verified parser grammar — every action verb cross-checked against `src/action.c`, every colorscheme key against `parse_colorscheme`, `PREFIX` token retained for the install-time sed; (2) layer-shell scene integration parents layer surfaces at the scene root with z-order by layer class and layout-global positioning in `calculate_geometry()`; (3) xwayland map/unmap registration deferred to the `associate` event because `wlr_xwayland_surface.surface` is NULL at `new_surface` time under the 0.20 lifecycle; (4) popup geometry migrated to `popup->current.geometry` after the linker disproved `wlr_xdg_popup_get_geometry()` — verified against the installed 0.20 header's documented semantics.
 * **Impact:** TC-BUILD-01 passed (default clean build, 0 errors); new TC-BUILD-02 passed (full-feature clean build + link, 0 errors). Three further stale-API defects (P1-16 popup geometry, P1-17 xcb_size_hints_t, P1-18 associate lifecycle) found and fixed during validation — the feature configurations had never compiled in this tree before. Compositor should now fail loudly (diagnostic + exit) instead of presenting a black screen with dead input when the backend cannot start.
 
 ---
@@ -16,7 +70,7 @@
 
 *(Timestamp source: environment clock — user declined shell command execution.)*
 
-* **Context:** User reported that after login hikari either (A) crashes/fails or (B) loads to a black screen with dead keypresses and a frozen mouse, and directed an "extremely deep and analytical investigation" of wiring, false-vs-real logic, stubs, placeholders, simulations, simplifications, poor implementations, and hallucinations. Static-only investigation (no shell access this session); full evidence in `.devdocs/INVESTIGATION_RUNTIME_FAILURE.md`.
+* **Context:** User reported that after login hikari either (A) crashes/fails or (B) loads to a black screen with dead keypresses and a frozen mouse, and directed an "extremely deep and analytical investigation" of wiring, false-vs-real logic, stubs, placeholders, simulations, simplifications, poor implementations, and hallucinations. Static-only investigation (no shell access this session); full evidence in `the archived runtime investigation`.
 * **Decision:** Recorded 15 defects (4 P0, 3 P1, 8 P2) with file:line citations. P0-1: hallucinated `xkb_map_new_from_names` symbol (`src/keyboard_config.c:354`) — tree cannot link cleanly; deployed binary predates tree. P0-2: unchecked `wlr_backend_start()` (`src/server.c:1054`) — primary symptom-B root cause. P0-3: `wlr_headless_backend_create(server->display)` type error + false API comment (`src/server.c:853-857`) — contradicts the Phase-4 fix record in BRIEFING.md. P0-4: `etc/hikari/hikari.conf` and wallpaper asset missing though referenced by install/dist. P1: xkb-file type-tag lie, unstored numeric mouse bindings, layer shell never scene-attached. Documentation-only session: no product code touched; remediation plan (report §8) awaits user approval.
 * **Impact:** Devdocs truth ledger corrected — TC-BUILD-01 back to Pending (clean-tree revalidation required), prior "93–99% wired" assessments superseded, BRIEFING status set to BLOCKED on 4 P0s. Runtime symptoms now have deterministic, testable attributions: A ← P0-1/P0-3/P0-4/P1-5; B ← P0-2 (primary), P0-4-empty-config (secondary).
 

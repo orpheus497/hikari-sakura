@@ -35,6 +35,9 @@
     return;                                                                    \
   }
 
+/* [COMMENT] Function purpose: Initialise per-output workspace state (view
+list, sheet array, defaults). Runs on every output hotplug, so global server
+list heads owned by server_init are deliberately left untouched. */
 void
 hikari_workspace_init(
     struct hikari_workspace *workspace, struct hikari_output *output)

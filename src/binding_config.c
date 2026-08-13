@@ -95,6 +95,9 @@ done:
   return success;
 }
 
+/* [COMMENT] Function purpose: Parse a mouse binding spec -- modifier mask
+plus a named button ("L+left") or a '-'-prefixed numeric evdev button code
+("L-272") -- into a binding key for the mouse bindings table. */
 bool
 hikari_binding_config_button_parse(
     struct hikari_binding_config_key *binding_key, const char *str)
@@ -139,8 +142,14 @@ hikari_binding_config_button_parse(
     remaining++;
 
     errno = 0;
-    const long value = strtol(remaining, NULL, 10);
-    if (errno != 0 || value < 0 || value > UINT32_MAX) {
+    char *end = NULL;
+    const long value = strtol(remaining, &end, 10);
+    /* [COMMENT] Action purpose: Reject specs with no digits (end pointer
+    unchanged) or trailing characters (end not at the terminating NUL) --
+    strtol alone would silently accept "272abc" or a bare "-". The errno and
+    UINT32 range validation is retained. */
+    if (errno != 0 || end == remaining || *end != '\0' || value < 0 ||
+        value > UINT32_MAX) {
       fprintf(stderr,
           "configuration error: failed to parse mouse binding \"%s\"\n",
           remaining);

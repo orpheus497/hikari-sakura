@@ -84,6 +84,9 @@ done:
   return success;
 }
 
+/* [COMMENT] Function purpose: Load a keymap from a user-supplied xkb file
+(the keyboard "xkb file" config option) and store it tagged as
+HIKARI_XKB_TYPE_KEYMAP so the union is interpreted correctly downstream. */
 static bool
 load_xkb_file(struct hikari_xkb *xkb, const char *xkb_file)
 {
@@ -343,6 +346,9 @@ hikari_keyboard_config_merge(struct hikari_keyboard_config *keyboard_config,
 }
 #undef MERGE
 
+/* [COMMENT] Function purpose: Compile a keymap from the configured xkb
+rules/model/layout/variant/options via xkbcommon; used when no keymap file
+was configured. */
 static struct xkb_keymap *
 compile_keymap(struct hikari_xkb_config *xkb_config)
 {

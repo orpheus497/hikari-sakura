@@ -2,6 +2,7 @@
 #include <hikari/xwayland_view.h>
 
 #include <assert.h>
+#include <stdio.h>
 #include <stdlib.h>
 
 #include <xcb/xcb_icccm.h>
@@ -147,6 +148,10 @@ get_class(struct wlr_xwayland_surface *surface)
   }
 }
 
+/* [COMMENT] Function purpose: Perform one-time configuration of a newly
+mapped XWayland view -- adopt surface geometry, resolve the view config via
+WM_CLASS, set title, and send the initial configure. Invoked by map_handler
+on the first map. */
 static void
 first_map(struct hikari_xwayland_view *xwayland_view)
 {
@@ -177,6 +182,8 @@ first_map(struct hikari_xwayland_view *xwayland_view)
       geometry->height);
 }
 
+/* [COMMENT] Function purpose: Map an XWayland view -- register the commit
+listener and hand the wlr_surface to hikari_view_map. */
 static void
 map(struct hikari_view *view, bool focus)
 {
@@ -194,6 +201,8 @@ map(struct hikari_view *view, bool focus)
   hikari_view_map(view, xwayland_view->surface->surface);
 }
 
+/* [COMMENT] Function purpose: Listener for the wlr_surface map event; runs
+first_map while the view is still unmanaged, then maps it. */
 static void
 map_handler(struct wl_listener *listener, void *data)
 {
@@ -236,6 +245,9 @@ unmap_handler(struct wl_listener *listener, void *data)
   unmap((struct hikari_view *)xwayland_view);
 }
 
+/* [COMMENT] Function purpose: Listener for the XWayland surface destroy
+event; unmaps when needed, finalises the view, destroys the scene tree,
+removes all listeners, and frees the wrapper. */
 static void
 destroy_handler(struct wl_listener *listener, void *data)
 {
@@ -364,6 +376,8 @@ for_each_surface(struct hikari_node *node,
   }
 }
 
+/* [COMMENT] Function purpose: Fill min/max size constraints from the X11
+ICCCM size hints, defaulting unbounded dimensions to the output size. */
 static void
 constraints(struct hikari_view *view,
     int *min_width,
@@ -442,6 +456,11 @@ dissociate_handler(struct wl_listener *listener, void *data)
   wl_list_init(&xwayland_view->unmap.link);
 }
 
+/* [COMMENT] Function purpose: Initialise a managed XWayland view wrapper --
+base view init, scene tree for border/indicator nodes, and the wlroots 0.20
+lifecycle listeners (associate/dissociate/destroy/configure/title). Called by
+new_xwayland_surface_handler; the caller holds no reference, so failure paths
+free the wrapper themselves. */
 void
 hikari_xwayland_view_init(struct hikari_xwayland_view *xwayland_view,
     struct wlr_xwayland_surface *xwayland_surface,
@@ -462,8 +481,17 @@ hikari_xwayland_view_init(struct hikari_xwayland_view *xwayland_view,
 #endif
   xwayland_view->surface = xwayland_surface;
 
-  // [COMMENT] Action purpose: Create a scene tree for XWayland view border and indicator frame nodes.
+  /* [COMMENT] Action purpose: Create a scene tree for the XWayland view's
+  border and indicator frame nodes. Creation only fails on OOM; bail out via
+  the same cleanup the destroy path uses (hikari_view_fini + hikari_free)
+  before any listeners are registered, leaving no dangling state behind. */
   xwayland_view->scene_tree = wlr_scene_tree_create(&hikari_server.scene->tree);
+  if (xwayland_view->scene_tree == NULL) {
+    fprintf(stderr, "error: could not create scene tree for xwayland view\n");
+    hikari_view_fini(&xwayland_view->view);
+    hikari_free(xwayland_view);
+    return;
+  }
   xwayland_view->view.scene_node = &xwayland_view->scene_tree->node;
   hikari_border_init(&xwayland_view->view.border, xwayland_view->scene_tree);
   hikari_indicator_frame_init(&xwayland_view->view.indicator_frame, xwayland_view->scene_tree);

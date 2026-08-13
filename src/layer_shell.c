@@ -184,6 +184,10 @@ calculate_exclusive(struct hikari_output *output)
   output->usable_area = usable_area;
 }
 
+/* [COMMENT] Function purpose: Initialise a hikari_layer for a new
+wlr_layer_surface -- resolve the output, attach the surface to the scene
+graph with per-layer stacking order, register lifecycle listeners, and
+compute the initial geometry. Invoked from new_layer_shell_surface_handler. */
 void
 hikari_layer_init(
     struct hikari_layer *layer, struct wlr_layer_surface_v1 *wlr_layer_surface)
@@ -249,6 +253,9 @@ hikari_layer_init(
   calculate_geometry(layer);
 }
 
+/* [COMMENT] Function purpose: Tear down a layer surface -- detach its scene
+node, unlink it from the output's layer list, and remove all listeners.
+Called once the surface is unmapped (destroy path). */
 void
 hikari_layer_fini(struct hikari_layer *layer)
 {
@@ -340,6 +347,9 @@ damage(struct hikari_layer *layer, bool whole)
   }
 }
 
+/* [COMMENT] Function purpose: Emit damage for a (possibly nested) layer
+popup -- accumulate the popup chain offsets plus the owning layer's position
+into output-space coordinates, then damage the popup surface. */
 static void
 damage_popup(struct hikari_layer_popup *layer_popup, bool whole)
 {
@@ -351,9 +361,10 @@ damage_popup(struct hikari_layer_popup *layer_popup, bool whole)
   field into the popup state struct (popup->current.geometry -- documented as
   "position of the popup relative to the upper left corner of the window
   geometry of the parent surface"); wlr_xdg_popup_get_geometry() no longer
-  exists. */
-  int ox = popup->current.geometry.x - popup->base->current.geometry.x;
-  int oy = popup->current.geometry.y - popup->base->current.geometry.y;
+  exists. The parent's window geometry is read through the flat
+  wlr_xdg_surface.geometry accessor, matching xdg_view.c. */
+  int ox = popup->current.geometry.x - popup->base->geometry.x;
+  int oy = popup->current.geometry.y - popup->base->geometry.y;
 
   struct hikari_layer *layer;
   struct hikari_layer_popup *current = layer_popup;
@@ -369,8 +380,8 @@ damage_popup(struct hikari_layer_popup *layer_popup, bool whole)
         current = current->parent.node.popup;
         /* [COMMENT] Action purpose: Accumulate nested popup offsets via the
         0.20 popup-state geometry field (see note above). */
-        ox += current->popup->current.geometry.x - current->popup->base->current.geometry.x;
-        oy += current->popup->current.geometry.y - current->popup->base->current.geometry.y;
+        ox += current->popup->current.geometry.x - current->popup->base->geometry.x;
+        oy += current->popup->current.geometry.y - current->popup->base->geometry.y;
         break;
     }
   }
@@ -465,6 +476,8 @@ destroy_handler(struct wl_listener *listener, void *data)
   hikari_free(layer);
 }
 
+/* [COMMENT] Function purpose: Map a layer surface -- register popup/unmap
+listeners, enable the scene node now that content exists, and damage. */
 static void
 map(struct hikari_layer *layer)
 {
@@ -505,6 +518,8 @@ map_handler(struct wl_listener *listener, void *data)
   map(layer);
 }
 
+/* [COMMENT] Function purpose: Unmap a layer surface -- disable the scene
+node, release keyboard focus, recompute exclusive zones, and damage. */
 static void
 unmap(struct hikari_layer *layer)
 {
@@ -555,6 +570,9 @@ unmap_handler(struct wl_listener *listener, void *data)
   unmap(layer);
 }
 
+/* [COMMENT] Function purpose: Compute a layer surface's on-output geometry
+from its anchor edges, margins, exclusive zone, and desired size, falling
+back to centering/stretching per the layer-shell protocol. */
 static void
 calculate_geometry(struct hikari_layer *layer)
 {

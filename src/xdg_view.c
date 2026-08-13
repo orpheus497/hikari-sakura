@@ -130,6 +130,9 @@ get_app_id(struct hikari_xdg_view *xdg_view)
   return app_id == NULL ? "" : app_id;
 }
 
+/* [COMMENT] Function purpose: Perform one-time configuration of a newly
+mapped xdg view -- adopt the surface geometry, resolve the view config by
+app_id, set the title, and configure. Invoked by map_handler on first map. */
 static void
 first_map(struct hikari_xdg_view *xdg_view)
 {
@@ -201,6 +204,8 @@ map(struct hikari_view *view, bool focus)
   hikari_view_map(view, xdg_surface->surface);
 }
 
+/* [COMMENT] Function purpose: Listener for the wlr_surface map event; runs
+first_map while the view is still unmanaged, then maps it. */
 static void
 map_handler(struct wl_listener *listener, void *data)
 {

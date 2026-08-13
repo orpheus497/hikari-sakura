@@ -1,53 +1,44 @@
 # Hikari Project Briefing
 
-*Last Updated:* 2026-08-13 05:41 (environment clock, corroborated by build mtimes)
+*Last Updated:* 2026-08-13 17:08
 
 ## Current Status
 
-- **Phase:** Phase 18b — Remediation complete; awaiting live runtime test
-- **Branch:** wlroots-0.17.1
-- **Overall progress:** All 15 investigation defects + 3 build-discovered defects fixed and build-validated. TC-BUILD-01 (default) and TC-BUILD-02 (full-feature) pass from clean trees. See `.devdocs/INVESTIGATION_RUNTIME_FAILURE.md` §9 register.
+- **Phase:** Phase 24 — Deep architecture/wiring audit recorded into devdocs (docs-only): startup/output/input/mode/config/session integration re-verified; no fake subsystems found; six actionable code-quality/risk items captured with a remediation plan.
+- **Branch:** wlroots-0.17.1 (stale label — tree builds against installed wlroots 0.20.x)
+- **Overall progress:** Devdocs consolidated with zero repetition: launcher/session architecture → BLUEPRINT §6; corrected eDP-1 failure analysis → BLUEPRINT §5 (Phase-20 draft had misattributed the failure to `wlr_backend_start`; live evidence places it at the output-commit swapchain test, `src/output.c:350`); P2-14 → TODOS; P2-15 → BLUEPRINT known limitations. All claims re-verified against the codebase. Runtime blocker remains below hikari in the Mesa/EGL/GBM ↔ drm-kmod layer.
 - **Target OS:** FreeBSD 15.1-RELEASE (ZFS root)
-- **Current step:** Live TTY runtime test via `start-hikari` (seatd up). Backend-start failure now produces a loud stderr diagnostic instead of a black zombie session. tmpfs/ZFS `XDG_RUNTIME_DIR` remains the environmental blocker for client shm.
+- **Current step:** Execute the newly added Phase 24 code-hardening backlog (unknown-output-key strict fail, lock-helper exec failure semantics, switches parser iterator cleanup, output-commit loud diagnostics, CSD damage granularity, allocation-policy hardening) while keeping the Phase 19 runtime diagnostics queue active.
+- **Blockers:** (1) eDP-1 scanout swapchain test failure — Mesa/EGL/GBM ↔ drm-kmod layer; (2) tmpfs/ZFS `XDG_RUNTIME_DIR` — client wl_shm, escalated because Error 1 kills dmabuf feedback and forces clients onto shm.
 
 ## Session Briefing
 
-### Accomplishments (this session — Phase 18 + 18b)
+### Latest Session (Phase 23 — Review-Findings Verification & Remediation)
 
-- **Investigation (Phase 18):** full static root-cause analysis of the post-login crash / black-screen+dead-input symptoms — 4 P0 + 3 P1 + 8 P2 defects with file:line evidence (report `.devdocs/INVESTIGATION_RUNTIME_FAILURE.md`).
-- **Remediation (Phase 18b, user-approved):** all plan steps applied and annotated. Headliners: `xkb_keymap_new_from_names` restored; `wlr_backend_start()` now checked with a fatal diagnostic; `wlr_headless_backend_create(server->event_loop)` type corrected; default `etc/hikari/hikari.conf` created (parser-verified); layer-shell surfaces attached to the scene graph; xwayland 0.20 lifecycle (`associate`-deferred map/unmap, `xcb_size_hints_t`); popup geometry migrated to `popup->current.geometry`.
-- **Build validation:** `make clean && make` — 0 errors. Full-feature build (XWAYLAND+LAYERSHELL+SCREENCOPY+GAMMACONTROL+VIRTUAL_INPUT) — 0 errors, clean link. First time the feature configurations have ever compiled in this tree.
-- **Devdocs corrected:** TC-BUILD-01 re-established on evidence; prior "93–99% wired" claims superseded by the verified register.
+- **Verify-first pass over 10 review findings:** 6 still-valid fixed (see PROGRESS Phase 23); 4 skipped as stale — no future-dated timestamps exist (system clock 16:50 > all stamps), `INVESTIGATION_RUNTIME_FAILURE.md` retired in Phase 22, PLANS/BRIEFING API-verification duplicates already removed, SESSION_HANDOFF line references stale (records are past-dated, sequential, provenance-noted).
+- **Code changes:** version.h regenerates every build via temp file + atomic rename; numeric mouse bindings reject junk via strtol end pointer; layer popup damage offsets use flat `base->geometry`; XWayland init bails cleanly if `wlr_scene_tree_create` fails; wallpaper PNG (1920x1080 8-bit, `0x282C34` gradient) now exists and installs unconditionally; 17 function-purpose comment headers added.
+- **Validation:** default + full-feature clean builds pass with 0 errors; wallpaper install rehearsed. (Shell exports `DEBUG=release`, which arms the Makefile's `-Werror` DEBUG branch and trips the pre-existing documented enum-compare cosmetic item — unrelated to these changes.)
 
-### Previous Accomplishments (Phase 18 investigation)
+### Current Session (Phase 24 — Deep Wiring Audit Capture into Devdocs)
 
-- **User-reported symptoms:** post-login either (A) crash/fail, or (B) black screen with dead keypresses and frozen mouse.
-- **Deep static investigation** of the full startup/render/input path (30+ files read end-to-end; remainder verified via call sites). Full report: `.devdocs/INVESTIGATION_RUNTIME_FAILURE.md`.
-- **P0-1 (hallucinated API):** `src/keyboard_config.c:354` calls nonexistent `xkb_map_new_from_names` (real: `xkb_keymap_new_from_names`; removed in libxkbcommon ≥ 1.0) — clean build cannot link; deployed binary must predate the tree. TC-BUILD-01 "passed" claim untenable.
-- **P0-2 (symptom-B machine):** `src/server.c:1054` discards `wlr_backend_start()` result — on backend failure the compositor runs headless-blind forever: no outputs, no input devices, no cursor. Black + dead input + frozen mouse, exactly.
-- **P0-3 (hallucinated comment + wrong type):** `src/server.c:857` passes `server->display` to `wlr_headless_backend_create()` (API takes `wl_event_loop *`); adjacent comment asserts the opposite of the real API and contradicts this file's own Phase-4 fix record. UB on every launch.
-- **P0-4 (phantom assets):** `etc/hikari/hikari.conf` and `share/backgrounds/hikari/hikari_wallpaper.png` are referenced by `make install`/`dist` but absent from the tree — installs abort mid-rule; missing config → exit at startup; empty config → zero bindings (dead keys).
-- **P1:** xkb-file keymap type-tag lie (`keyboard_config.c:112`, union reinterpreted → crash/corruption); numeric mouse bindings parsed but never stored (`binding_config.c:136-148`); layer-shell surfaces never attached to the scene graph (`layer_shell.c` — entire shell renders nothing).
-- **Verified-real (contrast):** server init order, first-output workspace migration, scene frame loop, XDG 0.20 initial_commit handling, view state machine, lock-mode non-blocking PAM IPC, unlocker, scene widgets (borders/indicator/lock/background), modal set, action table. See report §5.
+- **Scope covered:** deep static audit of docs + code wiring across startup lifecycle, output/scene paths, input/mode dispatch, config/action parser, FreeBSD launcher/PAM/unlocker/session integration.
+- **Implementation verdict:** no simulated/fake subsystem wiring found in core compositor paths; all major components are concretely wired.
+- **Intentional no-op verdict:** empty callbacks concentrated in mode handlers are predominantly intentional input-suppression hooks (modal behavior), not missing implementations.
+- **Actionable findings captured:** (1) unknown `outputs` keys log but do not fail parse; (2) `parse_switches` lacks iterator free; (3) lock helper child uses `exit(0)` after failed `execl`; (4) output commit failure path can remain too quiet; (5) two TODO-tagged CSD damage paths still over-damage whole outputs; (6) allocation wrappers are pass-through with many unchecked callers.
+- **Documentation drift captured:** `CHANGELOG.md` contains `wloots` typo entries; build/docs otherwise consistently target wlroots 0.20.
 
-### Previous Accomplishments (Phases 14–17)
+### Previous Session (Phase 22 — Devdocs Consolidation)
 
-- **Verified review finding 1** against current docs: `.devdocs/SESSION_HANDOFF.md` Phase 16 Modified Files table embedded unescaped literal pipes inside code spans (the `||` guard and `mount | grep`), which GFM/markdownlint parse as column separators. Escaped both; repo-wide sweep confirmed no other offending cells.
-- **Verified review finding 2** against current docs: `README.md` tmpfs troubleshooting blamed a `zfs` result solely on step 1. Rewritten — `/tmp` is still ZFS-backed; users are directed to re-check all steps, including the `/etc/fstab` entry and reboot.
-- **Build state clarified:** the sandbox `bmake` failure (`libucl` missing from pkg-config) was an environment artifact; user-confirmed `make` builds fine on the FreeBSD target.
+- **Consolidated to the AGENTS.md 7-file structure:** archived runtime investigation content was redistributed (the Phase-20 analysis artifact had already been merged away). Still-valid content redistributed with zero repetition — launcher/session architecture → BLUEPRINT §6; corrected eDP-1 failure analysis → BLUEPRINT §5; P2-14 → TODOS active list; P2-15 → BLUEPRINT known limitations; the fixed-defect catalog remains in the Phase 18/18b ledger entries.
+- **Codebase verification pass:** mlock/munlock (`src/lock_mode.c:522/542`), double-fork+setsid exec (`src/command.c:14-21`), layer-shell exclusive zones (`src/layer_shell.c:88-172`), 26-mark registry (`src/mark.c:10-50`), sheet array (`include/hikari/workspace.h:22`) — all BLUEPRINT claims confirmed; the Phase-20 §5 draft was found factually wrong and corrected.
+- **Dangling references fixed** in all living trackers; historical ledger entries keep their as-written context with the supersession declared in the Phase 22 entries.
 
-### Previous Accomplishments (Phases 14–16)
+### Prior Sessions (Phases 1–21)
 
-- **Phase 16:** Fatal error guard on `SCRIPT_DIR` derivation in `start-hikari.sh`; README tmpfs verification switched to portable `mount | grep`.
-- **Phase 15:** `SCRIPT_DIR`-based three-tier binary resolution in `start-hikari.sh`; full documentation audit.
-
-- Comprehensive codebase audit — deep investigation of all 55 source files, 64 headers, Makefile, start-hikari.sh, hikari_unlocker.c, PAM configs, and desktop entry.
-- Fixed BUG-1 (Medium): `move_resize_view()` dx/dy confusion in server.c.
-- Fixed BUG-2 (Low): `outputs_disabled` stale state in lock_mode.
-- Fixed BUG-3 (Low): `command.c` waitpid infinite loop.
-- Fixed BUG-4 (Low): Removed stale debug comment from server.c.
-- Security: `explicit_bzero` for password buffer. Robustness: EINTR-retrying pipe write.
-- Added 5 missing listener cleanups. Removed dead code. Updated desktop entry and gitignore.
+- **Phase 21 (Validity Audit & Launcher Analysis):** answered "why `start-hikari` *and* `hikari`?" with file:line evidence — duality confirmed as deliberate architecture; 2026-07-31 12:47 `setup_env()` revert re-affirmed. Consolidated into BLUEPRINT §5/§6 in Phase 22.
+- **Phase 20 (Codebase Audit):** Exhaustive read-only audit of `src/` and `include/`; system architecture synthesized directly into `.devdocs/BLUEPRINT.md`.
+- **Phase 19 (Runtime Triage):** Live TTY runtime test executed. Error 1: `eglQueryDeviceStringEXT` fails (non-fatal, kills dmabuf feedback). Error 2: `Swapchain for output 'eDP-1' failed test` (fatal to output). Verified that seatd, backend start, renderer, allocator, and connector probe work correctly.
+- Canonical history lives in `.devdocs/SESSION_HANDOFF.md` (reverse-chronological); the Phase 18 defect catalog (4 P0 + 3 P1 + 8 P2, all remediated; TC-BUILD-01/02 pass) is recorded in the Phase 18/18b ledger entries there and in DECISIONS_LOG. Not duplicated here.
 
 ## wlroots 0.20 API Fixes Applied
 
@@ -80,8 +71,15 @@
 
 ## Remaining Work
 
-- **CRITICAL:** Resolve tmpfs/ZFS incompatibility for XDG_RUNTIME_DIR.
-- **Manual:** Delete `.core` dump files from repo root.
-- Runtime testing on FreeBSD Wayland session.
-- PAM unlocker verification.
-- Verify `wlr_output_effective_resolution()` exists in wlroots 0.20 headers at compile time (used in `src/layer_shell.c:177`).
+- **CRITICAL:** Resolve the eDP-1 scanout swapchain failure (diagnostics → fix; expected in the Mesa/GBM/drm-kmod layer, not this tree).
+- **CRITICAL:** Resolve tmpfs/ZFS incompatibility for XDG_RUNTIME_DIR (client wl_shm; escalated — Error 1 removed dmabuf feedback, forcing clients onto shm).
+- **HIGH:** Enforce strict parse failure for unknown `outputs` keys (`src/configuration.c`).
+- **HIGH:** Fix lock helper exec-failure exit semantics in `src/lock_mode.c` child path.
+- **MEDIUM:** Add explicit diagnostic on failed output modeset commit path (`src/output.c:350-353`).
+- **MEDIUM:** Free `parse_switches` iterator in `src/configuration.c`.
+- **MEDIUM:** Replace CSD whole-output damage fallback with granular damage in `src/view.c` TODO paths.
+- **MEDIUM:** Decide and implement allocation failure policy (fail-fast wrappers or caller checks).
+- PAM unlocker live verification (setuid 4555 path; blocked on runtime bring-up).
+- Optional hardening: loud stderr diagnostic on the failed output-commit early return (`src/output.c:350-353`).
+
+*Granular tasks: `.devdocs/TODOS.md`. Closed/stale items previously listed here (`.core` cleanup, `wlr_output_effective_resolution` check, runtime test) were resolved 2026-08-13.*
