@@ -4,6 +4,77 @@
 
 ---
 
+## Session Date: 2026-08-13 19:08 — Phase 26: Phase 24 Hardening Backlog Completed — P2/P3 Batch Executed
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
+
+### Accomplishments
+
+1. **P2 — CSD granular damage (`src/view.c`):** removed both `// TODO … A LOT better` whole-output fallbacks. `damage_whole_surface` now damages the CSD main surface by its buffer extents (`geometry + sx/sy`, `surface->current.width/height`) instead of the absent server border box — client-drawn decorations/shadows live inside the client buffer, so the surface box is the correct granular region. `hikari_view_damage_whole` and `hikari_view_damage_surface` no longer early-out on `use_csd`; CSD and SSD views share one per-surface granular path. Verified against the post-scene architecture: all damage sinks reduce to `wlr_output_schedule_frame` (boxes are advisory), and all damage-whole callers operate on mapped views, satisfying the `hikari_view_for_each_surface` assert that SSD views already held.
+2. **P2 — fail-fast allocation policy (`src/memory.c`, `include/hikari/memory.h`):** `hikari_malloc`/`hikari_calloc` now print a sized `error:` diagnostic and `abort()` on NULL — NULL is unreachable at the dozens of unchecked callsites the Phase 24 audit flagged. `abort()` over `exit()` for SIGABRT/core-dump postmortem and no atexit on a half-valid heap; no zero-size normalization (FreeBSD `malloc(0)`/`calloc(0, …)` never return NULL; FreeBSD-only tree). Both files gained the AGENTS.md comment headers; the header documents the never-NULL contract.
+3. **P3 — changelog hygiene (`CHANGELOG.md`):** `wloots` → `wlroots` at the 0.15.0 and 0.14.0 entries.
+4. **Validation:** `env -u DEBUG make clean && make` (TC-BUILD-01) and `env -u DEBUG make clean && make WITH_ALL=YES` (TC-BUILD-02) both pass with 0 errors; `src/view.c` and `src/memory.c` compile warning-clean. Only the pre-existing documented `xwayland_unmanaged_view.c` unused-function warnings remain.
+
+### Modified Files
+
+| File | Change |
+|---|---|
+| `src/view.c` | CSD whole-output early-outs removed (2 sites); `damage_whole_surface` CSD main surface → buffer-extents box; function-purpose/action-purpose comments |
+| `src/memory.c` | Fail-fast `hikari_malloc`/`hikari_calloc` (sized stderr diagnostic + `abort()`); AGENTS.md comment headers |
+| `include/hikari/memory.h` | Never-NULL contract documentation; script-purpose header |
+| `CHANGELOG.md` | `wloots` → `wlroots` (2 sites) |
+| `.devdocs/*` | Phase 26 records |
+
+### Key Decisions
+
+- Allocation-policy design question resolved per user direction: **fail-fast wrappers** (smallest correct change; a compositor cannot recover from OOM mid-frame). The alternative (caller-side checks at every callsite) was rejected with the user's selection.
+- CSD main-surface damage uses buffer extents rather than the border box: under CSD there is no server border, and the client buffer is where client decorations/shadows live.
+- Phase 24 hardening stream is now closed at 7/7 (4 items in Phase 25, 3 in Phase 26).
+
+### Next Steps
+
+1. User-run Phase 19 diagnostics matrix (eDP-1 swapchain; the Phase 25 loud output-commit diagnostic will name the failed output).
+2. tmpfs/ZFS `XDG_RUNTIME_DIR` resolution (escalated — clients forced onto wl_shm).
+3. Runtime-blocked verifications once a session comes up: P2-14 `current_mode` retention, PAM unlock (setuid 4555), layer-client spot check.
+4. Optional hygiene, pending user direction: TC-FORMAT-01, comment-header rollout, cosmetic enum-compare warnings.
+
+---
+
+## Session Date: 2026-08-13 18:05 — Phase 25: Phase 24 Hardening Backlog — P0/P1 Batch Executed
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
+
+### Accomplishments
+
+1. **P0 — strict-fail unknown `outputs` keys (`src/configuration.c`):** the unknown-key branch in `parse_output_config` logged but fell through to `success = true`; added `goto done` so typo'd keys (e.g. "postion") now fail configuration load, matching every other unknown-key branch in the parser.
+2. **P1 — `parse_switches` iterator lifecycle (`src/configuration.c`):** added the missing `ucl_object_iterate_free(it)` at the `done:` label; all sibling parsers already freed theirs. Fixes a per-load/SIGHUP-reload leak.
+3. **P1 — lock-helper exec-failure semantics (`src/lock_mode.c`):** the child path after failed `execl("hikari-unlocker")` no longer `exit(0)`; it emits `error: could not execute hikari-unlocker` on stderr (fd 2 survives the pipe rewiring) and `_exit(EXIT_FAILURE)` — skipping inherited atexit/stdio-flush in the forked compositor address space. Parent-side terminal-failure handling (pipe hangup) already existed.
+4. **P1 — loud output-commit diagnostic (`src/output.c`):** the failed `wlr_output_commit_state` early return in `hikari_output_init` now prints `error: failed to commit initial mode for output "<name>"; output will remain disabled` before returning. `<stdio.h>` added explicitly.
+5. **Validation:** `env -u DEBUG make clean && make` (TC-BUILD-01) and `env -u DEBUG make clean && make WITH_ALL=YES` (TC-BUILD-02) both pass with 0 errors; the three edited files compile warning-clean. Only pre-existing documented warnings remain (enum-compare cosmetic TODO; unused handlers in `xwayland_unmanaged_view.c`).
+
+### Modified Files
+
+| File | Change |
+|---|---|
+| `src/configuration.c` | unknown `outputs` key → `goto done`; `parse_switches` iterator free |
+| `src/lock_mode.c` | exec-failure child path: stderr diagnostic + `_exit(EXIT_FAILURE)` |
+| `src/output.c` | loud failed-commit diagnostic naming the output; `<stdio.h>` include |
+| `.devdocs/*` | Phase 25 records |
+
+### Key Decisions
+
+- `_exit` over `exit` in the forked child (no atexit/stdio flush in the compositor address space).
+- Diagnostic style matched to the P0-2 backend-start guard (`src/server.c`) for consistency.
+- Strict-fail chosen over warn-and-continue for unknown output keys: a silently ignored rule is a misconfigured compositor that still runs.
+
+### Next Steps
+
+1. Phase 24 P2 items: granular CSD damage (`src/view.c` TODO paths) and allocation-policy decision (needs user design input: fail-fast wrappers vs caller checks); P3 changelog `wloots` typos.
+2. User-run Phase 19 diagnostics matrix (eDP-1 swapchain) — the new output-commit diagnostic will now name the failed output.
+3. tmpfs/ZFS `XDG_RUNTIME_DIR` resolution.
+
+---
+
 ## Session Date: 2026-08-13 17:08 — Phase 24: Deep Wiring Audit Captured into Devdocs (Docs-Only)
 
 *(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*

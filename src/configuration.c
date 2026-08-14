@@ -1275,6 +1275,7 @@ parse_switches(struct hikari_configuration *configuration,
   success = true;
 
 done:
+  ucl_object_iterate_free(it);
 
   return success;
 }
@@ -1428,9 +1429,14 @@ parse_output_config(struct hikari_output_config *output_config,
 
       hikari_output_config_set_position(output_config, position);
     } else {
+      // [COMMENT] Action purpose: Unknown output keys must fail the parse, not
+      // just log -- silently accepting typos (e.g. "postion") would leave a
+      // running compositor that ignores the intended rule. This matches the
+      // strict behaviour of every other unknown-key branch in this parser.
       fprintf(stderr,
           "configuration error: unknown \"outputs\" configuration key \"%s\"\n",
           key);
+      goto done;
     }
   }
 

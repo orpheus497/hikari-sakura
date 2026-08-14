@@ -1,16 +1,10 @@
 # Forward Strategy & Plans
 
-*Last Updated:* 2026-08-13 17:08
+*Last Updated:* 2026-08-13 19:08
 
 ## Implementations to be Fully Implemented
 
-0. **Phase 24 Hardening Stream (from deep wiring audit):**
-   - Enforce strict parse failure for unknown `outputs` keys (`src/configuration.c`).
-   - Fix `parse_switches` iterator lifecycle (`ucl_object_iterate_free`) in `src/configuration.c`.
-   - Correct lock helper child exec-failure semantics (`src/lock_mode.c`: failed `execl("hikari-unlocker")` must not `exit(0)`).
-   - Add explicit stderr diagnostics for failed output modeset commit return path (`src/output.c:350-353`).
-   - Replace TODO-marked CSD whole-output damage fallback with granular damage in `src/view.c`.
-   - Decide and apply allocation-failure policy across `hikari_malloc`/`hikari_calloc` callsites.
+0. **Phase 24 Hardening Stream (from deep wiring audit):** ✅ fully completed 2026-08-13 — P0/P1 batch in Phase 25, P2/P3 batch in Phase 26 (see Completed Implementations). Stream closed at 7/7.
 
 1. **Runtime Bring-Up (diagnostics-driven):**
    - User runs the Phase 19 diagnostic matrix (TODOS active list); the DEBUG-build wlroots log discriminates H1/H2/H3 in one pass.
@@ -31,6 +25,16 @@
 *(Removed 2026-08-13: the `wlr_output_effective_resolution()` API-verification item — closed per TODOS completed list; the successful user build proves the symbol exists.)*
 
 ## Completed Implementations
+
+0. **Phase 24 Hardening P2/P3 Batch (Phase 26):** ✅ Completed 2026-08-13.
+   - CSD damage granularity: whole-output early-outs removed; CSD main surface damaged by buffer extents via the per-surface iteration (`src/view.c`).
+   - Allocation policy resolved fail-fast (user-directed): `hikari_malloc`/`hikari_calloc` sized diagnostic + `abort()` on NULL (`src/memory.c`, never-NULL contract in `include/hikari/memory.h`).
+   - Changelog `wloots` typos fixed (`CHANGELOG.md`).
+   - TC-BUILD-01/02 clean builds pass, 0 errors; edited files warning-clean.
+
+0. **Phase 24 Hardening P0/P1 Batch (Phase 25):** ✅ Completed 2026-08-13.
+   - Unknown `outputs` keys now fail the parse (`src/configuration.c`); `parse_switches` UCL iterator freed (`src/configuration.c`); lock-helper child `_exit(EXIT_FAILURE)` + stderr diagnostic after failed `execl` (`src/lock_mode.c`); loud output-commit diagnostic naming the output (`src/output.c`, explicit `<stdio.h>`).
+   - TC-BUILD-01 (default) and TC-BUILD-02 (full-feature) clean builds pass, 0 errors; edited files warning-clean.
 
 0. **Phase 18/18b Runtime Failure Investigation & Remediation:** ✅ Completed 2026-08-13.
    - Full static root-cause investigation: 4 P0 + 3 P1 + 8 P2 defects with file:line evidence; 3 further build-discovered defects fixed during validation. (Findings consolidated into BLUEPRINT.md §5/§6 and the trackers in Phase 22.)

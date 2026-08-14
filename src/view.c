@@ -533,7 +533,11 @@ damage_whole_surface(struct wlr_surface *surface, int sx, int sy, void *data)
   struct hikari_output *output = damage_data->output;
   struct hikari_view *view = damage_data->view;
 
-  if (view->surface == surface) {
+  // [COMMENT] Action purpose: SSD views damage the server border box for their main
+  // surface. CSD views carry no server border, so their main surface is damaged
+  // granularly by its own buffer extents -- client-drawn decorations and shadows
+  // live inside that buffer, exactly like subsurfaces handled by the else branch.
+  if (!view->use_csd && view->surface == surface) {
     hikari_view_damage_border(view);
   } else {
     struct wlr_box geometry;
@@ -548,23 +552,19 @@ damage_whole_surface(struct wlr_surface *surface, int sx, int sy, void *data)
   }
 }
 
+// [COMMENT] Function purpose: Damage the entire view region granularly by iterating
+// all (sub)surfaces and computing a damage box per surface (border box for the SSD
+// main surface, buffer extents for CSD and subsurfaces) instead of over-damaging
+// the whole output.
 void
 hikari_view_damage_whole(struct hikari_view *view)
 {
   assert(view != NULL);
 
-  struct hikari_output *output = view->output;
-
-  // TODO I know, this needs to be done A LOT better
-  if (view->use_csd) {
-    hikari_output_damage_whole(output);
-    return;
-  }
-
   struct hikari_damage_data damage_data;
 
   damage_data.geometry = hikari_view_geometry(view);
-  damage_data.output = output;
+  damage_data.output = view->output;
   damage_data.view = view;
 
   hikari_node_for_each_surface(
@@ -1737,17 +1737,15 @@ hikari_view_child_init(struct hikari_view_child *view_child,
   }
 }
 
+// [COMMENT] Function purpose: Damage a single surface of the view granularly --
+// either its full buffer extents (whole) or its committed damage at its exact
+// view-relative position -- unified for CSD and SSD views; no whole-output
+// fallback.
 void
 hikari_view_damage_surface(
     struct hikari_view *view, struct wlr_surface *surface, bool whole)
 {
   assert(view != NULL);
-
-  // TODO I know, this needs to be done A LOT better
-  if (view->use_csd) {
-    hikari_output_damage_whole(view->output);
-    return;
-  }
 
   struct hikari_damage_data damage_data;
 

@@ -1,6 +1,6 @@
 # Hikari Project Blueprint
 
-*Last Updated:* 2026-08-13 17:08
+*Last Updated:* 2026-08-13 19:08
 
 ## 1. System Architecture
 
@@ -65,7 +65,7 @@ Input handling (keyboard and pointer) does not happen globally. Instead, `server
 ### Core Initialization & Server Lifecycle
 - **`server.c`**: The absolute core. Initializes the `wl_display`, `wlr_backend`, `wlr_renderer`, `wlr_allocator`, and `wlr_scene`. Sets up the `wl_listener` callbacks for new outputs and inputs. **Issue context:** This is where `wlr_backend_start` is called. If the DRM backend fails to initialize the rendering swapchain for `eDP-1`, the compositor invokes a hard `exit(EXIT_FAILURE)`, hiding specific DRM error context.
 - **`output.c`**: Handles physical monitor hotplugging (`wlr_output`). Connects the `wlr_output` to a `hikari_workspace` and the `wlr_scene_output`. Generates the background buffer using cairo.
-- **`memory.c`**: Simple wrappers around `malloc`, `calloc`, and `free`.
+- **`memory.c`**: Fail-fast wrappers around `malloc`, `calloc`, and `free` — allocation failure prints a sized diagnostic and `abort()`s; callers never see NULL.
 
 ### View Abstractions & Shell Protocols
 - **`view.c`**: The base class for all windows. Manages Z-ordering (raise/lower), moving, resizing, and maximizing. Defines the `wlr_box` geometry boundaries.
@@ -111,7 +111,7 @@ Input handling (keyboard and pointer) does not happen globally. Instead, `server
 4. **Security Conscious**: `lock_mode.c` correctly uses `mlock()` and `munlock()` to ensure that the password buffer is never paged to disk/swap.
 
 **Identified Issues:**
-1. **Silent Output-Commit Failure**: the live eDP-1 failure surfaces as a silent early return on a failed `wlr_output_commit_state()` (`src/output.c:351-353`), leaving a dark-but-alive session (see §5). The backend-start path, by contrast, is loud post-Phase-18b (diagnostic + `exit(EXIT_FAILURE)`, `src/server.c:1071-1077`). No renderer fallback (e.g. pixman) is attempted if GLES2 scanout setup fails.
+1. **Output-Commit Failure (loud since Phase 25)**: a failed `wlr_output_commit_state()` during initial modeset still disables the output via early return (`src/output.c`, `hikari_output_init`), leaving the session alive on remaining/noop outputs — but the path is no longer silent: stderr now names the failed output, matching the backend-start guard style (diagnostic + `exit(EXIT_FAILURE)`, `src/server.c:1071-1077`). No renderer fallback (e.g. pixman) is attempted if GLES2 scanout setup fails.
 2. **Hardcoded Limits**:
    - `workspace.c` hardcodes exactly 10 sheets (`HIKARI_NR_OF_SHEETS`). 
    - `mark.c` hardcodes exactly 26 marks ('a' through 'z').
@@ -134,7 +134,7 @@ The primary runtime blocker on FreeBSD is the failure of the `eDP-1` output duri
 2. `server_init()` → `wlr_renderer_autocreate()` (`src/server.c:946`), `wlr_allocator_autocreate()` (`src/server.c:954-955`) — **succeed live**.
 3. `hikari_server_start()` → `wlr_backend_start()` (`src/server.c:1070`) — **succeeds live**; the P0-2 guard (diagnostic + `exit(EXIT_FAILURE)`, `src/server.c:1071-1077`) correctly stays silent. Connectors probe fine.
 4. `new_output_handler` → `hikari_output_enable()` → enable + EDID-preferred mode → `wlr_output_commit_state()` (`src/output.c:350`) — **THIS FAILS**: wlroots reports `Swapchain for output 'eDP-1' failed test` (`types/output/swapchain.c:109`) — the GBM scanout-alloc / KMS FB-import test.
-5. The commit returns false and hikari takes a **silent early return** (`src/output.c:351-353`): the process stays alive on the noop output — a dark-but-alive session. (Loud-diagnostic hardening is tabled in TODOS.)
+5. The commit returns false and hikari takes an early return (`src/output.c`, `hikari_output_init`): the process stays alive on the noop output — a dark-but-alive session. Since Phase 25 the path is **loud**: stderr names the failed output before the return.
 6. Companion non-fatal error: `eglQueryDeviceStringEXT(EGL_DRM_DEVICE_FILE_EXT)` fails (wlroots `render/egl.c:508`, reached from `wlr_renderer_init_wl_display`, `src/server.c:952`) — the EGL device lacks `EGL_EXT_device_drm`, so dmabuf device feedback is lost and clients degrade to wl_shm.
 
 ### Ranked Hypotheses (discrimination needs the user-run diagnostics matrix in TODOS)
@@ -185,6 +185,8 @@ Key points:
 * **Phase 18b Remediation:** All 15 investigation defects + 3 build-discovered defects fixed and annotated (register: SESSION_HANDOFF Phase 18b; archived runtime investigation retired in Phase 22). New default `etc/hikari/hikari.conf` authored against the verified parser grammar. Layer shell integrated with the scene graph (`wlr_scene_layer_surface_v1_create`, z-order by layer class, layout-global positioning, map/unmap visibility). Xwayland migrated to the wlroots 0.20 lifecycle (`associate`-deferred map/unmap registration, `xcb_size_hints_t` constraints). Popup geometry migrated to `popup->current.geometry`. TC-BUILD-01/02 both pass from clean trees.
 * **Phase 19 Runtime Triage:** First live TTY test (2026-08-13). Session, backend start, renderer, allocator, and connector probe verified live; startup halts at the eDP-1 scanout swapchain test — localized to the Mesa/EGL/GBM ↔ drm-kmod layer, not hikari code. Ranked hypotheses H1/H2/H3 with a user-run diagnostics matrix (TODOS active list). No code changes.
 * **Phase 21/22 Validity Audit, Launcher Analysis & Consolidation:** Runtime-failure findings audited for current validity; the launcher/session architecture analysis (compositor-native vs session-layer responsibilities) lives in §6, the corrected eDP-1 failure analysis in §5, and residual open items in TODOS (P2-14 added). The archived runtime investigation was retired and the devdocs restored to the AGENTS.md 7-file structure. 2026-07-31 12:47 `setup_env()` revert re-affirmed on complete evidence. Documentation-only phases.
+* **Phase 25 Hardening (Phase 24 P0/P1 backlog):** Unknown `outputs` keys now fail the parse (was log-and-continue, `src/configuration.c`); `parse_switches` frees its UCL iterator (`src/configuration.c`); lock-helper child exits `_exit(EXIT_FAILURE)` with a stderr diagnostic after a failed `execl` (was `exit(0)`, `src/lock_mode.c`); failed initial output commit now names the output on stderr (was silent, `src/output.c`). TC-BUILD-01/02 pass, 0 errors; edited files warning-clean.
+* **Phase 26 Hardening (Phase 24 P2/P3 backlog):** CSD damage granularity — whole-output early-outs removed from `hikari_view_damage_whole`/`hikari_view_damage_surface`; CSD main surface damaged by buffer extents via the per-surface iteration (`src/view.c`). Allocation policy resolved fail-fast (user-directed) — `hikari_malloc`/`hikari_calloc` sized diagnostic + `abort()` on NULL (`src/memory.c`, never-NULL contract in `include/hikari/memory.h`). Changelog `wloots` typos fixed (`CHANGELOG.md`). TC-BUILD-01/02 pass, 0 errors; edited files warning-clean. Phase 24 hardening stream closed at 7/7.
 * **Handbook Verification:** FreeBSD Handbook Ch.6 §6.1-6.4 cross-referenced — all requirements verified correct.
 * **Test Specifications:** Added build compilation (TC-BUILD-01), pkg-config dependencies (TC-PKG-01), and manual protocols for Evdev, Shared Memory, and PAM.
 
@@ -249,13 +251,13 @@ Read and cross-reference the content against the codebase.
 
 ### Actionable Risks Captured
 
-1. Unknown `outputs` config keys currently log but can still pass parse (`src/configuration.c` unknown-key branch).
-2. `parse_switches` creates an iterator without explicit free in its return path (`src/configuration.c`).
-3. Lock helper child path exits success after failed `execl("hikari-unlocker")` (`src/lock_mode.c`).
-4. Output commit failure branch remains too quiet and can leave a dark-but-alive state (`src/output.c:350-353`).
-5. Two TODO-tagged CSD damage paths still over-damage whole outputs (`src/view.c`).
-6. Allocation wrappers are plain `malloc`/`calloc` pass-through; many callsites assume success.
+1. ~~Unknown `outputs` config keys log but still pass parse~~ — **Resolved (Phase 25):** parse now fails (`src/configuration.c`).
+2. ~~`parse_switches` iterator without explicit free~~ — **Resolved (Phase 25):** iterator freed (`src/configuration.c`).
+3. ~~Lock helper child exits success after failed `execl("hikari-unlocker")`~~ — **Resolved (Phase 25):** stderr diagnostic + `_exit(EXIT_FAILURE)` (`src/lock_mode.c`).
+4. ~~Output commit failure branch too quiet~~ — **Resolved (Phase 25):** loud stderr diagnostic naming the output (`src/output.c`).
+5. ~~Two TODO-tagged CSD damage paths still over-damage whole outputs (`src/view.c`).~~ — **Resolved (Phase 26):** granular per-surface damage for CSD; main surface damaged by buffer extents.
+6. ~~Allocation wrappers are plain `malloc`/`calloc` pass-through; many callsites assume success.~~ — **Resolved (Phase 26):** fail-fast wrappers (sized diagnostic + `abort()`); NULL unreachable at callsites.
 
 ### Documentation Drift
 
-- Changelog contains `wloots` typo entries; functional build/docs alignment remains wlroots 0.20.
+- ~~Changelog contains `wloots` typo entries~~ — **Resolved (Phase 26):** `wlroots` restored at both sites; build/docs alignment remains wlroots 0.20.

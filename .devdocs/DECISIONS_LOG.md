@@ -4,6 +4,26 @@
 
 ---
 
+## [2026-08-13 19:08] Phase 26: Phase 24 Hardening Backlog Completed — P2/P3 Batch Executed
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
+
+* **Context:** User approved the full remaining Phase 24 backlog in order: P3 changelog typos → P2 CSD granular damage → P2 allocation hardening with fail-fast wrappers (the allocation-policy design question was resolved by the user in favour of fail-fast).
+* **Decision:** (1) `CHANGELOG.md` `wloots` → `wlroots` (2 sites: 0.15.0 and 0.14.0 entries). (2) CSD damage TODOs resolved in `src/view.c`: `damage_whole_surface` now damages the CSD main surface by its buffer extents — client-drawn decorations/shadows live inside the client buffer, so the surface box is the correct granular region and CSD views carry no server border box — and both `hikari_view_damage_whole` and `hikari_view_damage_surface` lost their whole-output early-outs, unifying CSD onto the same per-surface granular path as SSD. Verified safe against the post-scene architecture: every damage sink reduces to `wlr_output_schedule_frame` (`include/hikari/output.h:83`, `include/hikari/output.h:103`, `src/output.c:136`), so hikari-level boxes are advisory; unification also gives CSD the pre-existing SSD mapped-view contract (`hikari_view_for_each_surface` asserts `surface != NULL`), which all damage-whole callers already satisfy (map/unmap handlers damage before `surface` is cleared). (3) Allocation policy implemented fail-fast: `hikari_malloc`/`hikari_calloc` emit a sized `error:` diagnostic on stderr and `abort()` on NULL (`src/memory.c`). `abort()` chosen over `exit()` — allocation failure is bug-class, not clean-shutdown; SIGABRT yields a core dump for postmortem and skips atexit handlers on a half-valid heap. No zero-size normalization: FreeBSD `malloc(0)`/`calloc(0, …)` never return NULL and the tree is FreeBSD-only. `hikari_free` keeps free(3) semantics. `src/memory.c` and `include/hikari/memory.h` gained the AGENTS.md-mandated comment headers documenting the never-NULL contract.
+* **Impact:** Phase 24 hardening stream closed at 7/7. TC-BUILD-01 (default) and TC-BUILD-02 (full-feature) clean builds pass with 0 errors under `env -u DEBUG`; edited files warning-clean (only the pre-existing documented `xwayland_unmanaged_view.c` unused-function warnings remain). Callsite NULL checks are now unreachable-but-harmless; previously unchecked callsites are safe. Remaining queue: user-run Phase 19 diagnostics, eDP-1 swapchain (environmental), tmpfs/ZFS `XDG_RUNTIME_DIR`, runtime-blocked items (P2-14, PAM, layer-client spot check), TC-FORMAT-01, optional comment-header rollout, cosmetic enum-compare warnings.
+
+---
+
+## [2026-08-13 18:05] Phase 25: Phase 24 Hardening Backlog — P0/P1 Batch Executed
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
+
+* **Context:** User approved execution of the Phase 24 P0/P1 hardening batch (4 items) with edits, commands, and devdocs updates permitted.
+* **Decision:** (1) Unknown `outputs` keys now fail the parse — `goto done` added to the unknown-key branch in `parse_output_config` (`src/configuration.c`), matching the strict behaviour of every other unknown-key branch in the parser; previously a typo'd key (e.g. "postion") logged but the configuration loaded successfully, silently ignoring the intended rule. (2) `parse_switches` now frees its UCL iterator at the `done:` label (`ucl_object_iterate_free`, `src/configuration.c`), matching all sibling parsers — fixes a per-load/SIGHUP-reload leak. (3) The lock-helper child no longer `exit(0)` after a failed `execl("hikari-unlocker")`; it writes `error: could not execute hikari-unlocker` to stderr and calls `_exit(EXIT_FAILURE)` (`src/lock_mode.c`). `_exit` (not `exit`) because the forked child shares the compositor address space and must skip atexit handlers/stdio flushing; stderr (fd 2) survives the stdin/stdout pipe rewiring; the parent already treats pipe hangup as a terminal locker failure. (4) The failed initial modeset commit in `hikari_output_init` now names the output on stderr before the early return (`src/output.c`) — same silent-zombie class as the fixed P0-2 backend-start guard, whose `fprintf` style it matches; `<stdio.h>` included explicitly.
+* **Impact:** TC-BUILD-01 (default) and TC-BUILD-02 (full-feature) clean builds pass with 0 errors under `env -u DEBUG`; the three edited files compile warning-clean. The eDP-1 swapchain failure path will now identify the failed output on stderr at the next runtime test. Remaining Phase 24 items: P2 CSD damage granularity, P2 allocation-policy decision (fail-fast wrappers vs caller checks — pending user input), P3 changelog typos.
+
+---
+
 ## [2026-08-13 17:08] Phase 24: Deep Wiring Audit Ingested into Devdocs (Docs-Only)
 
 *(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*

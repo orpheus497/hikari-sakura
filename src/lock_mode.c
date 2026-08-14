@@ -116,7 +116,14 @@ start_unlocker(void)
     close(locker_pipe[0][0]);
     close(locker_pipe[1][1]);
     execl("/bin/sh", "/bin/sh", "-c", "hikari-unlocker", NULL);
-    exit(0);
+    // [COMMENT] Action purpose: Reached only when execl fails. The child must
+    // not report success: emit a diagnostic (stderr survives the stdin/stdout
+    // rewiring) and exit non-zero so the failure is diagnosable. _exit skips
+    // inherited atexit handlers and stdio flushing in the forked compositor
+    // address space; the parent observes the pipe hangup as a terminal locker
+    // failure and reaps the child.
+    fprintf(stderr, "error: could not execute hikari-unlocker\n");
+    _exit(EXIT_FAILURE);
   // [COMMENT] Action purpose: In the parent process, close the child-side pipe
   // endpoints that are no longer needed to avoid descriptor leaks.
   } else {

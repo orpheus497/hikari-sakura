@@ -2,6 +2,8 @@
 
 #include <hikari/output.h>
 
+#include <stdio.h>
+
 #include <wayland-server-core.h>
 #include <cairo/cairo.h>
 
@@ -347,7 +349,16 @@ hikari_output_init(struct hikari_output *output, struct wlr_output *wlr_output)
       wlr_output_state_set_mode(&state, mode);
     }
 
+    // [COMMENT] Action purpose: Fail loudly when the initial modeset commit
+    // fails. wlroots logs the underlying cause (e.g. the GBM scanout swapchain
+    // test) but this early return otherwise leaves a dark-but-alive session
+    // with no hint about which output failed. Name the output on stderr; the
+    // session stays alive on the noop output for any remaining connectors.
     if (!wlr_output_commit_state(wlr_output, &state)) {
+      fprintf(stderr,
+          "error: failed to commit initial mode for output \"%s\"; output "
+          "will remain disabled\n",
+          wlr_output->name);
       wlr_output_state_finish(&state);
       return;
     }

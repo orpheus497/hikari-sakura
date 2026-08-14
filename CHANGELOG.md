@@ -2,7 +2,7 @@
 
 ## 2.3.3
 
-* update to `wloots` 0.15.0
+* update to `wlroots` 0.15.0
 
 ## 2.3.2
 
@@ -11,7 +11,7 @@
 
 ## 2.3.1
 
-* update to `wloots` 0.14.0
+* update to `wlroots` 0.14.0
 
 ## 2.3.0
 
