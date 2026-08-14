@@ -528,3 +528,336 @@ Hikari dynamically re-routes input based on the active `hikari_server.mode`.
 - `static void commit_pending_operation(struct hikari_view *view, struct hikari_operation *operation)`:
   - Called when a client acknowledges a configure request.
   - Re-evaluates Z-indexing (`raise_view()`), applies the `operation->geometry` via `commit_pending_geometry()`, and re-centers the cursor if the operation flagged it.
+
+### 12.4 `include/hikari/workspace.h` & `src/workspace.c` (Virtual Desktops & Action Dispatch)
+
+**Data Structures:**
+- `struct hikari_workspace`: Represents a physical output's logical working state.
+  - **Pointers**: `struct hikari_output *output`, `struct hikari_view *focus_view`, `struct hikari_sheet *sheet` (active), `struct hikari_sheet *alternate_sheet`, `struct hikari_layer *focus_layer` (Layer Shell exclusive focus).
+  - **Arrays & Lists**: `struct hikari_sheet *sheets` (Heap allocated array of 10), `struct wl_list views`.
+
+**Initialization & Tear Down (`src/workspace.c`):**
+- `void hikari_workspace_init(struct hikari_workspace *workspace, struct hikari_output *output)`:
+  - Initializes the workspace list heads.
+  - Dynamically allocates `HIKARI_NR_OF_SHEETS` (10) instances of `struct hikari_sheet` and initializes them.
+  - Defaults `sheet` to index 1, `alternate_sheet` to index 0.
+- `void hikari_workspace_fini(struct hikari_workspace *workspace)`:
+  - Frees the sheets array.
+- `void hikari_workspace_merge(struct hikari_workspace *workspace, struct hikari_workspace *into)`:
+  - Evacuates all views (and XWayland unmanaged views) from the source workspace and merges them into the destination workspace (used during output hotplug/disconnect).
+
+**Focus Management (`src/workspace.c`):**
+- `void hikari_workspace_focus_view(struct hikari_workspace *workspace, struct hikari_view *view)`:
+  - Asserts that the server is in normal mode.
+  - Mutates the previous `focus_view`: clears its keyboard/pointer grabs via `wlr_seat_keyboard_clear_focus()` and damages its border to render the inactive color.
+  - Elevates the new `view`: calls `hikari_view_activate(view, true)` and wires the wlroots seat focus via `wlr_seat_keyboard_notify_enter()`.
+  - Damages the new border to render the active color.
+
+**Sheet & Visibility Mutators (`src/workspace.c`):**
+- `static void display_sheet(struct hikari_workspace *workspace, struct hikari_sheet *sheet)`:
+  - Core visibility toggle. Loops over `workspace->views`.
+  - If a view belongs to the newly active `sheet` (or the pervasive sheet 0), it calls `hikari_view_show()`.
+  - Otherwise, it calls `hikari_view_hide()`.
+- `void hikari_workspace_switch_to_next_inhabited_sheet(struct hikari_workspace *workspace)`:
+  - Queries `hikari_sheet_next_inhabited()` and cascades into `display_sheet()`.
+- *(Macro-generated actions for `display_sheet_1` through `9`, `switch_to_next_sheet`, etc.)*
+- *(Macro-generated actions for `show_all`, `show_invisible`, `toggle_view_invisible`)*
+
+**Window Geometry Snapping (`src/workspace.c`):**
+- `void hikari_workspace_snap_view_up(struct hikari_workspace *workspace)` (and `down`, `left`, `right`):
+  - Casts a bounding ray ("lookahead") from the current `focus_view->geometry` in the specified direction.
+  - Iterates through all other views in the workspace to find intersecting geometries.
+  - Selects the closest edge.
+  - Updates the focused view's coordinates to perfectly align next to the target view, adjusting for `hikari_configuration->gap` and `border`.
+  - Calls `hikari_view_move_absolute()`.
+
+**Navigation Iterators (`src/workspace.c`):**
+- *(Macro-generated actions for `next_view`, `prev_layout_view`, `next_group_view`)*:
+  - Safely steps through linked lists (`visible_group_views`, `workspace_views`) while verifying that the retrieved pointers are not the list head sentinel itself via `wl_container_of`.
+
+### 12.5 `include/hikari/sheet.h` & `src/sheet.c` (Virtual Desktop & Tiling Implementations)
+
+**Data Structures:**
+- `struct hikari_sheet`: The equivalent of a "tag" or virtual desktop.
+  - **State**: `uint8_t nr` (Index 0-9).
+  - **Pointers**: `struct hikari_workspace *workspace`, `struct hikari_layout *layout` (Current tiling algorithm context).
+  - **Lists**: `struct wl_list views` (Windows assigned to this sheet).
+
+**Initialization & Navigation (`src/sheet.c`):**
+- `void hikari_sheet_init(struct hikari_sheet *sheet, int nr, struct hikari_workspace *workspace)`:
+  - Sets the index, initializes the `views` list head, and links the workspace.
+- `struct hikari_sheet *hikari_sheet_next_inhabited(struct hikari_sheet *sheet)` (and `prev_inhabited`):
+  - Cycles through the `workspace->sheets` array (skipping empty sheets via `wl_list_empty(&name->views)` loop) to find the next active sheet.
+
+**Tiling Layout Implementations (`src/sheet.c`):**
+- `static struct hikari_view *grid_layout(...)`:
+  - Dynamically calculates rows and columns based on the total number of tileable views.
+  - Subtracts `hikari_configuration->gap` and `border` to compute optimal cell dimensions.
+  - Mutates each view's target geometry via `hikari_view_tile()`.
+- `SPLIT_LAYOUT(queue, x, y, width, height)` & `SPLIT_LAYOUT(stack, y, x, height, width)`:
+  - Macro-generated layout logic for arranging the master view alongside secondary stacked/queued views, recalculating proportional splits based on `nr_of_views`.
+- `static struct hikari_view *full_layout(...)`, `single_layout(...)`, `empty_layout(...)`:
+  - Concrete fallback/fullscreen tiling logic.
+
+**Layout Application (`src/sheet.c`):**
+- `void hikari_sheet_apply_split(struct hikari_sheet *sheet, struct hikari_split *split)`:
+  - Checks if any views in the existing layout are "dirty" (currently awaiting resize ACKs). If so, drops the request to prevent layout thrashing.
+  - Allocates or reuses `struct hikari_layout`.
+  - Applies the mathematical subdivision (`hikari_split_apply()`) to the output's `usable_area`.
+  - Re-raises any floating views (`raise_floating()`) so they remain on top of the newly tiled windows.
+
+**Visibility Filters (`src/sheet.c`):**
+- `SHOW_VIEWS(cond)` macro: Iterates over all `views` in the sheet, evaluating a condition, and calling `hikari_view_show(view)`.
+- `void hikari_sheet_show(struct hikari_sheet *sheet)`: Shows views where `!hikari_view_is_invisible()`.
+- `void hikari_sheet_show_invisible(struct hikari_sheet *sheet)`: Shows explicitly hidden/invisible views.
+- `void hikari_sheet_show_group(struct hikari_sheet *sheet, struct hikari_group *group)`: Shows views matching the group pointer.
+
+### 12.6 `include/hikari/xdg_view.h` & `src/xdg_view.c` (Native Wayland Surfaces)
+
+**Data Structures:**
+- `struct hikari_xdg_view`: Concrete implementation of `struct hikari_view`.
+  - **Inheritance**: Embeds `struct hikari_view view` as its first member (enabling safe casting between `hikari_view` and `hikari_xdg_view`).
+  - **WLRoots Proxies**: `struct wlr_xdg_surface *surface`, `struct wlr_xdg_toplevel *xdg_toplevel`.
+  - **Scene Graph**: `struct wlr_scene_tree *scene_tree`.
+  - **Listeners**: `map`, `unmap`, `destroy`, `commit`, `new_popup`, `request_fullscreen`, `set_title`.
+- `struct hikari_xdg_popup`: Represents menus and tooltips attached to a toplevel.
+
+**Initialization & wlroots 0.20 Lifecycle (`src/xdg_view.c`):**
+- `void hikari_xdg_view_init(struct hikari_xdg_view *xdg_view, struct wlr_xdg_surface *xdg_surface, struct hikari_workspace *workspace)`:
+  - Invokes the superclass initializer: `hikari_view_init()`.
+  - Creates the primary scene node: `wlr_scene_xdg_surface_create()`.
+  - **Critical wlroots 0.20 Change**: Wires up the `commit` listener *immediately* upon object creation, before the client maps the window.
+- `static void commit_handler(struct wl_listener *listener, void *data)`:
+  - **`initial_commit` Handling**: If `surface->initial_commit` is true, it replies with `wlr_xdg_toplevel_set_size(xdg_view->xdg_toplevel, 0, 0)` immediately. This signals wlroots to set `surface->initialized = true`, allowing the client to safely request a map.
+  - Normal Commits: Checks if `hikari_view_was_updated()` (comparing serials) and applies the `pending_operation` bounds via `wlr_xdg_toplevel_set_tiled` constraints. Modifies `geometry` based on the committed buffer size.
+- `static void map(struct hikari_view *view, bool focus)`:
+  - Wires up the interactive listeners for the mapped surface (`set_title`, `request_fullscreen`, `new_popup`).
+
+**Popup Management (`src/xdg_view.c`):**
+- `static void xdg_popup_create(struct wlr_xdg_popup *wlr_popup, struct hikari_view *parent)`:
+  - Invoked when a client requests a popup menu.
+  - Wires up popup-specific `commit`, `map`, `unmap`, and `destroy` listeners.
+  - Calls `wlr_xdg_popup_unconstrain_from_box()` via `popup_unconstrain()` to ensure the menu renders within the visible bounds of the physical output.
+
+**Polymorphic VTable Implementations (`src/xdg_view.c`):**
+- `static uint32_t resize(struct hikari_view *view, int width, int height)`:
+  - Casts `view` to `hikari_xdg_view`.
+  - Executes `wlr_xdg_toplevel_set_size(xdg_view->xdg_toplevel, width, height)`. Returns the serial for tracking.
+- `static void quit(struct hikari_view *view)`:
+  - Executes `wlr_xdg_toplevel_send_close(xdg_view->xdg_toplevel)`.
+- `static void constraints(struct hikari_view *view, int *min_width, int *min_height, int *max_width, int *max_height)`:
+  - Maps wlroots state bounds (`state->min_width`, etc.) to the out-pointers, capping max dimensions at the output's bounding box.
+
+### 12.7 `include/hikari/xwayland_view.h` & `src/xwayland_view.c` (Legacy X11 Support)
+
+**Data Structures:**
+- `struct hikari_xwayland_view`: Implementation of `struct hikari_view` for X11 clients.
+  - **Inheritance**: Embeds `struct hikari_view view`.
+  - **WLRoots Proxies**: `struct wlr_xwayland_surface *surface`.
+  - **Scene Graph**: `struct wlr_scene_tree *scene_tree`.
+  - **Listeners**: `associate`, `dissociate`, `map`, `unmap`, `destroy`, `request_configure`, `set_title`, `commit`.
+- `struct hikari_xwayland_unmanaged_view`: Lightweight wrapper for unmanaged override-redirect windows (tooltips, dropdowns). Implements `struct hikari_node` directly instead of inheriting from `hikari_view` because they lack borders and tiling semantics.
+
+**Initialization & wlroots 0.20 Lifecycle (`src/xwayland_view.c`):**
+- `void hikari_xwayland_view_init(...)`:
+  - Registers the core struct, initializes the `wlr_scene_tree`, and attaches `associate` and `dissociate` listeners.
+  - **Critical wlroots 0.20 Change**: The underlying `wlr_surface` is NULL when the `wlr_xwayland_surface` is created. Hikari defers attaching `map` and `unmap` listeners until the `associate_handler` fires (which guarantees `wlr_surface != NULL`).
+- `static void associate_handler(...)` / `dissociate_handler(...)`:
+  - Attach and detach the `map`/`unmap` signals to the dynamically associated `wlr_surface`.
+- `static void map_handler(...)`:
+  - If the view is unmapped (`hikari_view_is_unmanaged`), calls `first_map()`.
+- `static void first_map(...)`:
+  - Parses the `surface->class` (WM_CLASS) to resolve configuration rules via `hikari_configuration_resolve_view_config()`.
+
+**Coordinate Translations (`src/xwayland_view.c` & `src/xwayland_unmanaged_view.c`):**
+- `static void commit_handler(...)` (in both files):
+  - Wayland coordinates are inherently relative. X11 coordinates are absolute across a global screen bounding box.
+  - When XWayland clients commit, Hikari translates their absolute `surface->x` coordinates into output-relative coordinates: `surface_x_in_hikari = surface->x - output->geometry.x`.
+  - Updates the native bounding boxes and triggers `hikari_view_damage_whole()`.
+- `static void request_configure_handler(...)`:
+  - Intercepts X11 configure requests (`XMoveWindow`, `XResizeWindow`), clamps them via `hikari_geometry_constrain_absolute()`, and replies with `wlr_xwayland_surface_configure()`.
+
+**Polymorphic VTable Implementations (`src/xwayland_view.c`):**
+- `static void move(struct hikari_view *view, int x, int y)` / `move_resize(...)`:
+  - XWayland requires the compositor to instruct the X server to move the window natively via `wlr_xwayland_surface_configure()`.
+- `static void constraints(struct hikari_view *view, int *min_width, int *min_height, int *max_width, int *max_height)`:
+  - **Critical wlroots 0.20 Change**: Uses the public `xcb_size_hints_t *size_hints = surface->size_hints` struct to parse ICCCM `WM_NORMAL_HINTS` bounds.
+
+### 12.8 `include/hikari/layer_shell.h` & `src/layer_shell.c` (UI Shell Components)
+
+**Data Structures:**
+- `struct hikari_layer`: Represents desktop UI elements (panels, docks, wallpapers, notifications).
+  - **WLRoots Proxies**: `struct wlr_layer_surface_v1 *surface`.
+  - **Scene Graph**: `struct wlr_scene_layer_surface_v1 *scene_layer_surface`.
+  - **Listeners**: `map`, `unmap`, `commit`, `destroy`, `new_popup`.
+- `struct hikari_layer_popup`: Represents menus/tooltips spawned by a layer surface. Contains a polymorphic `parent` pointer (`HIKARI_LAYER_NODE_TYPE_LAYER` or `HIKARI_LAYER_NODE_TYPE_POPUP`) to handle recursive nesting.
+
+**Initialization & Scene Graph (`src/layer_shell.c`):**
+- `void hikari_layer_init(struct hikari_layer *layer, struct wlr_layer_surface_v1 *wlr_layer_surface)`:
+  - Identifies the target output and links it.
+  - **Scene Graph Abstraction**: Creates the scene node via `wlr_scene_layer_surface_v1_create()`. This wlroots helper automatically creates subsurface and popup tree nodes managed by the layer surface.
+  - Registers `commit`, `destroy`, and `map` listeners.
+- `static void map(struct hikari_layer *layer)` / `unmap(struct hikari_layer *layer)`:
+  - `wlr_scene_node_set_enabled(&layer->scene_layer_surface->tree->node, true/false)` is called to toggle visibility without destroying the node, ensuring no stale buffers remain on screen.
+  - Wires `new_popup` and `unmap` during map; drops them during unmap.
+
+**Geometry & Exclusive Zones (`src/layer_shell.c`):**
+- `static void calculate_exclusive(struct hikari_output *output)`:
+  - Re-evaluates `output->usable_area` based on the native resolution.
+  - Mutates the `usable_area` bounding box by subtracting `exclusive_zone` margins reserved by top/bottom layers (e.g., status bars preventing windows from drawing underneath them).
+- `static void calculate_geometry(struct hikari_layer *layer)`:
+  - Extracts `state->anchor` (Left, Right, Top, Bottom) and `state->margin`.
+  - Applies stretching semantics: if a layer is anchored left AND right, it stretches to `bounds.width`. If anchored Top AND Bottom, it stretches to `bounds.height`.
+  - Updates `layer->geometry` and instructs wlroots via `wlr_layer_surface_v1_configure()`.
+
+**Nested Damage Tracking (`src/layer_shell.c`):**
+- `static void damage_popup(struct hikari_layer_popup *layer_popup, bool whole)`:
+  - Iterates UP the `parent` polymorphic chain (`get_layer()`) until it hits the root `hikari_layer`.
+  - Accumulates `current->geometry.x` and `y` offsets at every step.
+  - Emits damage on the physical output matching the absolute bounding box.
+  - **wlroots 0.20 Change**: Reads popup relative offsets directly from the state block (`popup->current.geometry`) as `wlr_xdg_popup_get_geometry()` no longer exists.
+
+### 12.9 `include/hikari/group.h` & `src/group.c` (Window Grouping)
+
+**Data Structures:**
+- `struct hikari_group`: Logical collection of windows, used for applying collective actions.
+  - **State**: `char *name` (The string identifier).
+  - **Lists**: `struct wl_list views` (All views in this group), `struct wl_list visible_views` (Currently mapped/unhidden views).
+  - **Global Lists**: `server_groups` and `visible_server_groups` attach this group to the global `hikari_server`.
+
+**Logic (`src/group.c`):**
+- `void hikari_group_show(struct hikari_group *group)` / `hide(...)`:
+  - Iterates over the `views` list. If a view is hidden, calls `hikari_view_show()`. For hiding, it iterates over `visible_views` and calls `hikari_view_hide()`.
+- `void hikari_group_raise(struct hikari_group *group, struct hikari_view *top)` / `lower(...)`:
+  - Reorders the Z-index of all views in a group by cascading `hikari_view_raise()` on the target `top` view, followed by all other views in `visible_views`, and finishing with `top` again so it ends up definitively on top.
+
+### 12.10 `include/hikari/mark.h` & `src/mark.c` (Register Marks)
+
+**Data Structures:**
+- `struct hikari_mark`: A single-letter register (like vim marks `a`-`z`) pointing to a specific view.
+  - **State**: `char *name` (String representation of the character), `int nr` (Array index 0-25).
+  - **Pointers**: `struct hikari_view *view` (The view this mark currently points to, or `NULL`).
+
+**Logic (`src/mark.c`):**
+- Static array of 26 registers initialized in `hikari_marks_init()`.
+- `void hikari_mark_set(struct hikari_mark *mark, struct hikari_view *view)`:
+  - If the view is already marked, clears the old mark (`hikari_mark_clear(view->mark)`).
+  - If the mark already points to another view, clears the old view (`hikari_mark_clear(mark)`).
+  - Establishes the bidirectional link: `mark->view = view` and `view->mark = mark`.
+
+### 12.11 `include/hikari/keyboard.h` & `src/keyboard.c` (Keyboard Input & Bindings)
+
+**Data Structures:**
+- `struct hikari_keyboard`: Wraps a physical `wlr_input_device` of type keyboard.
+  - **WLRoots Proxies**: `struct wlr_keyboard *wlr_keyboard`.
+  - **State**: `struct xkb_keymap *keymap`.
+  - **Listeners**: `modifiers`, `key`, `destroy`.
+  - **Bindings**: `struct hikari_binding_group bindings[256]` (Maps keysyms/keycodes + modifier bitmasks to action structs).
+
+**Input Dispatch (`src/keyboard.c`):**
+- `static void key_handler(struct wl_listener *listener, void *data)`:
+  - Intercepts raw key events and delegates directly to the current mode's polymorphic handler: `hikari_server.mode->key_handler(keyboard, event)`.
+- `static void modifiers_handler(...)`:
+  - Tracks modifier state (Logo, Alt, Ctrl, Shift) and delegates to `hikari_server.mode->modifiers_handler(keyboard)`.
+- `static void configure_bindings(...)`:
+  - Converts configured XKB keysyms to hardware keycodes using `xkb_keymap_key_for_each()` and `xkb_state_key_get_one_sym()`. This translation avoids performance penalties on every keypress during the hot rendering loop.
+
+### 12.12 `include/hikari/pointer.h` & `src/pointer.c` (Pointer Devices & libinput)
+
+**Data Structures:**
+- `struct hikari_pointer`: Wraps a physical `wlr_input_device` of type pointer (mice, touchpads, trackpoints).
+  - **WLRoots Proxy**: `struct wlr_input_device *device`.
+  - **Listeners**: `destroy`.
+
+**Hardware Configuration (`src/pointer.c`):**
+- `void hikari_pointer_configure(...)`:
+  - If the device is managed by `libinput` (via `wlr_input_device_is_libinput`), extracts the raw `libinput_device` handle.
+  - Applies configurations mapped from the user's `hikari.conf` (e.g., `libinput_device_config_accel_set_speed`, `libinput_device_config_dwt_set_enabled` (disable while typing), `libinput_device_config_scroll_set_natural_scroll_enabled`, tap-to-click).
+
+### 12.13 `include/hikari/cursor.h` & `src/cursor.c` (Virtual Cursor & Axis Dispatch)
+
+**Data Structures:**
+- `struct hikari_cursor`: The unified virtual cursor aggregating all physical pointers.
+  - **WLRoots Proxy**: `struct wlr_cursor *wlr_cursor`, `struct wlr_xcursor_manager *cursor_mgr`.
+  - **Listeners**: `motion`, `motion_absolute`, `button`, `axis`, `frame`, `request_set_cursor`.
+  - **Bindings**: `struct hikari_binding_group bindings[256]`.
+
+**Input Dispatch (`src/cursor.c`):**
+- `static void motion_handler(...)` / `motion_absolute_handler(...)`:
+  - Moves the virtual `wlr_cursor` bounding box via `wlr_cursor_move` or `wlr_cursor_warp_absolute`.
+  - Dispatches to the mode handler via `hikari_server.mode->cursor_move()`.
+- `static void button_handler(...)`:
+  - Intercepts clicks and routes to `hikari_server.mode->button_handler(cursor, event)`.
+- `static void axis_handler(...)`:
+  - Routes scroll wheels natively: `wlr_seat_pointer_notify_axis(hikari_server.seat, ...)`.
+- `static void request_set_cursor_handler(...)`:
+  - Allows Wayland clients to set custom cursor images (e.g., resizing arrows, text I-beams) using `wlr_cursor_set_surface()`. Guards against inactive clients hijacking the cursor image.
+
+### 12.14 `include/hikari/indicator.h` & `src/indicator.c` (Status HUD & Focus Frames)
+
+**Data Structures:**
+- `struct hikari_indicator`: The central HUD showing window metadata during mode switching (super-key held).
+  - **Text Bars**: `title`, `sheet`, `group`, `mark`.
+- `struct hikari_indicator_frame`: The coloured rectangular border wrapping the focused view.
+
+**Rendering (`src/indicator.c`):**
+- `void hikari_indicator_update(struct hikari_indicator *indicator, struct hikari_view *view)`:
+  - Formats strings for the target view's group, sheet location (e.g., `[1] @ 2 - DP-1`), and title.
+- `void hikari_indicator_position(...)`:
+  - Synchronises the absolute coordinates of the 4 text bars with the `geometry` of the currently focused view's border so they float underneath/above it.
+  - Calls `hikari_indicator_frame_show(&view->indicator_frame)` to activate the bounding border color.
+
+### 12.15 `include/hikari/mode.h` & `src/normal_mode.c` (Input Routing Polymorphism)
+
+**Architecture (`include/hikari/mode.h`):**
+- `struct hikari_mode`: A VTable defining state-dependent input routing.
+  - **Pointers**: `key_handler`, `modifiers_handler`, `button_handler`, `cursor_move`, `cancel`.
+  - **Usage**: The active mode is a global singleton pointer `hikari_server.mode`. The hardware abstractions (`keyboard.c`, `cursor.c`) blindly execute `hikari_server.mode->key_handler(...)` rather than using `switch(state)` blocks, guaranteeing strict state separation.
+
+**Normal Mode Implementation (`src/normal_mode.c`):**
+- Implements the standard desktop state (`hikari_normal_mode`).
+- `static void modifiers_handler(struct hikari_keyboard *keyboard)`:
+  - Intercepts modifier key releases (`mod_released`). If the server is in a cycling operation (`hikari_server_is_cycling()`), releasing the modifier finalizes the operation (e.g., Alt-Tab release), triggering `hikari_view_raise()` and cursor centering on the newly selected window.
+- `static void cursor_down_move(uint32_t time)` / `cursor_up_move(uint32_t time)`:
+  - When the cursor is pressed down on a client surface, mouse motion is delegated to `wlr_seat_pointer_notify_motion()` so the client can drag content (e.g., selecting text).
+  - When up, `wlr_seat_pointer_notify_motion()` routes the absolute coordinates across the compositor surface.
+
+### 12.16 `include/hikari/action.h` & `src/action.c` (Command & Binding Execution)
+
+**Data Structures:**
+- `struct hikari_event_action`: A typed function pointer wrapper (`void (*action)(void *)`) mapping a parsed configuration string to a concrete C function.
+- `struct hikari_action`: Bundles `begin` (key press) and `end` (key release) actions.
+
+**Action Parsing (`src/action.c`):**
+- `static bool parse_binding(..., const ucl_object_t *obj, void (**action)(void *), void **arg)`:
+  - Translates string values from `hikari.conf` (e.g., `"view-move-up"`, `"workspace-switch-to-sheet-1"`, `"view-toggle-floating"`) to their corresponding `server.c` implementations (`hikari_server_move_view_up`, etc.).
+  - Relies heavily on C macros (`PARSE_MOVE_BINDING`, `PARSE_WORKSPACE_BINDING`) to generate the massive string-matching sequence efficiently.
+
+### 12.17 `include/hikari/configuration.h` & `src/configuration.c` (State Parsing)
+
+**Data Structures:**
+- `struct hikari_configuration`: The central, singleton store for user settings.
+  - **Arrays**: `float clear[4]`, `float border_active[4]`, etc. for colours.
+  - **Lists**: `view_configs` (app-specific rules), `output_configs`, `pointer_configs`, `keyboard_configs`, `layout_configs`.
+
+**Parsing Engine (`src/configuration.c`):**
+- Parses the configuration file using the `libucl` library.
+- `static bool parse_layout_func(...)`: Maps string identifiers (`"queue"`, `"grid"`) to layout pointers (`hikari_sheet_queue_layout`).
+- `struct hikari_view_config *hikari_configuration_resolve_view_config(..., const char *app_id)`:
+  - Resolves X11 `WM_CLASS` or Wayland `app_id` against the configured application regex/rules (e.g., forcing floating geometry for `pavucontrol`).
+- Bootstraps the keyboard and mouse bindings, translating them via `action.c`, so `normal_mode.c` can traverse the `struct hikari_binding_group bindings[256]` O(1) array at runtime during key events.
+
+### 12.18 `include/hikari/border.h` & `src/border.c` (Window Decoration Rendering)
+
+**Data Structures:**
+- `struct hikari_border`: Represents the coloured bounding box around a window.
+  - **Scene Nodes**: `struct wlr_scene_rect *top, *bottom, *left, *right`. Uses 4 distinct rectangle nodes from the wlroots scene graph to frame the view.
+  - **State**: `enum hikari_border_state state` (`HIKARI_BORDER_NONE`, `HIKARI_BORDER_ACTIVE`, `HIKARI_BORDER_INACTIVE`).
+
+**Rendering (`src/border.c`):**
+- `void hikari_border_init(struct hikari_border *border, struct wlr_scene_tree *parent)`:
+  - Attaches the 4 scene rects to the view's scene tree (`wlr_scene_rect_create()`), sets their initial color to transparent, and pushes them to the bottom of the tree so they render underneath the view buffer (`wlr_scene_node_lower_to_bottom()`).
+- `void hikari_border_refresh_geometry(struct hikari_border *border, struct wlr_box *geometry)`:
+  - Re-evaluates the view's requested geometry. If the border is active/inactive, it inflates the bounding box by `hikari_configuration->border`.
+  - Mutates the scene graph position and size of the 4 border rects to precisely hug the new bounding box.
+  - Toggles the rect color between `hikari_configuration->border_active` and `border_inactive`.
