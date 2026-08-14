@@ -861,3 +861,81 @@ Hikari dynamically re-routes input based on the active `hikari_server.mode`.
   - Re-evaluates the view's requested geometry. If the border is active/inactive, it inflates the bounding box by `hikari_configuration->border`.
   - Mutates the scene graph position and size of the 4 border rects to precisely hug the new bounding box.
   - Toggles the rect color between `hikari_configuration->border_active` and `border_inactive`.
+
+### 12.19 Tiling Engine (`src/layout.c`, `src/split.c`, `src/tile.c`)
+
+**`src/layout.c` (Tiling Context):**
+- `hikari_layout_init()` / `hikari_layout_fini()`: Initializes the tiling state for a `hikari_sheet`, wrapping a mathematical `hikari_split` tree.
+- `hikari_layout_restack_append()` / `hikari_layout_restack_prepend()`: Reorders the Z-index of all views in a layout (calling `hikari_view_raise()`) and triggers `hikari_sheet_apply_split()` to enforce the geometry.
+- `hikari_layout_reset()`: Iterates through all tiled views and strips their tiled geometry constraints via `hikari_view_reset_geometry()`.
+
+**`src/split.c` (Geometry Subdivision Math):**
+- `hikari_split_apply()`: Recursively walks the binary split tree (`HIKARI_SPLIT_TYPE_VERTICAL`, `HIKARI_SPLIT_TYPE_HORIZONTAL`, `HIKARI_SPLIT_TYPE_CONTAINER`).
+- `split_scale_width()` / `split_scale_height()`: Dynamically calculates the fractional percentage of the screen a window should occupy based on `HIKARI_SPLIT_SCALE_TYPE_FIXED` or `DYNAMIC` limits.
+- Calls `hikari_geometry_split_vertical/horizontal()` to divide a `wlr_box` into two smaller `wlr_box` structures, factoring in `hikari_configuration->gap`.
+
+**`src/tile.c` (View Enforcer):**
+- `hikari_tile_init()`: Wraps a `hikari_view`.
+- `hikari_tile_apply()`: Given a computed `wlr_box` from `split.c`, it forces the view to conform by mutating its geometry and calling `hikari_view_damage_whole()`.
+
+### 12.20 Interactive Geometry Mutators (`src/move_mode.c`, `src/resize_mode.c`)
+
+**`src/move_mode.c`:**
+- `struct hikari_move_mode`: Implements the `hikari_mode` VTable for interactive dragging.
+- `cursor_move()`: Calculates the delta (`delta_x = current_x - start_x`). Calls `hikari_view_move()` iteratively as the user drags the mouse, snapping to the `usable_area` boundaries.
+- `button_handler()` / `cancel()`: Releasing the mouse button or pressing Escape reverts `hikari_server.mode` to `normal_mode`.
+
+**`src/resize_mode.c`:**
+- `struct hikari_resize_mode`: Implements the `hikari_mode` VTable for interactive resizing.
+- `cursor_move()`: Calculates the mouse delta. Depending on which quadrant/edge of the window was grabbed, mutates the `wlr_box` dimensions. Emits `hikari_view_resize()` (which triggers a `wlr_xdg_toplevel_set_size` configure request) and waits for the client serial.
+
+### 12.21 Modal Prompt State Machines (`src/*_assign_mode.c`)
+
+These files implement interactive keystroke buffers where the user presses a modifier, types a sequence (e.g. `g` then `t` then `e` `r` `m` `Enter` to assign a group), and completes an action.
+
+- **`src/sheet_assign_mode.c`**: Prompts for a number `0-9`. Calls `hikari_view_pin_to_sheet()`.
+- **`src/group_assign_mode.c`**: Prompts for a string. Uses `src/input_buffer.c` to accumulate characters. On `Enter`, calls `hikari_group_assign()`.
+- **`src/mark_assign_mode.c`**: Prompts for a single char `a-z`. Maps the active view to the register in `src/mark.c`.
+- **`src/mark_select_mode.c`**: Prompts for `a-z`. Jumps focus to the registered view.
+- **`src/layout_select_mode.c`**: Prompts for a layout string identifier (`g` for grid, `f` for full) and triggers `hikari_layout_apply()`.
+
+### 12.22 Process Execution (`src/command.c`, `src/exec.c`)
+
+**`src/command.c` (Subprocess Spawning):**
+- `hikari_command_execute()`: Safely executes an external shell command (e.g. `alacritty` or `waybar`).
+- **Architecture**: Uses the double-fork technique.
+  1. `fork()` (Parent 1 waits via `waitpid()`).
+  2. `fork()` (Parent 2 exits immediately).
+  3. `setsid()` (Child creates a new session group).
+  4. `execvp()` (Child replaces itself with the target binary).
+  This strictly ensures no zombie processes accumulate in the compositor.
+
+**`src/exec.c` (Autostart Config):**
+- `hikari_exec_init()`: Parses `autostart` rules from `hikari.conf`.
+- `hikari_exec_apply()`: Iterates over the `hikari_configuration->execs` array during compositor startup and calls `hikari_command_execute()` for each.
+
+### 12.23 Screen Locker (`src/lock_mode.c`, `src/lock_indicator.c`)
+
+**`src/lock_mode.c` (Security Boundary):**
+- `struct hikari_lock_mode`: Implements the `hikari_mode` VTable. Suppresses all normal keybindings.
+- `key_handler()`: Accumulates keystrokes into a dynamically allocated buffer. Uses `mlock()` and `munlock()` to prevent the password buffer from ever being written to disk swap.
+- On `Enter`, non-blockingly pipes the buffer to the setuid `hikari-unlocker` PAM helper. Uses `wl_event_loop_add_fd()` to monitor the pipe for authentication success.
+
+**`src/lock_indicator.c` (Locker UI):**
+- `hikari_lock_indicator_init()`: Creates a `wlr_scene_buffer` overlay.
+- `hikari_lock_indicator_damage()`: Re-draws the visual state (`HIKARI_LOCK_INDICATOR_TYPING`, `VERIFYING`, `DENIED`) as concentric circles using CPU-bound `cairo` arcs.
+
+### 12.24 Server-Side Decorations (`src/decoration.c`)
+
+**`src/decoration.c`:**
+- `new_decoration_handler()`: Responds to `wlr_xdg_decoration_manager_v1`. If a client requests decorations, Hikari forces `WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE` to ensure the compositor (via `border.c`) controls the window framing.
+- Wires up `destroy` listeners to clean up the `hikari_view_decoration` struct when the client disconnects.
+
+### 12.25 Drawing Utilities (`src/color.c`, `src/font.c`)
+
+**`src/color.c`:**
+- `hikari_color_convert()`: Parses hex color strings (e.g., `#FF0000FF`) into 4-element `float[4]` arrays normalized between 0.0 and 1.0 for use by `cairo` and `wlr_scene_rect`.
+
+**`src/font.c`:**
+- `hikari_font_init()`: Initializes a Pango context.
+- `hikari_font_get_text_extents()`: Renders text off-screen to calculate its exact pixel width and height, used to correctly size the floating indicator bars (`indicator.c`).
