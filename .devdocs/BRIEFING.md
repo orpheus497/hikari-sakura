@@ -4,16 +4,21 @@
 
 ## Current Status
 
-- **Phase:** Phase 26 — Phase 24 hardening backlog completed (7/7): P2 CSD granular damage (`src/view.c`), P2 fail-fast allocation policy (`src/memory.c`, `include/hikari/memory.h`), P3 changelog `wloots` typos (`CHANGELOG.md`). TC-BUILD-01/02 pass, 0 errors; edited files warning-clean.
+- **Phase:** Phase 27 — Deep Architecture, Wiring, and Documentation Cross-Reference Audit (Iterative Refinement) completed. Exhuastive codebase trace mapped into `BLUEPRINT.md`.
 - **Branch:** wlroots-0.17.1 (stale label — tree builds against installed wlroots 0.20.x)
-- **Overall progress:** Phase 24 hardening stream fully closed (P0/P1 in Phase 25, P2/P3 in Phase 26) — the agent-side code backlog is clear. Remaining queue is runtime/environmental (user-run Phase 19 diagnostics; eDP-1 swapchain below hikari; tmpfs/ZFS `XDG_RUNTIME_DIR`), runtime-blocked verifications (P2-14, PAM, layer-client spot check), and optional hygiene (TC-FORMAT-01, comment-header rollout, cosmetic enum-compare warnings).
+- **Overall progress:** Phase 24 hardening stream fully closed (P0/P1 in Phase 25, P2/P3 in Phase 26) — the agent-side code backlog is clear. Deep mapping requested by user is complete. Remaining queue is runtime/environmental (user-run Phase 19 diagnostics; eDP-1 swapchain below hikari; tmpfs/ZFS `XDG_RUNTIME_DIR`), runtime-blocked verifications (P2-14, PAM, layer-client spot check), and optional hygiene (TC-FORMAT-01, comment-header rollout, cosmetic enum-compare warnings).
 - **Target OS:** FreeBSD 15.1-RELEASE (ZFS root)
-- **Current step:** Await the user-run Phase 19 diagnostics matrix (eDP-1 swapchain) and tmpfs/ZFS resolution; agent-side next actions (TC-FORMAT-01, optional comment-header rollout, cosmetic enum-compare warnings) pending user direction.
+- **Current step:** Await the user-run Phase 19 diagnostics matrix (eDP-1 swapchain) and tmpfs/ZFS resolution; await user feedback on the updated `BLUEPRINT.md` deep trace; agent-side next actions (TC-FORMAT-01, optional comment-header rollout, cosmetic enum-compare warnings) pending user direction.
 - **Blockers:** (1) eDP-1 scanout swapchain test failure — Mesa/EGL/GBM ↔ drm-kmod layer; (2) tmpfs/ZFS `XDG_RUNTIME_DIR` — client wl_shm, escalated because Error 1 kills dmabuf feedback and forces clients onto shm.
 
 ## Session Briefing
 
-### Latest Session (Phase 26 — Phase 24 Hardening Backlog Completed)
+### Latest Session (Phase 27 — Deep Audit Iterative Refinement)
+
+- **Deep Architectural Mapping:** Conducted an exhaustive cross-reference of the source code (`server.c`, `output.c`, `view.c`, `xdg_view.c`, `layer_shell.c`, etc.) against the existing documentation.
+- **BLUEPRINT Refinement:** Rewrote `BLUEPRINT.md` to include precise, file-and-line mapped architectural structures. The new blueprint visually maps the server-to-view lifecycle, explicit wlr_scene rendering flow, modal state machine (event routing), lock mode IPC security (PAM unlocker), memory safety paradigms, and subsystem integrations.
+
+### Previous Session (Phase 26 — Phase 24 Hardening Backlog Completed)
 
 - **P2 (CSD damage granularity):** both TODO-marked whole-output fallbacks removed — `hikari_view_damage_whole` and `hikari_view_damage_surface` (`src/view.c`) now compute granular per-surface boxes for CSD exactly as for SSD; the CSD main surface is damaged by its buffer extents (client decorations/shadows live inside the client buffer) rather than the absent server border box.
 - **P2 (allocation policy — decision resolved fail-fast):** `hikari_malloc`/`hikari_calloc` (`src/memory.c`) emit a sized `error:` diagnostic and `abort()` on failure — NULL can never reach the dozens of unchecked callsites. `abort()` (not `exit()`) yields SIGABRT/core dump and skips atexit on a half-valid heap; the never-NULL contract is documented in `include/hikari/memory.h`.

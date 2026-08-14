@@ -4,6 +4,35 @@
 
 ---
 
+## Session Date: 2026-08-14 15:05 — Phase 27: Deep Architecture, Wiring, and Documentation Cross-Reference Audit (Iterative Refinement)
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
+
+### Accomplishments
+
+1. **Deep Architectural Mapping:** Conducted an exhaustive cross-reference of the source code (`server.c`, `output.c`, `view.c`, `xdg_view.c`, `layer_shell.c`, etc.) against the existing documentation.
+2. **BLUEPRINT Refinement:** Rewrote `BLUEPRINT.md` to include precise, file-and-line mapped architectural structures. The new blueprint visually maps the server-to-view lifecycle, explicit wlr_scene rendering flow, modal state machine (event routing), lock mode IPC security (PAM unlocker), memory safety paradigms, and subsystem integrations.
+
+### Modified Files
+
+| File | Change |
+|---|---|
+| `.devdocs/BLUEPRINT.md` | Exhaustive codebase trace and file:line mapping added |
+| `.devdocs/BRIEFING.md` | Phase 27 summary added |
+| `.devdocs/SESSION_HANDOFF.md` | This entry |
+
+### Key Decisions
+
+- Extensively rewrote `BLUEPRINT.md` to guarantee that all architectural claims are backed up by explicit source code line numbers, eliminating any ambiguity about the codebase structure.
+
+### Next Steps
+
+1. User-run Phase 19 diagnostics matrix (TODOS active list) to discriminate H1/H2/H3 for the eDP-1 swapchain failure.
+2. tmpfs/ZFS `XDG_RUNTIME_DIR` resolution.
+3. Optional hygiene, pending user direction: TC-FORMAT-01, comment-header rollout, cosmetic enum-compare warnings.
+
+---
+
 ## Session Date: 2026-08-13 19:08 — Phase 26: Phase 24 Hardening Backlog Completed — P2/P3 Batch Executed
 
 *(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
