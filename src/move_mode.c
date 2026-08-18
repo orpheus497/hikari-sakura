@@ -75,7 +75,7 @@ static void
 button_handler(
     struct hikari_cursor *cursor, struct wlr_pointer_button_event *event)
 {
-  if (event->state == WLR_BUTTON_RELEASED) {
+  if (event->state == WL_POINTER_BUTTON_STATE_RELEASED) {
     hikari_server_enter_normal_mode(NULL);
   }
 }

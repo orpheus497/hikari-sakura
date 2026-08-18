@@ -250,9 +250,11 @@ main(int argc, char **argv)
     /* [COMMENT] Action purpose: Prepare backend security context and drop root privileges. */
     hikari_server_prepare_privileged();
 
-    /* [COMMENT] Action purpose: Assert non-root execution context. */
+    /* [COMMENT] Action purpose: Assert non-root execution context. Only uid 0
+    is treated as privileged -- gid 0 ("wheel" on BSD) is a normal primary
+    group for non-root users and must not be rejected. */
     assert(geteuid() != 0 && geteuid() == getuid());
-    assert(getegid() != 0 && getegid() == getgid());
+    assert(getegid() == getgid());
 
     /* [COMMENT] Action purpose: Start hikari Wayland server event loop. */
     hikari_server_start(options.config_path, options.autostart);

@@ -288,13 +288,13 @@ button_handler(
     struct hikari_cursor *cursor, struct wlr_pointer_button_event *event)
 {
   if (handle_pending_action()) {
-    if (event->state == WLR_BUTTON_RELEASED && is_cursor_down()) {
+    if (event->state == WL_POINTER_BUTTON_STATE_RELEASED && is_cursor_down()) {
       stop_cursor_down_handling(event);
     }
     return;
   }
 
-  if (event->state == WLR_BUTTON_PRESSED) {
+  if (event->state == WL_POINTER_BUTTON_STATE_PRESSED) {
     uint32_t modifiers = hikari_server.keyboard_state.modifiers;
     struct hikari_binding_group *map = &cursor->bindings[modifiers];
 

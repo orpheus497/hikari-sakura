@@ -11,6 +11,8 @@
 
 #include <wlr/backend.h>
 #include <wlr/render/allocator.h>
+#include <wlr/render/drm_format_set.h>
+#include <wlr/render/wlr_renderer.h>
 #include <wlr/interfaces/wlr_buffer.h>
 #include <wlr/types/wlr_scene.h>
 
@@ -105,15 +107,14 @@ hikari_output_load_background(struct hikari_output *output,
   unsigned char *data = cairo_image_surface_get_data(output_surface);
   int stride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, output_width);
 
-  // [COMMENT] Action purpose: Declare wlr_drm_format using only the public API contract:
-  // zero-initialise the struct, then set .format. The .len=0 and .modifiers=NULL
-  // fields indicate no explicit modifier list, allowing the allocator to choose
-  // the best available modifier. Accessing .capacity is forbidden -- it is a
-  // private internal field used by wlroots for dynamic array bookkeeping.
-  struct wlr_drm_format format = {0};
-  format.format = DRM_FORMAT_ARGB8888;
-  struct wlr_buffer *buffer = wlr_allocator_create_buffer(hikari_server.allocator, output_width, output_height, &format);
-  
+  const struct wlr_drm_format_set *formats = wlr_renderer_get_texture_formats(
+      hikari_server.renderer, WLR_BUFFER_CAP_DMABUF);
+  const struct wlr_drm_format *format =
+      formats != NULL ? wlr_drm_format_set_get(formats, DRM_FORMAT_ARGB8888) : NULL;
+  struct wlr_buffer *buffer = format != NULL
+      ? wlr_allocator_create_buffer(hikari_server.allocator, output_width, output_height, format)
+      : NULL;
+
   // [COMMENT] Action purpose: Check if buffer allocation succeeded.
   if (buffer != NULL) {
     void *mapped_data;
