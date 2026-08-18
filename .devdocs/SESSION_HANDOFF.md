@@ -120,7 +120,7 @@
   - louder output-commit failure diagnostics,
   - granular CSD damage replacement for TODO paths,
   - allocation failure policy hardening.
-5. **Captured documentation drift:** changelog `wloots` typos retained as non-functional doc debt.
+1. **Captured documentation drift:** changelog `wloots` typos retained as non-functional doc debt.
 
 ### Modified Files
 

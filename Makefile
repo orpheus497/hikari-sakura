@@ -80,7 +80,7 @@ OBJS += \
 
 WAYLAND_PROTOCOLS != ${PKG_CONFIG} --variable pkgdatadir wayland-protocols
 
-.PHONY: distclean clean clean-doc doc dist install uninstall FORCE
+.PHONY: distclean clean clean-doc doc dist install uninstall install-user uninstall-user FORCE
 .PATH: src
 
 # Allow specification of /extra/ CFLAGS and LDFLAGS
@@ -196,6 +196,8 @@ version.h: FORCE
 
 FORCE:
 
+main.o: version.h
+
 hikari: version.h ${PROTOCOL_HEADERS} ${OBJS}
 	${CC} ${LDFLAGS} ${CFLAGS} ${INCLUDES} -o ${.TARGET} ${OBJS} ${LIBS}
 
@@ -291,3 +293,24 @@ uninstall:
 	-rm ${DESTDIR}/${ETC_PREFIX}/etc/hikari/hikari.conf
 	-rmdir ${DESTDIR}/${ETC_PREFIX}/etc/hikari
 	-rmdir ${DESTDIR}/${PREFIX}/share/backgrounds/hikari
+
+# [COMMENT] Action purpose: Seed a working per-user config for the invoking
+# user (run as yourself, no sudo/DESTDIR -- this writes into $HOME). Copies
+# the wallpaper next to the config and pre-substitutes its path so the
+# background renders out of the box; unlike `install`, it never overwrites an
+# existing ~/.config/hikari/hikari.conf.
+install-user: share/backgrounds/hikari/hikari_wallpaper.png etc/hikari/hikari.conf
+	@test -n "${HOME}" || { echo "error: HOME is not set" >&2; exit 1; }
+	mkdir -p ${HOME}/.config/hikari
+	install -m 644 share/backgrounds/hikari/hikari_wallpaper.png ${HOME}/.config/hikari/hikari_wallpaper.png
+	@if [ -e ${HOME}/.config/hikari/hikari.conf ]; then \
+		echo "install-user: ${HOME}/.config/hikari/hikari.conf already exists -- leaving it untouched"; \
+	else \
+		sed "s,PREFIX/share/backgrounds/hikari,${HOME}/.config/hikari," etc/hikari/hikari.conf > ${HOME}/.config/hikari/hikari.conf && \
+		chmod 644 ${HOME}/.config/hikari/hikari.conf && \
+		echo "install-user: wrote ${HOME}/.config/hikari/hikari.conf"; \
+	fi
+
+uninstall-user:
+	-rm ${HOME}/.config/hikari/hikari_wallpaper.png
+	@echo "uninstall-user: ${HOME}/.config/hikari/hikari.conf left in place -- remove it manually if desired"

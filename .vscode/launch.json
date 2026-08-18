@@ -1,0 +1,51 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "hikari (nested, inherits X11/Wayland session)",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/hikari",
+            "args": [],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "externalConsole": false,
+            "MIMode": "lldb",
+            "miDebuggerPath": "/usr/local/bin/lldb-mi",
+            "preLaunchTask": "make: build (debug)"
+        },
+        {
+            "name": "hikari (native session, no nesting)",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/hikari",
+            "args": [],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [
+                { "name": "XDG_SESSION_TYPE", "value": "wayland" },
+                { "name": "XDG_SESSION_CLASS", "value": "user" },
+                { "name": "XDG_CURRENT_DESKTOP", "value": "Hikari" }
+            ],
+            "externalConsole": false,
+            "MIMode": "lldb",
+            "miDebuggerPath": "/usr/local/bin/lldb-mi",
+            "preLaunchTask": "make: build (debug)"
+        },
+        {
+            "name": "hikari-unlocker (standalone)",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/hikari-unlocker",
+            "args": [],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "externalConsole": false,
+            "MIMode": "lldb",
+            "miDebuggerPath": "/usr/local/bin/lldb-mi",
+            "preLaunchTask": "make: build (debug)"
+        }
+    ]
+}

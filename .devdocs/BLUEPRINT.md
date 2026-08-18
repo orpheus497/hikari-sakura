@@ -26,6 +26,7 @@
 ```
 
 ### The Hierarchy (Server -> Workspace -> Sheet -> Group -> View)
+
 Hikari organizes its display logic hierarchically:
 - **Server (`server.c`)**: The global singleton state holding the wlroots backend, renderer, allocator, scene graph, seat, and global linked lists for outputs, views, keyboards, and pointers.
 - **Workspace (`workspace.c`)**: Corresponds 1:1 with a physical output (monitor). Each workspace maintains an array of `hikari_sheet` structures.
@@ -34,12 +35,14 @@ Hikari organizes its display logic hierarchically:
 - **View (`view.c`)**: The abstract base class representing a single window. It handles geometry, constraints, borders, and indicators. Subclasses implement specific shell protocols (`xdg_view.c`, `xwayland_view.c`).
 
 ### Rendering and Scene Graph (`wlr_scene`)
+
 Hikari delegates the heavy lifting of rendering and Z-ordering to the `wlr_scene` API.
 - Backgrounds, borders, views, and overlays (like the lock indicator or indicator bar) are represented as `wlr_scene_node`s.
 - `output.c` connects the `wlr_scene` to the physical `wlr_output`.
 - `indicator.c`, `border.c`, and `decoration.c` generate pixel buffers using `cairo` and attach them to the scene graph via `wlr_scene_buffer_create`.
 
 ### Configuration (`configuration.c`)
+
 All configuration is parsed using `libucl` (a universal configuration library JSON/UCL parser). The configuration is loaded into typed structs (e.g., `hikari_view_config`, `hikari_keyboard_config`) during startup and can be reloaded via SIGHUP or keybindings.
 
 ## 2. Modal State Machine Index
@@ -63,34 +66,40 @@ Input handling (keyboard and pointer) does not happen globally. Instead, `server
 ## 3. Comprehensive Subsystem Breakdown
 
 ### Core Initialization & Server Lifecycle
+
 - **`server.c`**: The absolute core. Initializes the `wl_display`, `wlr_backend`, `wlr_renderer`, `wlr_allocator`, and `wlr_scene`. Sets up the `wl_listener` callbacks for new outputs and inputs. **Issue context:** This is where `wlr_backend_start` is called. If the DRM backend fails to initialize the rendering swapchain for `eDP-1`, the compositor invokes a hard `exit(EXIT_FAILURE)`, hiding specific DRM error context.
 - **`output.c`**: Handles physical monitor hotplugging (`wlr_output`). Connects the `wlr_output` to a `hikari_workspace` and the `wlr_scene_output`. Generates the background buffer using cairo.
 - **`memory.c`**: Fail-fast wrappers around `malloc`, `calloc`, and `free` — allocation failure prints a sized diagnostic and `abort()`s; callers never see NULL.
 
 ### View Abstractions & Shell Protocols
+
 - **`view.c`**: The base class for all windows. Manages Z-ordering (raise/lower), moving, resizing, and maximizing. Defines the `wlr_box` geometry boundaries.
 - **`xdg_view.c`**: Implements the Wayland native `xdg_shell` protocol. Maps `wlr_xdg_surface` to a `hikari_view`. Handles popup menus and fullscreen requests.
 - **`xwayland_view.c` / `xwayland_unmanaged_view.c`**: Handles legacy X11 applications. Maps `wlr_xwayland_surface` to `hikari_view`. Handles X11 window hints, configure requests, and unmanaged surfaces (like tooltips or menus).
 - **`layer_shell.c`**: Implements the `wlr_layer_shell_v1` protocol used by panels, wallpapers, and notification daemons (e.g., `waybar`, `mako`). Manages exclusive zones (margins) to prevent windows from covering panels.
 
 ### Workspace, Sheet, and Tiling Layouts
+
 - **`workspace.c`**: Manages the 10 `hikari_sheet` instances per output. Handles sheet switching, view snapping (snapping a window to the edge of another window), and view focus.
 - **`sheet.c`**: Contains lists of views and an active `hikari_layout`.
 - **`group.c`**: Organizes views by `app_id`. Used for mass-visibility toggles.
 - **`layout.c` / `split.c` / `tile.c`**: The tiling engine. `layout.c` defines the macro layout state, `split.c` handles the mathematical division of screen real estate (`hikari_geometry_split_vertical/horizontal`), and `tile.c` wraps a `hikari_view` to enforce its tiled geometry.
 
 ### Input Devices
+
 - **`keyboard.c`**: Wraps `wlr_keyboard`. Translates `xkbcommon` keycodes and manages keyboard modifiers. Forwards key events to the current `hikari_mode`.
 - **`pointer.c`**: Wraps `wlr_pointer`. Configures `libinput` parameters (acceleration, natural scrolling, tap-to-click).
 - **`cursor.c`**: Wraps `wlr_cursor` and `wlr_xcursor_manager`. Tracks absolute/relative cursor coordinates across the global output layout. Handles cursor themes and warping.
 
 ### Configuration Parsing (`libucl`)
+
 - **`configuration.c`**: The master parser for `hikari.conf`. Evaluates the UCL tree.
 - **`action_config.c` / `binding_config.c` / `binding_group.c`**: Parses key combinations (e.g., `L-S-Enter`) and maps them to `hikari_action` function pointers.
 - **`keyboard_config.c` / `pointer_config.c`**: Parses `xkb` layouts (rules, model, layout, variant, options) and `libinput` configurations.
 - **`output_config.c` / `position_config.c` / `view_config.c` / `layout_config.c` / `switch_config.c`**: Parses rules for specific outputs or application classes (e.g., forcing a window to be floating, or setting a specific background image).
 
 ### UI Components, Overlays & Geometry
+
 - **`border.c`**: Renders 1px/2px borders around windows using cairo buffers. Updates border colors based on active/inactive focus states.
 - **`indicator.c` / `indicator_bar.c` / `indicator_frame.c`**: Renders the UI overlay that appears when switching sheets or modifying groups. Renders text using Pango/Cairo.
 - **`lock_indicator.c`**: Renders the circular typing/verifying/denied indicator during screen lock.
@@ -204,11 +213,13 @@ Key points:
 ### FreeBSD Manual Verification Protocol
 
 #### Test Protocol 1: Evdev Input Device Initialization
+
 1. Verify `/etc/sysctl.conf` contains `kern.evdev.rcpt_mask=12` (or `3` if `moused` enabled).
 2. Inspect `/dev/input/event*` nodes permissions.
 3. Launch `hikari` and confirm single mouse pointer movement without duplicate cursor offset drift.
 
 #### Test Protocol 2: Shared Memory & `XDG_RUNTIME_DIR` Allocation
+
 1. Mount `tmpfs` at a dedicated test mountpoint (e.g. `mount -t tmpfs tmpfs /mnt/test-tmpfs`).
 2. Set `export XDG_RUNTIME_DIR=/mnt/test-tmpfs/runtime-${USER}` and create the directory with restrictive permissions (`mkdir -p -m 0700 "$XDG_RUNTIME_DIR"`).
 3. Launch Wayland client (e.g. `alacritty` or `firefox`).
@@ -216,6 +227,7 @@ Key points:
 5. Add explicit cleanup to unmount the temporary filesystem after testing (`umount /mnt/test-tmpfs`).
 
 #### Test Protocol 3: PAM Unlocker Security (`hikari-unlocker`)
+
 1. Verify `/usr/local/etc/pam.d/hikari-unlocker` exists.
 2. Identify the canonical absolute path for the `hikari-unlocker` binary. Verify that this exact binary has trusted package provenance, root ownership (e.g., `root:wheel`), and the expected permissions. Only apply mode 4555 (e.g. `chmod 4555 /usr/local/bin/hikari-unlocker`) after all these checks pass.
 3. Trigger lock mode (`Meta+L`) in `hikari`.
@@ -267,6 +279,7 @@ Read and cross-reference the content against the codebase.
 *This section provides an exhaustive, 100% complete mechanical wiring map of the `hikari` compositor, tracing the core lifecycle, output, view, and input subsystems file-by-file and function-by-function. This explicitly avoids repeating the high-level conceptual architecture outlined in Sections 1-6.*
 
 ### 11.1 Server Lifecycle, Event Loop, and Global State
+
 - **`src/server.c`**: The central orchestrator.
   - `main()`: Entry point; validates environment, drops privileges, initializes Wayland display, invokes `hikari_server_prepare_privileged()`.
   - `hikari_server_prepare_privileged()`: Acquires `seatd` session via `wlr_backend_autocreate()`.
@@ -278,6 +291,7 @@ Read and cross-reference the content against the codebase.
   - `hikari_malloc()` / `hikari_calloc()`: Wraps system allocators; implements a fail-fast policy (prints stderr diagnostic and calls `abort()`) ensuring NULL is never returned to the compositor.
 
 ### 11.2 Rendering, Outputs, and Backgrounds
+
 - **`src/output.c`**: Hardware output management.
   - `new_output_handler()`: Intercepts `wlr_backend` new output events; wraps `wlr_output` in `hikari_output`.
   - `hikari_output_init()`: Executes `wlr_output_commit_state()` to test the preferred modeset (eDP-1 swapchain test point). Fails gracefully with stderr log if modeset is rejected.
@@ -288,6 +302,7 @@ Read and cross-reference the content against the codebase.
   - `hikari_workspace_focus_view()`: Modifies global focus state across all sheets on the output.
 
 ### 11.3 Core View Abstraction & Hierarchy
+
 - **`src/view.c`**: The base window abstraction.
   - `hikari_view_damage_whole()` / `hikari_view_damage_surface()`: Granular damage bounding box (`wlr_box`) calculators. Differentiates SSD (border extents) and CSD (buffer extents).
   - `hikari_view_move()` / `hikari_view_resize()`: Safely mutates `view->geometry`.
@@ -301,6 +316,7 @@ Read and cross-reference the content against the codebase.
   - `hikari_maximized_state_save()`: Caches pre-maximized `wlr_box` geometry so views can be safely restored.
 
 ### 11.4 Tiling & Layout Engine
+
 - **`src/layout.c`**: The macro tiling engine.
   - `hikari_layout_apply()`: Triggers the recursive math for tiling algorithms.
 - **`src/split.c`**: Geometry subdivision math.
@@ -309,6 +325,7 @@ Read and cross-reference the content against the codebase.
   - `hikari_tile_init()`: Wraps a `hikari_view` to force it to adhere strictly to the computed `split.c` geometry.
 
 ### 11.5 Shell Protocols & Client Interfaces
+
 - **`src/xdg_view.c`**: Native Wayland shell (`xdg_shell`).
   - `new_xdg_surface()`: Filters incoming `wlr_xdg_surface` objects (toplevel vs popup).
   - `hikari_xdg_view_init()`: Instantiates the `wlr_scene_tree`, wires up `initial_commit`, `map`, `unmap`, and `destroy` listeners.
@@ -322,6 +339,7 @@ Read and cross-reference the content against the codebase.
   - `new_decoration_handler()`: Answers `wlr_xdg_decoration_manager_v1` requests to enforce server-rendered borders.
 
 ### 11.6 Input Hardware Routing & Modifiers
+
 - **`src/keyboard.c`**: Keyboard hardware interfacing.
   - `hikari_keyboard_init()`: Compiles `xkbcommon` rules and connects the `modifiers` and `key` event listeners.
   - `key_handler()`: Translates raw evdev scancodes to `xkb_keysym_t` and passes them to `hikari_server.mode->key_handler()`.
@@ -333,6 +351,7 @@ Read and cross-reference the content against the codebase.
   - `switch_toggle_handler()`: Executes `hikari_action` macros based on hardware switch state changes.
 
 ### 11.7 The Modal State Machine (Input Delegation)
+
 Hikari dynamically re-routes input based on the active `hikari_server.mode`.
 - **`src/normal_mode.c`**: Default state. Executes user-configured `hikari_action`s via keybindings.
 - **`src/lock_mode.c`**: Screen lock overlay. Suspends compositor keybindings. Pipes input non-blockingly to `hikari-unlocker` via `wl_event_loop_add_fd()` using `locker_result_handler`.
@@ -342,6 +361,7 @@ Hikari dynamically re-routes input based on the active `hikari_server.mode`.
 - **`src/sheet_assign_mode.c`, `src/group_assign_mode.c`, `src/mark_assign_mode.c`, `src/mark_select_mode.c`, `src/layout_select_mode.c`**: Modal prompt logic for interacting with internal compositor state via keystroke completion.
 
 ### 11.8 UI Overlays & Cairo Rendering
+
 - **`src/border.c`**: Renders 1px/2px colored frames via `cairo`.
   - `hikari_border_refresh()`: Commits the cairo pixel buffer to a `wlr_scene_buffer`.
 - **`src/indicator.c`, `src/indicator_bar.c`, `src/indicator_frame.c`**: Text-based UI overlays.
@@ -352,6 +372,7 @@ Hikari dynamically re-routes input based on the active `hikari_server.mode`.
   - `hikari_font_get_text_extents()`: Calculates pixel widths for indicator overlays based on user font configuration.
 
 ### 11.9 Configuration, Parsing, and Action Execution
+
 - **`src/configuration.c`**: The `libucl` entrypoint.
   - `parse_output_config()`, `parse_switches()`: Converts JSON/UCL syntax into compositor runtime C structs. Employs strict failure on unknown keys (e.g., `goto done`).
 - **`src/keyboard_config.c`, `src/pointer_config.c`, `src/output_config.c`, `src/layout_config.c`, `src/view_config.c`, `src/switch_config.c`, `src/action_config.c`, `src/position_config.c`**: Discrete parsers for their respective subsystems.
@@ -931,9 +952,9 @@ These files implement interactive keystroke buffers where the user presses a mod
 - `new_decoration_handler()`: Responds to `wlr_xdg_decoration_manager_v1`. If a client requests decorations, Hikari forces `WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE` to ensure the compositor (via `border.c`) controls the window framing.
 - Wires up `destroy` listeners to clean up the `hikari_view_decoration` struct when the client disconnects.
 
-### 12.25 Drawing Utilities (`src/color.c`, `src/font.c`)
+### 12.25 Drawing Utilities (`include/hikari/color.h`, `src/font.c`)
 
-**`src/color.c`:**
+**`include/hikari/color.h`:**
 - `hikari_color_convert()`: Parses hex color strings (e.g., `#FF0000FF`) into 4-element `float[4]` arrays normalized between 0.0 and 1.0 for use by `cairo` and `wlr_scene_rect`.
 
 **`src/font.c`:**

@@ -64,6 +64,8 @@ clear_password(void)
   hikari_lock_indicator_clear(mode->lock_indicator);
 }
 
+// [COMMENT] Function purpose: Fork and exec hikari-unlocker, wiring its stdin
+// and stdout to the password and result pipes.
 static bool
 start_unlocker(void)
 {
@@ -106,15 +108,26 @@ start_unlocker(void)
   if (locker_pid == 0) {
     close(locker_pipe[0][1]);
     close(locker_pipe[1][0]);
-    close(0);
-    close(1);
-    dup2(locker_pipe[0][0], 0);
-    dup2(locker_pipe[1][1], 1);
-    // [COMMENT] Action purpose: Close original pipe descriptors after dup2 to
-    // avoid leaking extra file descriptors into hikari-unlocker. The dup2 calls
-    // above copied them to stdin/stdout; the originals are now redundant.
-    close(locker_pipe[0][0]);
-    close(locker_pipe[1][1]);
+    // [COMMENT] Action purpose: dup2 both endpoints onto stdin/stdout, checking
+    // for failure -- an unchecked dup2 could silently leave the child reading
+    // or writing the wrong descriptor. The original endpoint is only closed
+    // when it differs from its target: dup2 is a no-op when src == dst, so
+    // closing an endpoint that already equals 0 or 1 would sever the freshly
+    // established stdin/stdout.
+    if (dup2(locker_pipe[0][0], STDIN_FILENO) == -1 ||
+        dup2(locker_pipe[1][1], STDOUT_FILENO) == -1) {
+      fprintf(stderr, "error: could not redirect hikari-unlocker pipes\n");
+      _exit(EXIT_FAILURE);
+    }
+
+    if (locker_pipe[0][0] != STDIN_FILENO) {
+      close(locker_pipe[0][0]);
+    }
+
+    if (locker_pipe[1][1] != STDOUT_FILENO) {
+      close(locker_pipe[1][1]);
+    }
+
     execl("/bin/sh", "/bin/sh", "-c", "hikari-unlocker", NULL);
     // [COMMENT] Action purpose: Reached only when execl fails. The child must
     // not report success: emit a diagnostic (stderr survives the stdin/stdout

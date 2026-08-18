@@ -1275,6 +1275,8 @@ parse_switches(struct hikari_configuration *configuration,
   success = true;
 
 done:
+  // [COMMENT] Action purpose: releases the UCL iterator on both the
+  // successful and failed parsing paths.
   ucl_object_iterate_free(it);
 
   return success;

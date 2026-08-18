@@ -77,6 +77,11 @@ hikari_output_load_background(struct hikari_output *output,
 
   cairo_surface_t *image = cairo_image_surface_create_from_png(path);
   if (cairo_surface_status(image) != CAIRO_STATUS_SUCCESS) {
+    fprintf(stderr,
+        "error: could not load background \"%s\": %s\n",
+        path,
+        cairo_status_to_string(cairo_surface_status(image)));
+    cairo_surface_destroy(image);
     goto done;
   }
 
@@ -86,7 +91,12 @@ hikari_output_load_background(struct hikari_output *output,
   cairo_surface_t *output_surface = cairo_image_surface_create(
       CAIRO_FORMAT_ARGB32, output_width, output_height);
   if (cairo_surface_status(output_surface) != CAIRO_STATUS_SUCCESS) {
+    fprintf(stderr,
+        "error: could not allocate background surface for output \"%s\": %s\n",
+        output->wlr_output->name,
+        cairo_status_to_string(cairo_surface_status(output_surface)));
     cairo_surface_destroy(image);
+    cairo_surface_destroy(output_surface);
     goto done;
   }
 
@@ -395,6 +405,25 @@ hikari_output_init(struct hikari_output *output, struct wlr_output *wlr_output)
       wlr_output_layout_get_box(hikari_server.output_layout, NULL, &extents);
       l_output = wlr_output_layout_add(hikari_server.output_layout, wlr_output, extents.x + extents.width, 0);
     }
+
+    // [COMMENT] Action purpose: wlr_output_layout_add can fail (allocation
+    // failure). Roll back the enable/registration performed above and leave
+    // the output disabled rather than passing a NULL l_output into the scene
+    // layout, which would crash.
+    if (l_output == NULL) {
+      fprintf(stderr,
+          "error: failed to add output \"%s\" to the output layout; output "
+          "will remain disabled\n",
+          wlr_output->name);
+      wl_list_remove(&output->server_outputs);
+      wl_list_remove(&output->frame.link);
+      wl_list_remove(&output->request_state.link);
+      wlr_scene_output_destroy(scene_output);
+      output->scene_output = NULL;
+      output->enabled = false;
+      return;
+    }
+
     wlr_scene_output_layout_add_output(hikari_server.scene_layout, l_output, scene_output);
 
     output_geometry(output);

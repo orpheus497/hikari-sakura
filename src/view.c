@@ -526,6 +526,8 @@ struct hikari_damage_data {
   bool whole;
 };
 
+// [COMMENT] Function purpose: wlr_surface_for_each_surface callback that
+// damages a single surface (main surface or subsurface) within a view.
 static void
 damage_whole_surface(struct wlr_surface *surface, int sx, int sy, void *data)
 {
