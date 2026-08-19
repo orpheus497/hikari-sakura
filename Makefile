@@ -316,7 +316,7 @@ install-user: share/backgrounds/hikari/hikari_wallpaper.png etc/hikari/hikari.co
 	@if [ -e ${HOME}/.config/hikari/hikari.conf ]; then \
 		echo "install-user: ${HOME}/.config/hikari/hikari.conf already exists -- leaving it untouched"; \
 	else \
-		sed "s,PREFIX/share/backgrounds/hikari,${HOME}/.config/hikari," etc/hikari/hikari.conf > ${HOME}/.config/hikari/hikari.conf && \
+		sed "s,PREFIX,${PREFIX}," etc/hikari/hikari.conf | sed "s,/share/backgrounds/hikari,${HOME}/.config/hikari," > ${HOME}/.config/hikari/hikari.conf && \
 		chmod 644 ${HOME}/.config/hikari/hikari.conf && \
 		echo "install-user: wrote ${HOME}/.config/hikari/hikari.conf"; \
 	fi

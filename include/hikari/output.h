@@ -43,7 +43,7 @@ struct hikari_output {
   struct wlr_box geometry;
   struct wlr_box usable_area;
 
-  struct wlr_scene_buffer *background;
+  struct wlr_scene_node *background;
 };
 
 void

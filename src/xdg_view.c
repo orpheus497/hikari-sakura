@@ -59,6 +59,7 @@ commit_handler(struct wl_listener *listener, void *data)
 // client to map. Without this, all subsequent configure calls will crash
 // with assert(surface->initialized). See tinywl.c xdg_toplevel_commit.
   if (surface->initial_commit) {
+    // [COMMENT] Action purpose: Call wlr_xdg_toplevel_set_size to properly initialize and configure the toplevel surface in wlroots 0.20 instead of scheduling configure directly.
     wlr_xdg_toplevel_set_size(xdg_view->xdg_toplevel, 0, 0);
     return;
   }
@@ -256,7 +257,9 @@ activate(struct hikari_view *view, bool active)
 {
   struct hikari_xdg_view *xdg_view = (struct hikari_xdg_view *)view;
 
-  if (xdg_view->surface->role == WLR_XDG_SURFACE_ROLE_TOPLEVEL) {
+  // [COMMENT] Action purpose: Guard against calling configure (via set_activated)
+  // before the initial commit has fully initialized the surface.
+  if (xdg_view->surface->role == WLR_XDG_SURFACE_ROLE_TOPLEVEL && xdg_view->surface->initialized) {
     wlr_xdg_toplevel_set_activated(xdg_view->xdg_toplevel, active);
 
     hikari_view_damage_whole(view);
@@ -268,7 +271,10 @@ resize(struct hikari_view *view, int width, int height)
 {
   struct hikari_xdg_view *xdg_view = (struct hikari_xdg_view *)view;
 
-  if (xdg_view->surface->role == WLR_XDG_SURFACE_ROLE_TOPLEVEL) {
+  // [COMMENT] Action purpose: Guard against calling configure (via set_size)
+  // before the initial commit has fully initialized the surface. Return 0 to
+  // defer the resize until safe.
+  if (xdg_view->surface->role == WLR_XDG_SURFACE_ROLE_TOPLEVEL && xdg_view->surface->initialized) {
     return wlr_xdg_toplevel_set_size(xdg_view->xdg_toplevel, width, height);
   }
 

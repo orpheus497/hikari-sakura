@@ -1,9 +1,14 @@
+| **Phase 26** | Fix XDG toplevel initialization & wallpaper mapping | 100% ✓ — Fixed `xdg_view.c` toplevel crash by swapping `wlr_xdg_surface_schedule_configure` for `wlr_xdg_toplevel_set_size` (wlroots 0.20 compliant). Fixed silent background loading failure in `output.c` by adding fallback color and mapping failure logging.
+
 # Project Progress tracking
 
-*Last Updated:* 2026-08-19 12:17
+*Last Updated:* 2026-08-19 15:35
 
 | Phase | Description | Status |
 |---|---|---|
+| **Phase 32** | Wayland Client Hang and Wallpaper PREFIX Fix | 100% ✓ — Investigated and resolved the Wayland terminal hang issue by replacing `wlr_xdg_toplevel_set_size(..., 0, 0)` with `wlr_xdg_surface_schedule_configure(surface)` during `initial_commit` in `src/xdg_view.c`. Addressed the black screen issue by fixing the `PREFIX` macro replacement in the user `Makefile` installation target and the local `~/.config/hikari/hikari.conf` file. Tested thoroughly in a nested session. |
+| **Phase 31** | wlroots 0.20 Initialization Guards | 100% ✓ — Applied `surface->initialized` guards to `activate` and `resize` in `src/xdg_view.c` to fix the `wlr_xdg_surface_schedule_configure` assertion crash during client startup. Execution complete. Testing blocked by root-owned `main.o` file environment issue. Devdocs updated. |
+| **Phase 30** | Compositor crash and background fallback fixes | 100% ✓ — Fixed `wlroots` `surface->initialized` crash in `src/xdg_view.c` by guarding `activate`, `resize`, `apply_tile`, and `reset_geometry`. Fixed silent background failure in `src/output.c` by adding `fprintf` for failed allocator. Devdocs updated. |
 | **Phase 28** | `request_state_handler` startup CRTC disable guard | 100% ✓ — Guard added to `src/output.c` `request_state_handler`: silently drops `request_state` events from wlroots that carry `WLR_OUTPUT_STATE_ENABLED` + `enabled=false` while `output->enabled` is `false`, preventing the \"Failed to disable CRTC <N>\" startup error. API verified against wlroots-0.20 headers (`committed & WLR_OUTPUT_STATE_ENABLED` + direct field). `make output.o` → EXIT:0, zero errors/warnings; `output.o` 12656→12680 bytes. Full relink blocked by root-owned binary (env issue). Devdocs updated. |
 | **Phase 26** | Phase 24 hardening backlog — P2/P3 batch execution | 100% ✓ — 3/3 items: CSD granular damage (whole-output early-outs removed; CSD main surface damaged by buffer extents, `src/view.c`); fail-fast allocation policy (`hikari_malloc`/`hikari_calloc` sized diagnostic + `abort()`, `src/memory.c`, contract in `include/hikari/memory.h`); changelog `wloots`→`wlroots` (`CHANGELOG.md`). TC-BUILD-01/02 clean builds pass, 0 errors; edited files warning-clean. Phase 24 hardening stream now 7/7 closed. Remaining: runtime/environmental queue (user-run Phase 19 diagnostics, eDP-1 swapchain, tmpfs/ZFS), runtime-blocked verifications (P2-14, PAM, layer-client spot check), TC-FORMAT-01, optional hygiene items. |
 

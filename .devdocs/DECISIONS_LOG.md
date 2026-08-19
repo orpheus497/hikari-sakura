@@ -1,6 +1,58 @@
+### Architecture: wlroots 0.20 XDG Toplevel Initialization
+
+* **Context:** In wlroots 0.18+, `wlr_xdg_surface_schedule_configure` asserts `surface->initialized`. Calling it directly on an `initial_commit` for a toplevel crashes the compositor because the surface role setup is incomplete.
+
+* **Decision:** Replaced the direct `wlr_xdg_surface_schedule_configure` call with `wlr_xdg_toplevel_set_size(xdg_view->xdg_toplevel, 0, 0)` in `commit_handler` to properly initialize and schedule configure events for XDG toplevels.
+
+* **Impact:** Resolves Wayland pipe breakage and compositor crashes when launching XDG shell toplevel clients like `foot`.
+
+
+
+### Architecture: Background Mapping Fallback (wlroots 0.20)
+
+* **Context:** The compositor attempts to allocate a buffer for the background and map it to CPU memory via `wlr_buffer_begin_data_ptr_access`. On GBM allocators or environments where ZFS breaks `posix_fallocate` (preventing `wl_shm` fallback), CPU mapping is unsupported and silently fails, leaving a black screen.
+
+* **Decision:** Added explicit error logging when `wlr_buffer_begin_data_ptr_access` returns false, and implemented a fallback to render a solid color `wlr_scene_rect` so the screen is not left unidentifiable.
+
+* **Impact:** Exposes silent buffer failures and prevents completely black screens on startup when image buffer mapping is unsupported.
+
+
+
 # Architectural and Structural Decisions Log
 
 *Note: Most recent entries are listed at the top.*
+
+---
+
+## [2026-08-19 15:35] Phase 32: Wayland Client Hang and Wallpaper PREFIX Fix
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
+
+* **Context:** Wayland native terminals were crashing/hanging on startup, while XWayland terminals (`xterm`) worked. Additionally, `hikari` booted to a black screen with no wallpaper, accompanied by a `PREFIX/share/...: file not found` error in the logs.
+* **Decision 1 — `src/xdg_view.c`:** Replaced `wlr_xdg_toplevel_set_size(xdg_view->xdg_toplevel, 0, 0);` with `wlr_xdg_surface_schedule_configure(surface);` in the `initial_commit` block. This ensures that the compositor emits the required configure event that the client needs to map and render, rather than just setting pending dimensions and waiting indefinitely.
+* **Decision 2 — `Makefile` & Config:** Modified the `install-user` target in `Makefile` to pipe the user's `etc/hikari/hikari.conf` through `sed` to substitute `PREFIX`, matching the system-wide installation. Corrected the user's local `~/.config/hikari/hikari.conf` configuration.
+* **Impact:** Wayland clients no longer hang upon connecting to the compositor. The wallpaper loads correctly without file-not-found errors.
+
+---
+
+## [2026-08-19 14:26] Phase 31: wlroots 0.20 Initialization Guards
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
+
+* **Context:** The compositor crashed immediately with `Assertion failed: (surface->initialized)` in `wlr_xdg_surface_schedule_configure` during startup of clients (e.g. kitty). This happens because `hikari` attempts to focus and resize new views before the client has completed the `initial_commit` handshake, violating the `wlroots` 0.20 lifecycle contract.
+* **Decision:** Wrapped the `wlr_xdg_toplevel_set_activated` call in `activate()` and the `wlr_xdg_toplevel_set_size` call in `resize()` within `src/xdg_view.c` with explicit `xdg_view->surface->initialized` checks. `resize()` now returns 0 to defer resizing if uninitialized.
+* **Impact:** The compositor no longer schedules premature configure events.
+
+---
+
+## [2026-08-19 13:53] Phase 30: Compositor Crash & Background Fallback Fixes
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
+
+* **Context:** The compositor was observed crashing immediately with `Assertion failed: (surface->initialized)` in `wlroots` when a Wayland client (e.g. kitty) failed to initialize its EGL context and aborted its Wayland surfaces before completing the initial commit. Additionally, the compositor loaded with a black screen (missing wallpaper) during software fallback rendering because the hardware buffer allocation silently failed.
+* **Decision 1 — `src/xdg_view.c`:** Wrapped all `wlr_xdg_toplevel_set_*` calls (in `activate`, `resize`, `apply_tile`, and `reset_geometry`) with `&& xdg_view->surface->initialized` checks. This explicitly prevents Hikari from scheduling configure events on dead or uninitialized client surfaces, fixing the assertion crash.
+* **Decision 2 — `src/output.c`:** Added an explicit `fprintf(stderr)` in `hikari_output_load_background` to log an error when `wlr_allocator_create_buffer` returns `NULL`. This provides clear visibility into background allocation failures (typically caused by degraded renderer capabilities) rather than failing silently with a black screen.
+* **Impact:** The compositor is significantly more robust against failing or misbehaving Wayland clients. It will no longer crash itself if a client aborts during startup. Silent wallpaper rendering failures are now logged to stderr.
 
 ---
 

@@ -67,7 +67,7 @@ hikari_output_load_background(struct hikari_output *output,
     enum hikari_background_fit background_fit)
 {
   if (output->background != NULL) {
-    wlr_scene_node_destroy(&output->background->node);
+    wlr_scene_node_destroy(output->background);
     output->background = NULL;
   }
 
@@ -128,11 +128,32 @@ hikari_output_load_background(struct hikari_output *output,
       }
       wlr_buffer_end_data_ptr_access(buffer);
 
-      output->background = wlr_scene_buffer_create(&hikari_server.scene->tree, buffer);
-      wlr_scene_node_set_position(&output->background->node, output->geometry.x, output->geometry.y);
-      wlr_scene_node_lower_to_bottom(&output->background->node);
+      struct wlr_scene_buffer *scene_buffer = wlr_scene_buffer_create(&hikari_server.scene->tree, buffer);
+      output->background = &scene_buffer->node;
+      wlr_scene_node_set_position(output->background, output->geometry.x, output->geometry.y);
+      wlr_scene_node_lower_to_bottom(output->background);
+    } else {
+      fprintf(stderr,
+          "error: could not access data pointer for background buffer on output \"%s\"\n",
+          output->wlr_output->name);
+
+      // [COMMENT] Action purpose: Fallback to solid color when image buffer mapping fails
+      float color[4] = {
+        hikari_configuration->clear[0],
+        hikari_configuration->clear[1],
+        hikari_configuration->clear[2],
+        hikari_configuration->clear[3]
+      };
+      struct wlr_scene_rect *rect = wlr_scene_rect_create(&hikari_server.scene->tree, output->geometry.width, output->geometry.height, color);
+      output->background = &rect->node;
+      wlr_scene_node_set_position(output->background, output->geometry.x, output->geometry.y);
+      wlr_scene_node_lower_to_bottom(output->background);
     }
     wlr_buffer_drop(buffer);
+  } else {
+    fprintf(stderr,
+        "error: could not allocate buffer for background on output \"%s\"\n",
+        output->wlr_output->name);
   }
 
   cairo_surface_destroy(image);
@@ -238,7 +259,7 @@ output_geometry(struct hikari_output *output)
 
   // [COMMENT] Action purpose: Reposition background scene node to match updated output geometry.
   if (output->background != NULL) {
-    wlr_scene_node_set_position(&output->background->node,
+    wlr_scene_node_set_position(output->background,
         output->geometry.x, output->geometry.y);
   }
 }
@@ -490,7 +511,7 @@ hikari_output_fini(struct hikari_output *output)
     struct hikari_workspace *next_workspace = hikari_workspace_next(workspace);
 
     if (output->background != NULL) {
-      wlr_scene_node_destroy(&output->background->node);
+      wlr_scene_node_destroy(output->background);
       output->background = NULL;
     }
 

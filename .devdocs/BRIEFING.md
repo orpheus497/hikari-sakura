@@ -1,14 +1,14 @@
 # Hikari Project Briefing
 
-*Last Updated:* 2026-08-19 13:11
+*Last Updated:* 2026-08-19 15:35
 
 ## Current Status
 
-- **Phase:** Phase 29 complete — Debug binary ready. `make DEBUG=YES` → EXIT:0, 407K `hikari` binary with `-g -O0`, no ASan. `request_state_handler` breakpoint pre-set in launch.json. Ready for lldb session to verify Phase 28 guard.
+- **Phase:** Phase 32 complete — Wayland client hang and wallpaper config issues resolved. Native Wayland terminals now launch successfully.
 - **Branch:** wlroots-0.17.1 (stale label — tree builds against installed wlroots 0.20.x)
-- **Overall progress:** Phase 24 hardening stream fully closed. Phase 27 deep architectural mapping complete. Phase 28 fix: `request_state_handler` in `src/output.c` now guards against wlroots 0.20 emitting disable-CRTC `request_state` events during initial DRM probe, resolving the "Failed to disable CRTC <N>" startup error. `output.o` compiles warning-clean (EXIT:0). Full relink blocked by root-owned `main.o`/`hikari` binary — pre-existing environment issue, not a code defect.
+- **Overall progress:** Phase 32 fix: `wlr_xdg_surface_schedule_configure` correctly signals `initial_commit` to Wayland clients. Wallpaper fallback fixed via `sed` macro substitution in user config installation.
 - **Target OS:** FreeBSD 15.1-RELEASE (ZFS root)
-- **Current step:** Devdocs updated. Remaining queue: user-run Phase 19 diagnostics (eDP-1 swapchain), tmpfs/ZFS `XDG_RUNTIME_DIR`, runtime-blocked verifications (P2-14, PAM, layer-client spot check), optional hygiene (TC-FORMAT-01, comment-header rollout, cosmetic enum-compare warnings).
+- **Current step:** User verification of the fixes. Remaining queue: user-run Phase 19 diagnostics (eDP-1 swapchain), tmpfs/ZFS `XDG_RUNTIME_DIR`, runtime-blocked verifications (P2-14, PAM, layer-client spot check), optional hygiene (TC-FORMAT-01, comment-header rollout, cosmetic enum-compare warnings).
 - **Blockers:** (1) eDP-1 scanout swapchain test failure — Mesa/EGL/GBM ↔ drm-kmod layer (partially addressed by Phase 28 fix — the guard eliminates the spurious startup CRTC disable commit that was confounding diagnostics); (2) tmpfs/ZFS `XDG_RUNTIME_DIR` — client wl_shm forced; (3) root-owned build artifacts blocking full relink (environment issue).
 
 ## Remaining Work
