@@ -104,6 +104,12 @@ arrange_layers(struct hikari_output *output)
   is stored in output->usable_area for use by the view layout engine. */
   struct wlr_box usable_area = full_area;
 
+  /* [COMMENT] Action purpose: Reserve the native top bar's strip first. This
+  pass re-derives usable_area from the full output box, so without repeating the
+  reservation here every layer-shell arrangement would silently hand the bar's
+  rows back to views. Matches output_geometry()'s baseline. */
+  hikari_bar_reserve(&output->bar, &usable_area);
+
   /* [COMMENT] Action purpose: Process layers in protocol-defined order.
   BACKGROUND and BOTTOM layers are processed first so their exclusive zones
   shrink usable_area before TOP and OVERLAY surfaces are configured. */
@@ -240,8 +246,21 @@ hikari_layer_init(
   layer->commit.notify = commit_handler;
   wl_signal_add(&wlr_layer_surface->surface->events.commit, &layer->commit);
 
+  /* [COMMENT] Action purpose: Listen on the LAYER SURFACE's destroy signal, not
+  the underlying wl_surface's. These are distinct objects torn down at distinct
+  times: a client destroys the layer-surface role object first and the
+  wl_surface afterwards. wlroots registers its own listener on
+  layer_surface->events.destroy (wlroots-0.20.0/types/scene/layer_shell_v1.c)
+  which destroys the scene tree AND frees the wlr_scene_layer_surface_v1 struct
+  itself. Listening on the wl_surface instead meant hikari kept running with a
+  freed scene_layer_surface and a freed layer->surface -- arrange_layers() would
+  walk output->layers[] and configure through the dangling pointer, and
+  hikari_layer_fini() would later destroy an already-freed scene node. That
+  heap corruption is what crashed the compositor on every layer-shell teardown.
+  Sharing the signal with wlroots keeps both teardowns in one defined
+  ordering. */
   layer->destroy.notify = destroy_handler;
-  wl_signal_add(&wlr_layer_surface->surface->events.destroy, &layer->destroy);
+  wl_signal_add(&wlr_layer_surface->events.destroy, &layer->destroy);
 
   layer->map.notify = map_handler;
   wl_signal_add(&wlr_layer_surface->surface->events.map, &layer->map);
@@ -264,13 +283,14 @@ hikari_layer_fini(struct hikari_layer *layer)
 {
   assert(!layer->mapped);
 
-  /* [COMMENT] Action purpose: Destroy the scene tree node. The
-  wlr_scene_layer_surface_v1 struct itself is freed by the scene's own
-  tree_destroy handler; we only need to trigger the destruction. */
-  if (layer->scene_layer_surface != NULL) {
-    wlr_scene_node_destroy(&layer->scene_layer_surface->tree->node);
-    layer->scene_layer_surface = NULL;
-  }
+  /* [COMMENT] Action purpose: Drop the reference WITHOUT destroying the tree.
+  hikari_layer_fini now runs off layer_surface->events.destroy, the same signal
+  wlroots uses to destroy this scene tree and free the enclosing
+  wlr_scene_layer_surface_v1. Calling wlr_scene_node_destroy here would either
+  double-destroy the tree or operate on already-freed memory depending on
+  listener order. Nulling the pointer is all hikari needs to do; wlroots owns
+  the teardown. */
+  layer->scene_layer_surface = NULL;
 
   wl_list_remove(&layer->layer_surfaces);
 
@@ -538,6 +558,17 @@ destroy_handler(struct wl_listener *listener, void *data)
   printf("LAYER DESTROY %p\n", layer);
 #endif
 
+  /* [COMMENT] Action purpose: Drop the scene reference FIRST. wlroots registers
+  its own listener on this same destroy signal from inside
+  wlr_scene_layer_surface_v1_create(), which runs before this one (wl_signal
+  dispatches in registration order, and hikari registers afterwards in
+  hikari_layer_init). By the time we get here the scene tree is destroyed and
+  the wlr_scene_layer_surface_v1 struct has been freed, so this pointer is
+  already dangling. Nulling it up front makes every `scene_layer_surface !=
+  NULL` guard below -- in unmap(), damage(), and arrange_layers() -- actually
+  protective instead of waving a freed pointer through. */
+  layer->scene_layer_surface = NULL;
+
   if (layer->mapped) {
     unmap(layer);
   }
@@ -609,8 +640,18 @@ unmap(struct hikari_layer *layer)
   wl_list_remove(&layer->new_popup.link);
   wl_list_remove(&layer->unmap.link);
 
-  layer->map.notify = map_handler;
-  wl_signal_add(&layer->surface->surface->events.map, &layer->map);
+  /* [COMMENT] Action purpose: Re-arm the map listener so a surface that unmaps
+  and maps again is picked up. Guarded because unmap() is also reached from the
+  destroy path, where the layer surface (and its wl_surface) are being torn
+  down and must not be signal-subscribed. The else branch re-initialises the
+  link so hikari_layer_fini's unconditional wl_list_remove stays balanced in
+  both cases. */
+  if (layer->surface != NULL && layer->surface->surface != NULL) {
+    layer->map.notify = map_handler;
+    wl_signal_add(&layer->surface->surface->events.map, &layer->map);
+  } else {
+    wl_list_init(&layer->map.link);
+  }
 
   layer->mapped = false;
 

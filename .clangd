@@ -16,4 +16,14 @@ CompileFlags:
     - "-I/usr/local/lib/glib-2.0/include"
     - "-DWLR_USE_UNSTABLE"
     - "-DHIKARI_ETC_PREFIX=/usr/local"
-    - "-D_POSIX_C_SOURCE=200809L"
+    - "-DHIKARI_PREFIX=/usr/local"
+    - "-DHIKARI_TOPBAR_PATH=\"/usr/local/bin/hikari-topbar\""
+    # Match the Makefile's compiler mode. The build passes no -std, so cc uses a
+    # gnu* default which leaves __BSD_VISIBLE enabled. Do NOT define
+    # _POSIX_C_SOURCE here: on FreeBSD sys/cdefs.h sets __BSD_VISIBLE to 0
+    # whenever _POSIX_C_SOURCE/_XOPEN_SOURCE/_ANSI_SOURCE is defined, which hides
+    # BSD-only declarations the sources legitimately use (u_int via sys/ucred.h,
+    # IFF_UP via net/if.h) and, at 200809L specifically, usleep -- which POSIX
+    # removed in the 2008 revision. That made clangd stricter than the actual
+    # build and produced errors for code that compiles cleanly.
+    - "-std=gnu11"

@@ -12,6 +12,7 @@
 #include <wlr/types/wlr_compositor.h>
 #include <wlr/types/wlr_scene.h>
 
+#include <hikari/bar.h>
 #include <hikari/server.h>
 #include <hikari/output_config.h>
 
@@ -44,6 +45,10 @@ struct hikari_output {
   struct wlr_box usable_area;
 
   struct wlr_scene_node *background;
+
+  /* [COMMENT] Class purpose: This output's native top bar. Reserves space out
+  of usable_area so tiled views never sit underneath it. */
+  struct hikari_bar bar;
 };
 
 void

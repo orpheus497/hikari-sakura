@@ -9,6 +9,9 @@
 
 #include <drm_fourcc.h>
 #include <wlr/backend.h>
+// [COMMENT] Action purpose: wlr_buffer_init and struct wlr_buffer_impl are
+// declared here; required for the CPU-backed ARGB8888 buffer below.
+#include <wlr/interfaces/wlr_buffer.h>
 #include <wlr/backend/headless.h>
 #include <wlr/backend/libinput.h>
 #include <wlr/backend/session.h>
@@ -1190,6 +1193,12 @@ server_init(struct hikari_server *server, char *config_path)
   nested (Wayland-on-Wayland), in which case VT switching cannot occur and
   the guard is safely skipped. session_active is initialised true so frames
   proceed normally on startup. */
+  /* [COMMENT] Action purpose: Start the native top bar's telemetry helper. It
+  runs as a separate process feeding a non-blocking pipe: the sensors it reads
+  (pactl, playerctl, nvidia-smi, sysctl) would otherwise have to be sampled with
+  blocking popen() calls several times a second, stalling the event loop. */
+  hikari_topbar_source_init(&server->topbar);
+
   server->session_active = true;
   if (server->session != NULL) {
     server->session_active_listener.notify = session_active_handler;
@@ -1325,6 +1334,9 @@ hikari_server_stop(void)
   // initialised (either via wl_signal_add or wl_list_init when no session
   // exists), so removal is unconditionally safe.
   wl_list_remove(&server->session_active_listener.link);
+  // [COMMENT] Action purpose: Stop the top bar helper and release its pipe and
+  // event source before the event loop is destroyed.
+  hikari_topbar_source_fini(&server->topbar);
 #ifdef HAVE_LAYERSHELL
   wl_list_remove(&server->new_layer_shell_surface.link);
 #endif
@@ -1880,41 +1892,88 @@ move_resize_view(int dx, int dy, int dwidth, int dheight)
   }
 }
 
+/* [COMMENT] Class purpose: CPU-backed ARGB8888 buffer holding a copy of
+caller-rendered cairo pixels. This exists because allocating through
+wlr_allocator does not work on the target platform: GBM buffer mapping fails on
+FreeBSD/ZFS, so wlr_allocator_create_buffer() (or the subsequent
+begin_data_ptr_access for write) returns failure and every UI element built this
+way silently disappears. output.c already worked around this for the background
+with its own wlr_buffer_impl (DECISIONS_LOG Phase 33); this brings the shared
+helper -- and therefore the indicator bars, lock indicator, and top bar -- onto
+the same footing. */
+struct hikari_argb8888_buffer {
+  struct wlr_buffer base;
+  unsigned char *data;
+  uint32_t format;
+  size_t stride;
+};
+
+static void
+argb8888_buffer_destroy(struct wlr_buffer *wlr_buffer)
+{
+  struct hikari_argb8888_buffer *buffer =
+      wl_container_of(wlr_buffer, buffer, base);
+  hikari_free(buffer->data);
+  hikari_free(buffer);
+}
+
+static bool
+argb8888_buffer_begin_data_ptr_access(struct wlr_buffer *wlr_buffer,
+    uint32_t flags,
+    void **data,
+    uint32_t *format,
+    size_t *stride)
+{
+  struct hikari_argb8888_buffer *buffer =
+      wl_container_of(wlr_buffer, buffer, base);
+
+  // [COMMENT] Action purpose: The pixels are a snapshot owned by the buffer;
+  // callers re-render and create a new buffer rather than mutating this one.
+  if (flags & WLR_BUFFER_DATA_PTR_ACCESS_WRITE) {
+    return false;
+  }
+
+  *data = buffer->data;
+  *format = buffer->format;
+  *stride = buffer->stride;
+
+  return true;
+}
+
+static void
+argb8888_buffer_end_data_ptr_access(struct wlr_buffer *wlr_buffer)
+{}
+
+static const struct wlr_buffer_impl argb8888_buffer_impl = {
+  .destroy = argb8888_buffer_destroy,
+  .begin_data_ptr_access = argb8888_buffer_begin_data_ptr_access,
+  .end_data_ptr_access = argb8888_buffer_end_data_ptr_access,
+};
+
 struct wlr_buffer *
 hikari_server_create_argb8888_buffer(int width, int height, unsigned char *data, int stride)
 {
-  const struct wlr_drm_format_set *formats = wlr_renderer_get_texture_formats(
-      hikari_server.renderer, hikari_server.allocator->buffer_caps);
-  const struct wlr_drm_format *format =
-      formats != NULL ? wlr_drm_format_set_get(formats, DRM_FORMAT_ARGB8888)
-                      : NULL;
-  struct wlr_buffer *buffer =
-      format != NULL ? wlr_allocator_create_buffer(
-                           hikari_server.allocator, width, height, format)
-                     : NULL;
-
-  if (buffer != NULL) {
-    void *mapped_data;
-    uint32_t mapped_format;
-    size_t mapped_stride;
-    if (wlr_buffer_begin_data_ptr_access(buffer,
-            WLR_BUFFER_DATA_PTR_ACCESS_WRITE,
-            &mapped_data,
-            &mapped_format,
-            &mapped_stride)) {
-      for (int y = 0; y < height; y++) {
-        memcpy((char *)mapped_data + y * mapped_stride,
-            data + y * stride,
-            width * 4);
-      }
-      wlr_buffer_end_data_ptr_access(buffer);
-    } else {
-      wlr_buffer_drop(buffer);
-      buffer = NULL;
-    }
+  // [COMMENT] Action purpose: Reject degenerate geometry and guard the size
+  // computation against overflow before allocating.
+  if (width <= 0 || height <= 0 || stride <= 0 || data == NULL) {
+    return NULL;
   }
 
-  return buffer;
+  size_t byte_count = (size_t)stride * (size_t)height;
+  if (byte_count / (size_t)stride != (size_t)height) {
+    return NULL;
+  }
+
+  struct hikari_argb8888_buffer *buffer =
+      hikari_malloc(sizeof(struct hikari_argb8888_buffer));
+
+  wlr_buffer_init(&buffer->base, &argb8888_buffer_impl, width, height);
+  buffer->format = DRM_FORMAT_ARGB8888;
+  buffer->stride = (size_t)stride;
+  buffer->data = hikari_malloc(byte_count);
+  memcpy(buffer->data, data, byte_count);
+
+  return &buffer->base;
 }
 
 void

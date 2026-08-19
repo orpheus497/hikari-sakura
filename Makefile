@@ -21,6 +21,7 @@ OBJS = \
 	action_config.o \
 	binding_config.o \
 	binding_group.o \
+	bar.o \
 	border.o \
 	command.o \
 	completion.o \
@@ -133,7 +134,11 @@ PERMS = 555
 CFLAGS += -DHAVE_VIRTUAL_INPUT=1
 .endif
 
+# [COMMENT] Action purpose: HIKARI_PREFIX resolves the setuid unlocker and the
+# top bar helper through compile-time absolute paths, so a modified PATH cannot
+# substitute a different binary into either pipeline.
 CFLAGS += -Wall -I. -Iinclude -DHIKARI_ETC_PREFIX=${ETC_PREFIX} -DHIKARI_PREFIX=${PREFIX}
+CFLAGS += -DHIKARI_TOPBAR_PATH='"${PREFIX}/bin/hikari-topbar"'
 
 WLROOTS_CFLAGS != ${PKG_CONFIG} --cflags wlroots-0.20
 WLROOTS_LIBS != ${PKG_CONFIG} --libs wlroots-0.20
@@ -194,7 +199,7 @@ PROTOCOL_HEADERS = xdg-shell-protocol.h
 PROTOCOL_HEADERS += wlr-layer-shell-unstable-v1-protocol.h
 .endif
 
-all: hikari hikari-unlocker
+all: hikari hikari-unlocker hikari-topbar
 
 # [COMMENT] Action purpose: Regenerate version.h on every build. The phony
 # FORCE prerequisite keeps the target permanently out of date; the header is
@@ -220,6 +225,13 @@ wlr-layer-shell-unstable-v1-protocol.h:
 hikari-unlocker: hikari_unlocker.c
 	${CC} ${CFLAGS_EXTRA} ${LDFLAGS_EXTRA} -o hikari-unlocker hikari_unlocker.c -lpam
 
+# [COMMENT] Action purpose: Build the top bar telemetry helper as its own
+# binary. It is deliberately NOT linked into the compositor: it samples sensors
+# with blocking popen() calls, which would stall the Wayland event loop if run
+# in-process. hikari reads its swaybar-protocol output over a non-blocking pipe.
+hikari-topbar: src/topbar.c
+	${CC} ${CFLAGS_EXTRA} ${LDFLAGS_EXTRA} -o hikari-topbar src/topbar.c
+
 clean-doc:
 	@test -e _darcs && echo "cleaning manpage" ||:
 	@test -e _darcs && rm share/man/man1/hikari.1 2> /dev/null ||:
@@ -233,6 +245,7 @@ clean: clean-doc
 	@echo "cleaning executables"
 	@rm hikari 2> /dev/null ||:
 	@rm hikari-unlocker 2> /dev/null ||:
+	@rm hikari-topbar 2> /dev/null ||:
 
 share/man/man1/hikari.1:
 	pandoc -M title:"HIKARI(1) ${VERSION} | hikari - Wayland Compositor" -s \
@@ -268,7 +281,7 @@ distclean: clean-doc
 
 dist: distclean hikari-${VERSION}.tar.gz
 
-install: hikari hikari-unlocker share/man/man1/hikari.1
+install: hikari hikari-unlocker hikari-topbar share/man/man1/hikari.1
 	mkdir -p ${DESTDIR}/${PREFIX}/bin
 	mkdir -p ${DESTDIR}/${PREFIX}/share/man/man1
 	mkdir -p ${DESTDIR}/${PREFIX}/share/backgrounds/hikari
@@ -280,6 +293,10 @@ install: hikari hikari-unlocker share/man/man1/hikari.1
 	install -m ${PERMS} hikari ${DESTDIR}/${PREFIX}/bin
 	install -m 555 start-hikari.sh ${DESTDIR}/${PREFIX}/bin/start-hikari
 	install -m 4555 hikari-unlocker ${DESTDIR}/${PREFIX}/bin
+	# [COMMENT] Action purpose: Install the top bar helper unprivileged (555).
+	# Unlike the unlocker it needs no elevated rights -- it only reads sysctls
+	# and runs user-level query tools.
+	install -m 555 hikari-topbar ${DESTDIR}/${PREFIX}/bin
 	install -m 644 share/man/man1/hikari.1 ${DESTDIR}/${PREFIX}/share/man/man1
 	# [COMMENT] Action purpose: Install the default wallpaper to the path the
 	# sed-rewritten outputs.background configuration points at
@@ -297,6 +314,7 @@ uninstall:
 	-rm ${DESTDIR}/${PREFIX}/bin/hikari
 	-rm ${DESTDIR}/${PREFIX}/bin/start-hikari
 	-rm ${DESTDIR}/${PREFIX}/bin/hikari-unlocker
+	-rm ${DESTDIR}/${PREFIX}/bin/hikari-topbar
 	-rm ${DESTDIR}/${PREFIX}/share/man/man1/hikari.1
 	-rm ${DESTDIR}/${PREFIX}/share/backgrounds/hikari/hikari_wallpaper.png
 	-rm ${DESTDIR}/${PREFIX}/share/wayland-sessions/hikari.desktop

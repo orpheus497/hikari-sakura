@@ -302,6 +302,16 @@ output_geometry(struct hikari_output *output)
    .x = 0, .y = 0, .width = output_box.width, .height = output_box.height
   };
 
+  /* [COMMENT] Action purpose: Reserve the top bar's strip before anything else
+  consumes the usable area. Layer-shell's arrange pass re-derives usable_area
+  from the full output box, so it applies the same reservation itself -- both
+  paths must agree or views would be laid out under the bar. */
+  hikari_bar_reserve(&output->bar, &output->usable_area);
+
+  /* [COMMENT] Action purpose: Re-render the bar so it tracks the new output
+  width and origin after a mode change or layout move. */
+  hikari_bar_refresh(&output->bar);
+
   // [COMMENT] Action purpose: Reposition background scene node to match updated output geometry.
   if (output->background != NULL) {
     wlr_scene_node_set_position(output->background,
@@ -417,6 +427,10 @@ hikari_output_init(struct hikari_output *output, struct wlr_output *wlr_output)
   output->scene_output = NULL;
   output->lock_indicator_node = NULL;
   output->background = NULL;
+
+  /* [COMMENT] Action purpose: Initialise the bar before output_geometry() runs,
+  since that path calls hikari_bar_reserve()/hikari_bar_refresh() on it. */
+  hikari_bar_init(&output->bar, output);
   // [COMMENT] Action purpose: Establish the disabled baseline BEFORE asserting
   // on it. Callers (new_output_handler, init_noop_output) allocate the output
   // with hikari_malloc, which does not zero memory, so asserting first would
@@ -585,6 +599,10 @@ void
 hikari_output_fini(struct hikari_output *output)
 {
   bool noop = output->wlr_output->backend == hikari_server.noop_backend;
+
+  /* [COMMENT] Action purpose: Destroy the bar's scene node before the rest of
+  the output tears down, so no refresh can race a half-destroyed output. */
+  hikari_bar_fini(&output->bar);
 
 #ifdef HAVE_LAYERSHELL
   close_layers(&output->layers[ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY]);

@@ -1,3 +1,15 @@
+## [2026-08-20] Phase 39: Layer Shell Destroy-Signal Lifetime Fix
+
+*(Timestamp source: session context date; `date` not executed — IDE-only tooling directive.)*
+
+### Architecture: Layer Destroy Must Follow the Layer Surface, Not the wl_surface
+
+* **Context:** `hikari_layer_init` registered hikari's destroy listener on `wlr_layer_surface->surface->events.destroy` (the **wl_surface**), while wlroots registers its own on `layer_surface->events.destroy` (the **role object**) inside `wlr_scene_layer_surface_v1_create` (`wlroots-0.20.0/types/scene/layer_shell_v1.c`). These are distinct objects destroyed at distinct times — clients destroy the role object first. wlroots' handler destroys the scene tree, and its `tree_destroy` handler then calls `free(scene_layer_surface)` — freeing the struct itself, not just the tree. Hikari kept running past that point with a dangling `layer->scene_layer_surface` and a dangling `layer->surface`, still linked into `output->layers[]`. Any `arrange_layers()` in that window configured through the freed pointer, and `hikari_layer_fini` later destroyed an already-freed scene node. The `!= NULL` guards were useless because the pointer was dangling, not NULL. Symptomatically this presented as "bad memory management" and "several programs open causes crashing" — the freed-heap writes corrupted memory the allocator had recycled, so crashes surfaced later in unrelated code.
+* **Decision:** Register hikari's destroy listener on `wlr_layer_surface->events.destroy`, sharing the signal with wlroots so both teardowns have one defined ordering. Because wlroots subscribes first (during `wlr_scene_layer_surface_v1_create`, before hikari's registration) its handler runs first, so `destroy_handler` now nulls `layer->scene_layer_surface` as its very first action — making every downstream guard genuinely protective. `hikari_layer_fini` no longer calls `wlr_scene_node_destroy`; wlroots owns that teardown. `unmap()`'s map-listener re-arm is guarded, with a `wl_list_init` fallback so `fini`'s unconditional `wl_list_remove` stays balanced on the destroy path.
+* **Impact:** Removes a use-after-free on every layer-surface teardown — the crash behind layer-shell clients (waybar and similar) taking down the compositor.
+
+---
+
 ## [2026-08-20] Phase 38: Window Creation Crash and Scene Tree Ownership
 
 *(Timestamp source: session context date. The assistant was directed to use IDE
