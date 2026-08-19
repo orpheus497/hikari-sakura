@@ -64,7 +64,7 @@ commit_handler(struct wl_listener *listener, void *data)
     return;
   }
 
-  if (!xdg_surface->surface->mapped) {
+  if (!surface->surface->mapped) {
     return;
   }
 

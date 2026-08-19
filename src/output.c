@@ -408,8 +408,6 @@ destroy_handler(struct wl_listener *listener, void *data)
 void
 hikari_output_init(struct hikari_output *output, struct wlr_output *wlr_output)
 {
-  assert(!output->enabled);
-
   bool noop = wlr_output->backend == hikari_server.noop_backend;
 
   output->wlr_output = wlr_output;
@@ -419,6 +417,11 @@ hikari_output_init(struct hikari_output *output, struct wlr_output *wlr_output)
   output->scene_output = NULL;
   output->lock_indicator_node = NULL;
   output->background = NULL;
+  // [COMMENT] Action purpose: Establish the disabled baseline BEFORE asserting
+  // on it. Callers (new_output_handler, init_noop_output) allocate the output
+  // with hikari_malloc, which does not zero memory, so asserting first would
+  // read an indeterminate value and could abort on a perfectly valid output in
+  // debug builds.
   output->enabled = false;
   output->workspace = hikari_malloc(sizeof(struct hikari_workspace));
   assert(output->workspace != NULL);

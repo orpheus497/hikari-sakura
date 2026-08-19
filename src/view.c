@@ -435,6 +435,12 @@ hikari_view_init(
   view->id = NULL;
   view->tile = NULL;
   view->decoration.wlr_decoration = NULL;
+  /* [COMMENT] Action purpose: Explicitly null the scene node. The containing
+  hikari_xdg_view / hikari_xwayland_view structs are allocated with
+  hikari_malloc, which does not zero memory, and show/hide/geometry-refresh
+  guard on `scene_node != NULL`. Leaving it indeterminate lets uninitialised
+  garbage pass those guards and be dereferenced as a scene node. */
+  view->scene_node = NULL;
   view->use_csd = false;
   view->child = child;
   view->current_geometry = &view->geometry;

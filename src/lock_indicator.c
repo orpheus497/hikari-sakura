@@ -109,10 +109,23 @@ hikari_lock_indicator_fini(struct hikari_lock_indicator *lock_indicator)
     }
   }
 
-  wlr_buffer_drop(lock_indicator->wait);
-  wlr_buffer_drop(lock_indicator->type);
-  wlr_buffer_drop(lock_indicator->verify);
-  wlr_buffer_drop(lock_indicator->deny);
+  // [COMMENT] Action purpose: Guard each drop against NULL. init_indicator_circle
+  // returns NULL when buffer creation fails (no ARGB8888 texture format,
+  // allocator failure, or a failed mapped-write), and wlr_buffer_drop does not
+  // accept NULL. Without these guards, unlocking after any indicator buffer
+  // failed to allocate dereferences a null pointer during teardown.
+  if (lock_indicator->wait != NULL) {
+    wlr_buffer_drop(lock_indicator->wait);
+  }
+  if (lock_indicator->type != NULL) {
+    wlr_buffer_drop(lock_indicator->type);
+  }
+  if (lock_indicator->verify != NULL) {
+    wlr_buffer_drop(lock_indicator->verify);
+  }
+  if (lock_indicator->deny != NULL) {
+    wlr_buffer_drop(lock_indicator->deny);
+  }
 
   wl_event_source_remove(lock_indicator->reset_state);
 }
@@ -189,8 +202,6 @@ void
 hikari_lock_indicator_damage(struct hikari_lock_indicator *lock_indicator)
 {
   assert(lock_indicator != NULL);
-
-  struct wlr_box geometry;
 
   struct hikari_output *output;
   // [COMMENT] Action purpose: Iterate over all outputs to update lock indicator

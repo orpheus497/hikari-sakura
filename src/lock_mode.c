@@ -33,6 +33,16 @@ extern void explicit_bzero(void *, size_t);
 
 #define BUFFER_SIZE 1024
 
+// [COMMENT] Action purpose: Resolve the unlock helper through a compile-time
+// absolute path rather than the inherited PATH. hikari-unlocker is installed
+// setuid (mode 4555); resolving it via `/bin/sh -c "hikari-unlocker"` would let
+// a caller-controlled PATH substitute an impostor helper that reports
+// authentication success without verifying the password. HIKARI_PREFIX is
+// supplied by the Makefile and matches the install destination.
+#define HIKARI_STR_INNER(s) #s
+#define HIKARI_STR(s) HIKARI_STR_INNER(s)
+#define HIKARI_UNLOCKER_PATH HIKARI_STR(HIKARI_PREFIX) "/bin/hikari-unlocker"
+
 static char input_buffer[BUFFER_SIZE];
 static int cursor = 0;
 static int locker_pipe[2][2] = { { -1, -1 }, { -1, -1 } };
@@ -128,7 +138,11 @@ start_unlocker(void)
       close(locker_pipe[1][1]);
     }
 
-    execl("/bin/sh", "/bin/sh", "-c", "hikari-unlocker", NULL);
+    // [COMMENT] Action purpose: Execute the helper directly at its absolute
+    // install path. Avoiding the /bin/sh -c indirection removes both the PATH
+    // lookup and the shell's own metacharacter/environment handling from the
+    // authentication path.
+    execl(HIKARI_UNLOCKER_PATH, "hikari-unlocker", NULL);
     // [COMMENT] Action purpose: Reached only when execl fails. The child must
     // not report success: emit a diagnostic (stderr survives the stdin/stdout
     // rewiring) and exit non-zero so the failure is diagnosable. _exit skips
@@ -219,9 +233,15 @@ locker_result_handler(int fd, uint32_t mask, void *data)
 
   // [COMMENT] Action purpose: Determine whether this result is terminal (the
   // child has exited or will exit) or retryable (wrong password, child stays
-  // alive for the next attempt). Terminal conditions: success, hangup without
-  // result, or read failure. Retryable: got_result is true but success is false.
-  bool terminal = success || !got_result;
+  // alive for the next attempt). Terminal conditions: success, read failure,
+  // or ANY hangup. WL_EVENT_READABLE and WL_EVENT_HANGUP can be delivered in
+  // the same callback when the child writes a false result and then exits; in
+  // that case got_result is true and success is false, so without the explicit
+  // hangup term this would be misclassified as retryable, leaving locker_pid
+  // unreaped and the pipe fds open on a dead child. The next password attempt
+  // would then write into a broken pipe. Retryable: a complete false result
+  // read while the helper is still alive.
+  bool terminal = success || !got_result || (mask & WL_EVENT_HANGUP);
 
   // [COMMENT] Action purpose: Remove the fd event source now that we have a
   // result. The source must be cleaned up before closing the pipe fds.

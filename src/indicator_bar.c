@@ -61,9 +61,14 @@ hikari_indicator_bar_position(struct hikari_indicator_bar *indicator_bar,
     return;
   }
 
+  // [COMMENT] Action purpose: Add the output's layout origin to the view-local
+  // geometry. View geometry is stored output-local, while scene node positions
+  // are layout-global (the same conversion output_layout_change_handler applies
+  // when repositioning view scene nodes). Without it, indicator bars render at
+  // the wrong global position on any output not placed at layout origin (0,0).
   wlr_scene_node_set_position(&indicator_bar->scene_buffer->node,
-      view_geometry->x + 5,
-      view_geometry->y + indicator_bar->offset);
+      output->geometry.x + view_geometry->x + 5,
+      output->geometry.y + view_geometry->y + indicator_bar->offset);
 }
 
 // [COMMENT] Function purpose: Replace the existing scene buffer (if any) and
