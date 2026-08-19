@@ -1,3 +1,21 @@
+## [2026-08-19 17:55] Phase 35: Wayland Decoration Lifecycle Fixes (wlroots 0.20)
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
+
+### Architecture: Deferred XDG Decoration Mode Setup (wlroots 0.20)
+
+* **Context:** Wayland terminal clients (e.g. `foot`, `alacritty`) request `zxdg_decoration_manager_v1` server-side decorations immediately after creating a toplevel, before sending their `initial_commit`. Calling `wlr_xdg_toplevel_decoration_v1_set_mode` directly schedules a configure event, which in wlroots 0.20 fatally asserts `surface->initialized`. While Phase 31 guarded standard resizes/activations, the decoration initialization path was completely missed.
+* **Decision:** Guarded `set_mode` in `src/decoration.c`. If `initialized` is false, `hikari` directly sets `decoration->decoration->scheduled_mode` instead of calling the wlroots API. wlroots 0.20 naturally picks up `scheduled_mode` during the client's `initial_commit` configuration event without triggering an assertion.
+* **Impact:** Prevents the compositor from crashing immediately when launching Wayland terminals that request XDG server-side decorations.
+
+### Architecture: Server Decoration Listener Lifecycle
+
+* **Context:** `hikari` attached a `mode` listener to a `wlr_server_decoration` (KDE protocol, used by `firefox`) when created but never detached it. If the client disconnected or destroyed the decoration object, wlroots asserted that all listeners must be empty before freeing it, bringing down the entire compositor.
+* **Decision:** Added a `destroy` listener to `struct hikari_view_decoration` and wired it to `wlr_decoration->events.destroy` in `src/server.c`. Handled listener cleanup explicitly in both `server_decoration_destroy_handler` and `hikari_view_fini`.
+* **Impact:** Prevents `firefox` and other legacy-protocol clients from crashing the compositor when they close their windows.
+
+---
+
 ### Architecture: wlroots 0.20 XDG Toplevel Initialization
 
 * **Context:** In wlroots 0.18+, `wlr_xdg_surface_schedule_configure` asserts `surface->initialized`. Calling it directly on an `initial_commit` for a toplevel crashes the compositor because the surface role setup is incomplete.

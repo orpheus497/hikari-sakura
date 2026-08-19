@@ -34,6 +34,7 @@ struct hikari_view_decoration {
   struct wlr_server_decoration *wlr_decoration;
   struct hikari_view *view;
   struct wl_listener mode;
+  struct wl_listener destroy;
 };
 
 /* Base representation of a managed window view, encapsulating surface state, geometry, sheet, group, mark, and tile associations. */

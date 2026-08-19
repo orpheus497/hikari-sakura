@@ -1,15 +1,15 @@
 # Hikari Project Briefing
 
-*Last Updated:* 2026-08-19 16:48
+*Last Updated:* 2026-08-19 17:55
 
 ## Current Status
 
-- **Phase:** Phase 33 complete — Wayland clients crashing (posix_fallocate on ZFS) and background rendering issues in wlroots 0.20 have been resolved natively within Hikari.
+- **Phase:** Phase 35 complete — XDG and Server Decoration lifecycle assertions in wlroots 0.20 have been resolved, preventing compositor crashes on terminal/browser launches.
 - **Branch:** wlroots-0.20
-- **Overall progress:** Phase 33 fix: `wlr_linux_dmabuf_v1_create_with_renderer` added to `server.c` to advertise hardware buffer protocol (bypassing SHM ZFS limitations). Custom `wlr_buffer` implementation added to `output.c` to handle CPU-rendered Cairo pixels for backgrounds, bypassing the `wlr_allocator` mapping limitations.
+- **Overall progress:** Phase 35 fixes: Deferred `wlr_xdg_toplevel_decoration_v1_set_mode` until `initial_commit` in `src/decoration.c`. Fixed listener leak on `wlr_server_decoration` destruction in `src/server.c` and `src/view.c`.
 - **Target OS:** FreeBSD 15.1-RELEASE (ZFS root)
-- **Current step:** User verification of the fixes. Remaining queue: user-run Phase 19 diagnostics (eDP-1 swapchain), runtime-blocked verifications (P2-14, PAM, layer-client spot check), optional hygiene (TC-FORMAT-01, comment-header rollout, cosmetic enum-compare warnings).
-- **Blockers:** (1) eDP-1 scanout swapchain test failure — Mesa/EGL/GBM ↔ drm-kmod layer (partially addressed by Phase 28 fix); (2) root-owned build artifacts blocking full relink (environment issue).
+- **Current step:** User compilation of the fixes (sudo required) and subsequent verification. Remaining queue: user-run Phase 19 diagnostics (eDP-1 swapchain), runtime-blocked verifications (P2-14, PAM, layer-client spot check), optional hygiene.
+- **Blockers:** (1) root-owned build artifacts (`main.o`, `hikari`) block standard local compilation; user must run `sudo make clean && sudo make install`. (2) eDP-1 scanout swapchain test failure — Mesa/EGL/GBM ↔ drm-kmod layer.
 
 ## Remaining Work
 

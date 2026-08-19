@@ -551,6 +551,17 @@ server_decoration_mode_handler(struct wl_listener *listener, void *data)
 }
 
 static void
+server_decoration_destroy_handler(struct wl_listener *listener, void *data)
+{
+  struct hikari_view_decoration *decoration =
+      wl_container_of(listener, decoration, destroy);
+
+  wl_list_remove(&decoration->mode.link);
+  wl_list_remove(&decoration->destroy.link);
+  decoration->wlr_decoration = NULL;
+}
+
+static void
 server_decoration_handler(struct wl_listener *listener, void *data)
 {
   struct wlr_server_decoration *wlr_decoration = data;
@@ -590,6 +601,9 @@ server_decoration_handler(struct wl_listener *listener, void *data)
 
   wl_signal_add(&wlr_decoration->events.mode, &xdg_view->view.decoration.mode);
   xdg_view->view.decoration.mode.notify = server_decoration_mode_handler;
+
+  wl_signal_add(&wlr_decoration->events.destroy, &xdg_view->view.decoration.destroy);
+  xdg_view->view.decoration.destroy.notify = server_decoration_destroy_handler;
 
   xdg_view->view.decoration.wlr_decoration = wlr_decoration;
   xdg_view->view.decoration.view = &xdg_view->view;

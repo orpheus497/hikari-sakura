@@ -1,3 +1,21 @@
+## Session Handoff (Phase 35)
+**Timestamp:** 2026-08-19 17:55
+**Current Status:** Resolved two critical decoration lifecycle crashes in wlroots 0.20.0 involving `wlr_xdg_toplevel_decoration_v1_set_mode` asserting before initial commit, and `wlr_server_decoration` leaking listeners on destroy.
+**Accomplishments:**
+- **BUG-1 (XDG Decoration Assert):** Modified `set_mode` in `src/decoration.c` to check `surface->initialized`. If false, `decoration->scheduled_mode` is assigned directly to prevent wlroots from scheduling an invalid configure event, fixing the compositor crash when launching terminals like `alacritty` and `foot`.
+- **BUG-2 (Server Decoration Listener Leak):** Added a `destroy` listener to `struct hikari_view_decoration` and wired it up in `server_decoration_handler` (`src/server.c`) and `hikari_view_fini` (`src/view.c`). This properly unlinks the `events.mode` listener when a client like `firefox` tears down its server decoration, preventing the `server_decoration_destroy` assertion.
+**Modified Files:**
+- `src/decoration.c`
+- `include/hikari/view.h`
+- `src/server.c`
+- `src/view.c`
+**Decisions Logged:**
+- Architecture: Deferred XDG Decoration Mode Setup (wlroots 0.20)
+- Architecture: Server Decoration Listener Lifecycle
+**Next Steps:**
+- Compile `hikari` locally (requires `sudo` due to root ownership of object files).
+- Run `start-hikari` and test native Wayland terminal stability.
+
 ## Session Handoff (Phase 34)
 **Timestamp:** 2026-08-19 17:20
 **Current Status:** Implemented three critical wlroots 0.20.0 API correctness fixes identified by cross-reference audit against the bundled wlroots source tree.

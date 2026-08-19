@@ -456,6 +456,11 @@ hikari_view_fini(struct hikari_view *view)
   printf("DESTROY VIEW %p\n", view);
 #endif
 
+  if (view->decoration.wlr_decoration != NULL) {
+    wl_list_remove(&view->decoration.mode.link);
+    wl_list_remove(&view->decoration.destroy.link);
+  }
+
   hikari_free(view->title);
   hikari_free(view->id);
 
