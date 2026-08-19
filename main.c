@@ -232,8 +232,15 @@ parse_options(int argc, char **argv, struct options *options)
 int
 main(int argc, char **argv)
 {
+  // [COMMENT] Action purpose: Enable verbose wlroots logging in debug builds only.
+  // wlr_log_init and WLR_DEBUG are declared in <wlr/util/log.h>, which is
+  // included only under #ifndef NDEBUG above. The call must be guarded
+  // identically or it will reference undeclared identifiers in release builds.
+#ifndef NDEBUG
   wlr_log_init(WLR_DEBUG, NULL);
+#endif
   struct options options;
+
   parse_options(argc, argv, &options);
 
   /* [COMMENT] Action purpose: Check if configuration file path was resolved successfully. */

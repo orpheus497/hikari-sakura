@@ -4,7 +4,43 @@
 
 ---
 
-## Session Date: 2026-08-19 12:17 — Phase 28: `request_state_handler` Startup CRTC Disable Guard
+## Session Date: 2026-08-19 13:05 — Phase 29: Debug Infrastructure Hardening
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
+
+### Accomplishments
+
+1. **Makefile `DEBUG` flags hardened:** Removed `-fsanitize=address` from the default `DEBUG=YES` build. ASan intercepts `mmap(2)` used by wlroots GBM/DRM for DMA buffer mapping and will crash or false-positive before the DRM backend initialises — making it useless (and actively harmful) for debugging the startup CRTC path. ASan is now opt-in via `make DEBUG=YES ASAN=YES`. Base debug build: `-g -Werror -Wno-unused-function -Wno-unused-variable -O0`. Dry-run verified: no `-fsanitize=address` in the `DEBUG=YES` CFLAGS output.
+2. **`.vscode/launch.json` fixed:** (a) `setupCommands` added to nested and native-session configs — `breakpoint set --name request_state_handler` is pre-set, so the Phase 28 guard is immediately observable without manual lldb interaction. (b) Native-session config now includes the full required compositor env: `LIBSEAT_BACKEND=seatd`, `XDG_RUNTIME_DIR=/var/run/user/1001`, `WLR_DRM_DEVICES=/dev/drm/0`. Previously absent env vars would have caused seat acquisition or DRM device enumeration failure on a bare VT debug launch. (c) Inline comments document each config's use-case and the lldb19/lldb-mi situation.
+3. **`.vscode/tasks.json` updated:** Single debug task split into three: `make: build (debug)` (no ASan, wired to launch configs), `make: build (debug + ASan)` (opt-in, warns of DRM incompatibility), `make: build (full feature, debug)` (WITH_ALL, no ASan). Detail strings updated.
+4. **Devdocs updated:** `BRIEFING.md`, `DECISIONS_LOG.md`, `SESSION_HANDOFF.md`.
+
+### Modified Files
+
+| File | Change |
+|---|---|
+| `Makefile` | `DEBUG` block: `-fsanitize=address` removed, moved to `.ifdef ASAN` opt-in with LDFLAGS |
+| `.vscode/launch.json` | `setupCommands` (breakpoint + pretty-print), native-session env vars, inline doc comments |
+| `.vscode/tasks.json` | Three-way debug task split; ASan incompatibility warnings |
+| `.devdocs/BRIEFING.md` | Phase 29 status |
+| `.devdocs/DECISIONS_LOG.md` | Phase 29 decision entry |
+| `.devdocs/SESSION_HANDOFF.md` | This entry |
+
+### Key Decisions
+
+- ASan exclusion from default debug build is architectural: it is incompatible with any program that uses `mmap`-based DMA (DRM/GBM). This is not a temporary workaround — it is the correct long-term split.
+- `lldb` (base binary) is broken on this system (`libclang-cpp.so.21.1` missing). `lldb19` is the correct versioned binary. `lldb-mi` (MI stub) routes through `lldb19` and is what the VSCode configs use — this path is functional.
+- `WLR_DRM_DEVICES=/dev/drm/0` in the native-session launch config is a best-guess default. If the system has a different DRM node, the user should update this value.
+
+### Next Steps
+
+1. **Unblock the relink:** `sudo chown orpheus497 /home/orpheus497/Projects/hikari/src/main.o /home/orpheus497/Projects/hikari/hikari` (or clean and rebuild as yourself). Then `make DEBUG=YES` to get a fresh debug binary.
+2. **Set the Phase 28 breakpoint and launch (nested config):** Use `hikari (nested, inherits session)` to confirm `request_state_handler` fires with `!event->state->enabled && !output->enabled` and returns early — then continue and verify no `"Failed to disable CRTC"` message appears.
+3. **Native VT test:** Once nested test passes, boot on the bare VT to confirm the eDP-1 swapchain error (if any) now surfaces cleanly from the Phase 25 `fprintf` in `hikari_output_init`.
+
+---
+
+
 
 *(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
 

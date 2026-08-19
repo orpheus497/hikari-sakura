@@ -4,7 +4,19 @@
 
 ---
 
-## [2026-08-19 12:17] Phase 28: `request_state_handler` startup CRTC disable guard
+## [2026-08-19 13:05] Phase 29: Debug Infrastructure Hardening
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
+
+* **Context:** Pre-runtime-verification audit found that the debug build infrastructure had two blockers preventing useful lldb sessions on the compositor.
+* **Decision 1 — Makefile `DEBUG` flags (`Makefile:90-94`):** Removed `-fsanitize=address` from the default `DEBUG=YES` build. ASan is incompatible with the wlroots DRM/GBM backend because it intercepts `mmap(2)` calls used for DMA buffer mapping; running a compositor under ASan causes false-positives or outright crashes before the DRM probe even completes — the exact path under inspection. ASan is now an explicit opt-in via `make DEBUG=YES ASAN=YES` with a clear warning in the Makefile comment and `tasks.json`. The base debug build retains `-g -Werror -Wno-unused-function -Wno-unused-variable -O0`.
+* **Decision 2 — `.vscode/launch.json`:** (a) Added `setupCommands` to both launch configs: `breakpoint set --name request_state_handler` pre-set so the Phase 28 guard is observable on first launch without manual lldb typing. (b) Native-session config gained the full set of env vars required for a bare Wayland compositor launch: `LIBSEAT_BACKEND=seatd`, `XDG_RUNTIME_DIR=/var/run/user/1001`, `WLR_DRM_DEVICES=/dev/drm/0`. Previously those were absent, meaning a native-session debug launch would have failed at seat acquisition or DRM device enumeration. (c) Added inline comments explaining each config's use-case and the lldb-mi/lldb19 situation.
+* **Decision 3 — `.vscode/tasks.json`:** Split the previous single debug task into three: `make: build (debug)` (no ASan, used by launch configs), `make: build (debug + ASan)` (opt-in, with an explicit incompatibility warning), `make: build (full feature, debug)` (WITH_ALL, no ASan). Updated detail strings to document why ASan is excluded.
+* **Decision 4 — `main.c` `wlr_log_init` guard (`main.c:235`):** The `wlr_log_init(WLR_DEBUG, NULL)` call was unconditional in `main()` but its header `<wlr/util/log.h>` was included only under `#ifndef NDEBUG`. In a clean `DEBUG=YES` build (no stale objects) this caused a compile error: `undeclared identifier 'WLR_DEBUG'` / `call to undeclared function 'wlr_log_init'`. The release builds had previously masked this by reusing a stale `main.o`. Fixed by wrapping the call in `#ifndef NDEBUG` / `#endif` to match the include guard. This was a latent bug that would have surfaced on any clean debug build.
+* **Full debug build verified:** `make DEBUG=YES` → EXIT:0, zero errors, zero warnings across all translation units. `hikari` binary: 407K, owned by `orpheus497`, timestamp 13:11. The debug binary is ready for lldb.
+
+---
+
 
 *(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
 

@@ -88,7 +88,17 @@ CFLAGS += ${CFLAGS_EXTRA}
 LDFLAGS += ${LDFLAGS_EXTRA}
 
 .ifdef DEBUG
-CFLAGS += -g -Werror -Wno-unused-function -Wno-unused-variable -O0 -fsanitize=address
+# [COMMENT] Action purpose: Debug build — full symbols, no optimisation, strict
+# warnings. ASan is deliberately excluded from the base debug build because
+# wlroots/GBM maps DMA buffers via mmap(2) directly; ASan intercepts those
+# calls and either false-positives or crashes the compositor before the DRM
+# backend initialises. Enable ASan only when explicitly needed via ASAN=YES
+# (e.g. unit-testing non-graphics code paths).
+CFLAGS += -g -Werror -Wno-unused-function -Wno-unused-variable -O0
+.ifdef ASAN
+CFLAGS += -fsanitize=address
+LDFLAGS += -fsanitize=address
+.endif
 .else
 CFLAGS += -DNDEBUG
 .endif

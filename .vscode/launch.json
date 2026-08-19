@@ -2,7 +2,11 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "hikari (nested, inherits X11/Wayland session)",
+            // Run inside an existing Wayland/X11 session (nested compositor).
+            // wlroots will auto-detect WAYLAND_DISPLAY or DISPLAY and launch
+            // in headless/nested mode. The simplest way to catch the startup
+            // CRTC issue without needing a VT switch.
+            "name": "hikari (nested, inherits session)",
             "type": "cppdbg",
             "request": "launch",
             "program": "${workspaceFolder}/hikari",
@@ -12,11 +16,31 @@
             "environment": [],
             "externalConsole": false,
             "MIMode": "lldb",
+            // lldb-mi is an MI stub over lldb. Base `lldb` binary is broken
+            // (missing libclang-cpp.so.21.1 for the currently installed llvm).
+            // lldb19 is the correct versioned binary on this system.
             "miDebuggerPath": "/usr/local/bin/lldb-mi",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing",
+                    "text": "settings set target.language c",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Break on request_state_handler to observe the Phase 28 guard",
+                    "text": "breakpoint set --name request_state_handler",
+                    "ignoreFailures": true
+                }
+            ],
             "preLaunchTask": "make: build (debug)"
         },
         {
-            "name": "hikari (native session, no nesting)",
+            // Run on a bare VT as the primary Wayland compositor.
+            // Requires XDG_RUNTIME_DIR to be set correctly in the environment
+            // before launching (or via start-hikari.sh which handles this).
+            // LIBSEAT_BACKEND=seatd ensures wlroots uses libseat for DRM
+            // master rather than attempting a direct logind/devd path.
+            "name": "hikari (native session, bare VT)",
             "type": "cppdbg",
             "request": "launch",
             "program": "${workspaceFolder}/hikari",
@@ -24,16 +48,47 @@
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",
             "environment": [
-                { "name": "XDG_SESSION_TYPE", "value": "wayland" },
-                { "name": "XDG_SESSION_CLASS", "value": "user" },
-                { "name": "XDG_CURRENT_DESKTOP", "value": "Hikari" }
+                { "name": "XDG_SESSION_TYPE",    "value": "wayland" },
+                { "name": "XDG_SESSION_CLASS",   "value": "user" },
+                { "name": "XDG_CURRENT_DESKTOP", "value": "Hikari" },
+                // seatd is the seat manager on this FreeBSD system.
+                // Without this wlroots may try logind and fail silently.
+                { "name": "LIBSEAT_BACKEND",     "value": "seatd" },
+                // XDG_RUNTIME_DIR must already exist as a tmpfs mount;
+                // if it is a ZFS dataset the wl_shm fallback applies (known
+                // limitation — see BLUEPRINT §5 / BRIEFING blockers).
+                { "name": "XDG_RUNTIME_DIR",     "value": "/var/run/user/1001" },
+                // WLR_DRM_DEVICES lets you pin to a specific GPU node if
+                // the system has multiple DRM devices (e.g. /dev/drm/0).
+                { "name": "WLR_DRM_DEVICES",     "value": "/dev/drm/0" }
             ],
             "externalConsole": false,
             "MIMode": "lldb",
             "miDebuggerPath": "/usr/local/bin/lldb-mi",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing",
+                    "text": "settings set target.language c",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Break on request_state_handler to observe Phase 28 guard",
+                    "text": "breakpoint set --name request_state_handler",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Log wlroots DRM backend events to stderr",
+                    "text": "process launch --environment WLR_DRM_NO_ATOMIC=0",
+                    "ignoreFailures": true
+                }
+            ],
             "preLaunchTask": "make: build (debug)"
         },
         {
+            // Debug the PAM unlocker binary in isolation.
+            // hikari-unlocker is a standalone setuid helper; running it
+            // directly under lldb requires the binary to be built without
+            // setuid (debug build strips the suid bit via install perms).
             "name": "hikari-unlocker (standalone)",
             "type": "cppdbg",
             "request": "launch",

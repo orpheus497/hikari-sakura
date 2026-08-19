@@ -1,10 +1,10 @@
 # Hikari Project Briefing
 
-*Last Updated:* 2026-08-19 12:17
+*Last Updated:* 2026-08-19 13:11
 
 ## Current Status
 
-- **Phase:** Phase 28 — `request_state_handler` startup CRTC disable guard — executed and compiled clean.
+- **Phase:** Phase 29 complete — Debug binary ready. `make DEBUG=YES` → EXIT:0, 407K `hikari` binary with `-g -O0`, no ASan. `request_state_handler` breakpoint pre-set in launch.json. Ready for lldb session to verify Phase 28 guard.
 - **Branch:** wlroots-0.17.1 (stale label — tree builds against installed wlroots 0.20.x)
 - **Overall progress:** Phase 24 hardening stream fully closed. Phase 27 deep architectural mapping complete. Phase 28 fix: `request_state_handler` in `src/output.c` now guards against wlroots 0.20 emitting disable-CRTC `request_state` events during initial DRM probe, resolving the "Failed to disable CRTC <N>" startup error. `output.o` compiles warning-clean (EXIT:0). Full relink blocked by root-owned `main.o`/`hikari` binary — pre-existing environment issue, not a code defect.
 - **Target OS:** FreeBSD 15.1-RELEASE (ZFS root)

@@ -29,9 +29,9 @@ Maintain the following files to manage state and continuity:
 
 Documentation precedes code. All files must be reviewed and updated to meet this standard. Use the following exact prefixes directly above the relevant code blocks, using the native comment syntax of the language (e.g., `//`, `#`, or `##`), to ensure immediate legibility:
 
-* `[COMMENT] Script function and purpose:` [What this script does] - Top of every script/source.
-* `[COMMENT] Function purpose:` [Why this function exists and how it is used] - Before standalone functions.
-* `[COMMENT] Action purpose:` [Why this logic is being used and an explanation of how it is supposed to work] - Before highly specific actions/commands.
+* `Script function and purpose:` [What this script does] - Top of every script/source.
+* `Function purpose:` [Why this function exists and how it is used] - Before standalone functions.
+* `Action purpose:` [Why this logic is being used and an explanation of how it is supposed to work] - Before highly specific actions/commands.
 
 ## OPERATIONAL WORKFLOW
 
