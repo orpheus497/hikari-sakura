@@ -1,3 +1,21 @@
+## Session Handoff (Phase 34)
+**Timestamp:** 2026-08-19 17:20
+**Current Status:** Implemented three critical wlroots 0.20.0 API correctness fixes identified by cross-reference audit against the bundled wlroots source tree.
+**Accomplishments:**
+- **BUG-1/BUG-2 (layer shell — root cause of every layer client failure):** Completely rewrote `src/layer_shell.c`. Removed the hand-rolled `calculate_geometry()` / `calculate_exclusive()` / `apply_state_for_layer()` stack which called `wlr_layer_surface_v1_configure()` both before `surface->initialized` was set (hard assert in wlroots 0.20) and without using the scene API. Replaced with `arrange_layers()` which drives `wlr_scene_layer_surface_v1_configure()` for every layer surface on the output — the correct scene-compositor API that handles geometry computation, scene node positioning, configure dispatch, and exclusive zone tracking in one correct call. Added `layer->surface->initial_commit` guard in `commit_handler()`. Removed premature `calculate_geometry()` call from `hikari_layer_init()` which fired before any commit and before `initialized` was set.
+- **BUG-3 (dmabuf scene wiring):** In `src/server.c`, the return value of `wlr_linux_dmabuf_v1_create_with_renderer()` was previously discarded. Now stored and passed to `wlr_scene_set_linux_dmabuf_v1()` immediately after `setup_scene_graph()`. Without this, the scene could not send per-surface DMA-BUF format/modifier feedback to GPU clients, causing GL errors, wrong buffer formats, and black windows.
+- **BUG-5 (output.h naked assert):** Replaced `assert(output->enabled)` in `hikari_output_add_effective_surface_damage()` with a guarded early return. The assert was firing during commit processing on disabled or transitioning outputs.
+- All three changed files (`layer_shell.c`, `server.c`, `output.h`) compiled clean with zero warnings.
+**Modified Files:**
+- `src/layer_shell.c` (complete rewrite)
+- `src/server.c` (dmabuf wiring)
+- `include/hikari/output.h` (assert → guard)
+**Build Note:**
+- `main.o` and the `hikari` binary are owned by root from a previous `sudo make`. Run `sudo make clean && sudo make install` to build and deploy the fixed binary.
+**Next Steps:**
+- Run `sudo make clean && sudo make install` on the target FreeBSD system.
+- Start hikari natively and verify: layer shell clients (rofi, waybar, mako) map and render correctly; GPU terminals do not show GL errors; foot/alacritty open without Wayland pipe breaks.
+
 ## Session Handoff (Phase 33)
 **Timestamp:** 2026-08-19 16:48
 **Current Status:** Resolved Wayland client `posix_fallocate` crashes on ZFS and the wlroots 0.20 `wlr_allocator` background rendering issue.

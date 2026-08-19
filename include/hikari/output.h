@@ -105,11 +105,17 @@ hikari_output_add_effective_surface_damage(
     struct hikari_output *output, struct wlr_surface *surface, int x, int y)
 {
   assert(surface != NULL);
-  assert(output->enabled);
 
-  if (output->scene_output != NULL) {
-    wlr_output_schedule_frame(output->wlr_output);
+  // [COMMENT] Action purpose: Guard against calling this on a disabled or
+  // transitioning output. The assert(output->enabled) pattern fires when
+  // commit handlers run during output teardown or before full init; a guarded
+  // return matches the pattern used by hikari_output_add_damage and prevents
+  // assert crashes in layer shell and XDG commit paths.
+  if (!output->enabled || output->scene_output == NULL) {
+    return;
   }
+
+  wlr_output_schedule_frame(output->wlr_output);
 }
 
 #endif

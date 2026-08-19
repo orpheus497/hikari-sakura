@@ -971,7 +971,6 @@ server_init(struct hikari_server *server, char *config_path)
   }
 
   wlr_shm_create_with_renderer(server->display, 1, server->renderer);
-  wlr_linux_dmabuf_v1_create_with_renderer(server->display, 4, server->renderer);
 
   server->allocator =
       wlr_allocator_autocreate(server->backend, server->renderer);
@@ -1026,6 +1025,19 @@ server_init(struct hikari_server *server, char *config_path)
   setup_xwayland(server);
 #endif
   setup_scene_graph(server);
+
+  /* [COMMENT] Action purpose: Create the linux-dmabuf-v1 protocol object and
+  register it with the scene graph. wlr_scene_set_linux_dmabuf_v1() enables
+  the scene to send per-surface DMA-BUF format/modifier feedback to clients.
+  Without this, GPU-accelerated clients (GPU terminals, Electron, etc.) cannot
+  negotiate optimal buffer formats and fall back to wl_shm or pick wrong
+  modifiers, causing GL errors, black windows, or posix_fallocate crashes on
+  ZFS. Must be called AFTER setup_scene_graph() since the scene must exist. */
+  struct wlr_linux_dmabuf_v1 *linux_dmabuf =
+      wlr_linux_dmabuf_v1_create_with_renderer(server->display, 4, server->renderer);
+  if (linux_dmabuf != NULL) {
+    wlr_scene_set_linux_dmabuf_v1(server->scene, linux_dmabuf);
+  }
   setup_cursor(server);
 #ifdef HAVE_VIRTUAL_INPUT
   setup_virtual_keyboard(server);

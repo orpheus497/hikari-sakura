@@ -47,7 +47,7 @@ static void
 focus(struct hikari_node *node);
 
 static void
-calculate_geometry(struct hikari_layer *layer);
+arrange_layers(struct hikari_output *output);
 
 static void
 init_layer_popup(struct hikari_layer_popup *layer_popup,
@@ -83,111 +83,100 @@ new_popup_popup_handler(struct wl_listener *listener, void *data);
 static struct hikari_layer *
 get_layer(struct hikari_layer_popup *popup);
 
+/* [COMMENT] Function purpose: Arrange all layer surfaces for a given output
+using wlr_scene_layer_surface_v1_configure(), which handles geometry computation,
+scene node positioning, wlr_layer_surface_v1_configure() dispatch, and exclusive
+zone tracking in a single correct call. Updates output->usable_area for views.
+Must only be called AFTER the surface's initial_commit (initialized == true). */
 static void
-apply_layer_state(struct wlr_box *usable_area,
-    uint32_t anchor,
-    int32_t exclusive,
-    int32_t margin_top,
-    int32_t margin_right,
-    int32_t margin_bottom,
-    int32_t margin_left)
-{
-  if (exclusive <= 0) {
-    return;
-  }
-  struct {
-    uint32_t anchors;
-    int *positive_axis;
-    int *negative_axis;
-    int margin;
-  } edges[] = {
-    {
-        .anchors = ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT |
-                   ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT |
-                   ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP,
-        .positive_axis = &usable_area->y,
-        .negative_axis = &usable_area->height,
-        .margin = margin_top,
-    },
-    {
-        .anchors = ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT |
-                   ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT |
-                   ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM,
-        .positive_axis = NULL,
-        .negative_axis = &usable_area->height,
-        .margin = margin_bottom,
-    },
-    {
-        .anchors = ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT |
-                   ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP |
-                   ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM,
-        .positive_axis = &usable_area->x,
-        .negative_axis = &usable_area->width,
-        .margin = margin_left,
-    },
-    {
-        .anchors = ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT |
-                   ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP |
-                   ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM,
-        .positive_axis = NULL,
-        .negative_axis = &usable_area->width,
-        .margin = margin_right,
-    },
-  };
-  for (size_t i = 0; i < sizeof(edges) / sizeof(edges[0]); ++i) {
-    if ((anchor & edges[i].anchors) == edges[i].anchors &&
-        exclusive + edges[i].margin > 0) {
-      if (edges[i].positive_axis) {
-        *edges[i].positive_axis += exclusive + edges[i].margin;
-      }
-      if (edges[i].negative_axis) {
-        *edges[i].negative_axis -= exclusive + edges[i].margin;
-      }
-    }
-  }
-}
-
-static void
-apply_state_for_layer(struct hikari_output *output,
-    enum zwlr_layer_shell_v1_layer wlr_layer,
-    struct wlr_box *usable_area)
-{
-  struct hikari_layer *layer;
-
-  wl_list_for_each (layer, &output->layers[wlr_layer], layer_surfaces) {
-    struct wlr_layer_surface_v1 *wlr_layer = layer->surface;
-    struct wlr_layer_surface_v1_state *state = &wlr_layer->current;
-
-    apply_layer_state(usable_area,
-        state->anchor,
-        state->exclusive_zone,
-        state->margin.top,
-        state->margin.right,
-        state->margin.bottom,
-        state->margin.left);
-  }
-}
-
-static void
-calculate_exclusive(struct hikari_output *output)
+arrange_layers(struct hikari_output *output)
 {
   assert(output != NULL);
 
-  struct wlr_box usable_area = { 0 };
+  struct wlr_box full_area = {
+    .x = 0,
+    .y = 0,
+    .width = output->geometry.width,
+    .height = output->geometry.height
+  };
 
-  wlr_output_effective_resolution(
-      output->wlr_output, &usable_area.width, &usable_area.height);
+  /* [COMMENT] Action purpose: usable_area starts as the full output area and
+  is progressively shrunk by exclusive-zone surfaces as we iterate. The result
+  is stored in output->usable_area for use by the view layout engine. */
+  struct wlr_box usable_area = full_area;
 
-  apply_state_for_layer(output, ZWLR_LAYER_SHELL_V1_LAYER_TOP, &usable_area);
-  apply_state_for_layer(output, ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM, &usable_area);
+  /* [COMMENT] Action purpose: Process layers in protocol-defined order.
+  BACKGROUND and BOTTOM layers are processed first so their exclusive zones
+  shrink usable_area before TOP and OVERLAY surfaces are configured. */
+  static const enum zwlr_layer_shell_v1_layer layer_order[] = {
+    ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND,
+    ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM,
+    ZWLR_LAYER_SHELL_V1_LAYER_TOP,
+    ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY,
+  };
+
+  for (size_t i = 0; i < sizeof(layer_order) / sizeof(layer_order[0]); i++) {
+    struct hikari_layer *layer;
+    wl_list_for_each (layer, &output->layers[layer_order[i]], layer_surfaces) {
+      if (layer->scene_layer_surface == NULL) {
+        continue;
+      }
+
+      struct wlr_box old_geometry = layer->geometry;
+
+      /* [COMMENT] Action purpose: wlr_scene_layer_surface_v1_configure() reads
+      from layer_surface->current (the committed state, set by wlroots after the
+      initial commit). It computes geometry from anchor/margin/desired_size,
+      positions the scene node in output-local coordinates, calls
+      wlr_layer_surface_v1_configure() to send the configure event to the client,
+      and updates usable_area if the surface has a positive exclusive_zone. */
+      wlr_scene_layer_surface_v1_configure(
+          layer->scene_layer_surface, &full_area, &usable_area);
+
+      /* [COMMENT] Action purpose: After the scene configure call, derive the
+      output-local geometry from the scene node's layout-global position.
+      wlr_scene_node_coords() returns layout-global coordinates; subtract the
+      output's layout origin to get output-local. */
+      int nx = 0, ny = 0;
+      wlr_scene_node_coords(
+          &layer->scene_layer_surface->tree->node, &nx, &ny);
+      layer->geometry.x = nx - output->geometry.x;
+      layer->geometry.y = ny - output->geometry.y;
+
+      /* [COMMENT] Action purpose: actual_width/height are populated in the layer
+      surface state after the client acks the configure. On the very first
+      configure they are still zero; fall back to desired size for the initial
+      geometry tracking so popup_unconstrain has valid dimensions. */
+      struct wlr_layer_surface_v1_state *state =
+          &layer->scene_layer_surface->layer_surface->current;
+      layer->geometry.width = state->actual_width > 0
+                                  ? (int)state->actual_width
+                                  : (int)state->desired_width;
+      layer->geometry.height = state->actual_height > 0
+                                   ? (int)state->actual_height
+                                   : (int)state->desired_height;
+
+      /* [COMMENT] Action purpose: Damage the old and new geometry rectangles
+      when a mapped surface has moved or resized so the scene repaint fires. */
+      bool geo_changed =
+          memcmp(&old_geometry, &layer->geometry, sizeof(struct wlr_box)) != 0;
+      if (geo_changed && layer->mapped && output->enabled) {
+        hikari_output_add_damage(output, &old_geometry);
+        hikari_output_add_damage(output, &layer->geometry);
+      }
+    }
+  }
 
   output->usable_area = usable_area;
 }
 
 /* [COMMENT] Function purpose: Initialise a hikari_layer for a new
 wlr_layer_surface -- resolve the output, attach the surface to the scene
-graph with per-layer stacking order, register lifecycle listeners, and
-compute the initial geometry. Invoked from new_layer_shell_surface_handler. */
+graph with per-layer stacking order, and register lifecycle listeners.
+NOTE: arrange_layers() is NOT called here; it must only be called after
+the client performs its initial_commit (surface->initialized == true).
+wlr_layer_surface_v1_configure() asserts surface->initialized, so calling
+arrange_layers() before the first commit is a hard assert crash in wlroots 0.20. */
 void
 hikari_layer_init(
     struct hikari_layer *layer, struct wlr_layer_surface_v1 *wlr_layer_surface)
@@ -207,14 +196,14 @@ hikari_layer_init(
   layer->layer = wlr_layer_surface->pending.layer;
   layer->surface = wlr_layer_surface;
   layer->mapped = false;
+  layer->geometry = (struct wlr_box){0};
 
   wlr_layer_surface->output = output->wlr_output;
 
   /* [COMMENT] Action purpose: Attach the layer surface to the scene graph.
-  Since the wlr_scene migration, damage calls are schedule-only shims -- a
-  surface without a scene node is configured and mapped yet never rendered.
-  wlr_scene_layer_surface_v1_create() also manages subsurfaces and popups of
-  this layer surface automatically. */
+  wlr_scene_layer_surface_v1_create() creates a sub-tree and subsurface tree
+  for this layer surface; all rendering, subsurface parenting, and popup
+  attachment is managed by wlroots from this point. */
   layer->scene_layer_surface = wlr_scene_layer_surface_v1_create(
       &hikari_server.scene->tree, wlr_layer_surface);
 
@@ -250,7 +239,12 @@ hikari_layer_init(
 
   wl_list_insert(&output->layers[layer->layer], &layer->layer_surfaces);
 
-  calculate_geometry(layer);
+  /* [COMMENT] Action purpose: DO NOT call arrange_layers() here.
+  wlr_layer_surface_v1_configure() (called inside arrange_layers via
+  wlr_scene_layer_surface_v1_configure) asserts surface->initialized, which
+  is only set true on the first wl_surface.commit from the client. Calling
+  arrange before that first commit fires a hard assert in wlroots 0.20.
+  commit_handler will call arrange_layers() on the initial_commit. */
 }
 
 /* [COMMENT] Function purpose: Tear down a layer surface -- detach its scene
@@ -261,8 +255,9 @@ hikari_layer_fini(struct hikari_layer *layer)
 {
   assert(!layer->mapped);
 
-  /* [COMMENT] Action purpose: Detach the layer surface (and its scene-managed
-  popups) from the scene graph so nothing references the freed layer. */
+  /* [COMMENT] Action purpose: Destroy the scene tree node. The
+  wlr_scene_layer_surface_v1 struct itself is freed by the scene's own
+  tree_destroy handler; we only need to trigger the destruction. */
   if (layer->scene_layer_surface != NULL) {
     wlr_scene_node_destroy(&layer->scene_layer_surface->tree->node);
     layer->scene_layer_surface = NULL;
@@ -281,6 +276,10 @@ popup_unconstrain(struct hikari_layer_popup *layer_popup)
   struct hikari_layer *layer = get_layer(layer_popup);
   struct hikari_output *output = layer->output;
 
+  /* [COMMENT] Action purpose: Provide the popup with a constraint box in
+  surface-local coordinates (origin = negative of the layer's output-local
+  position, size = full output). This gives the popup maximum freedom to
+  position itself without going off-screen. */
   struct wlr_box box = { .x = -layer->geometry.x,
     .y = -layer->geometry.y,
     .width = output->geometry.width,
@@ -358,11 +357,7 @@ damage_popup(struct hikari_layer_popup *layer_popup, bool whole)
 
   /* [COMMENT] Action purpose: Compute the popup origin relative to the parent
   surface's window geometry. wlroots 0.20 moved the flat wlr_xdg_popup.geometry
-  field into the popup state struct (popup->current.geometry -- documented as
-  "position of the popup relative to the upper left corner of the window
-  geometry of the parent surface"); wlr_xdg_popup_get_geometry() no longer
-  exists. The parent's window geometry is read through the flat
-  wlr_xdg_surface.geometry accessor, matching xdg_view.c. */
+  field into the popup state struct (popup->current.geometry). */
   int ox = popup->current.geometry.x - popup->base->geometry.x;
   int oy = popup->current.geometry.y - popup->base->geometry.y;
 
@@ -379,7 +374,7 @@ damage_popup(struct hikari_layer_popup *layer_popup, bool whole)
       case HIKARI_LAYER_NODE_TYPE_POPUP:
         current = current->parent.node.popup;
         /* [COMMENT] Action purpose: Accumulate nested popup offsets via the
-        0.20 popup-state geometry field (see note above). */
+        0.20 popup-state geometry field. */
         ox += current->popup->current.geometry.x - current->popup->base->geometry.x;
         oy += current->popup->current.geometry.y - current->popup->base->geometry.y;
         break;
@@ -419,42 +414,62 @@ done:
   };
 }
 
+/* [COMMENT] Function purpose: Handle wl_surface commit events for a layer
+surface. On the initial_commit the compositor must respond with a configure
+via arrange_layers(); on subsequent commits while unmapped, re-arrange in
+case the client changed its desired size/anchor; while mapped, re-arrange
+and damage if geometry changed. */
 static void
 commit_handler(struct wl_listener *listener, void *data)
 {
   struct hikari_layer *layer = wl_container_of(listener, layer, commit);
-  struct wlr_box old_geometry = layer->geometry;
   struct hikari_output *output = layer->output;
 
-  if (!layer->mapped) {
-    calculate_geometry(layer);
+  /* [COMMENT] Action purpose: Handle the wlroots 0.20 initial_commit
+  lifecycle for layer shell surfaces. The first commit sets
+  surface->initialized = true inside wlroots before the commit signal fires,
+  so arrange_layers() (which calls wlr_scene_layer_surface_v1_configure ->
+  wlr_layer_surface_v1_configure, which asserts initialized) is safe here.
+  The compositor MUST respond with a configure event so the client can
+  proceed to attach a buffer and map. Without this response, layer clients
+  hang indefinitely waiting for the configure reply. */
+  if (layer->surface->initial_commit) {
+    arrange_layers(output);
     return;
   }
 
-  assert(layer->mapped);
+  if (!layer->mapped) {
+    /* [COMMENT] Action purpose: Client committed again before mapping (e.g.
+    changed desired size or anchor before attaching a buffer). Re-arrange to
+    send an updated configure. */
+    arrange_layers(output);
+    return;
+  }
 
-  calculate_exclusive(layer->output);
-  calculate_geometry(layer);
-
+  /* [COMMENT] Action purpose: Surface is mapped and committed a new state.
+  Check whether the layer changed (client called set_layer) and move it to
+  the correct list if so, adjusting scene z-order. Then re-arrange all layers
+  so exclusive zones and positions are recalculated. */
   enum zwlr_layer_shell_v1_layer current_layer = layer->surface->current.layer;
-  bool updated_geometry =
-      memcmp(&old_geometry, &layer->geometry, sizeof(struct wlr_box)) != 0;
   bool changed_layer = layer->layer != current_layer;
 
   if (changed_layer) {
     wl_list_remove(&layer->layer_surfaces);
     wl_list_insert(&output->layers[current_layer], &layer->layer_surfaces);
     layer->layer = current_layer;
+
+    struct wlr_scene_node *scene_node =
+        &layer->scene_layer_surface->tree->node;
+    if (current_layer == ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY ||
+        current_layer == ZWLR_LAYER_SHELL_V1_LAYER_TOP) {
+      wlr_scene_node_raise_to_top(scene_node);
+    } else {
+      wlr_scene_node_lower_to_bottom(scene_node);
+    }
   }
 
-  if (updated_geometry || changed_layer) {
-    hikari_output_add_damage(output, &old_geometry);
-    hikari_output_add_damage(output, &layer->geometry);
-
-    hikari_server_cursor_focus();
-  } else {
-    damage(layer, false);
-  }
+  arrange_layers(output);
+  hikari_server_cursor_focus();
 }
 
 static void
@@ -550,7 +565,9 @@ unmap(struct hikari_layer *layer)
 
   damage(layer, true);
 
-  calculate_exclusive(layer->output);
+  /* [COMMENT] Action purpose: Recalculate exclusive zones and usable area now
+  that this surface is gone so views and remaining layers re-pack correctly. */
+  arrange_layers(layer->output);
 
   if (layer == workspace->focus_layer) {
     struct wlr_seat *seat = hikari_server.seat;
@@ -568,83 +585,6 @@ unmap_handler(struct wl_listener *listener, void *data)
   struct hikari_layer *layer = wl_container_of(listener, layer, unmap);
 
   unmap(layer);
-}
-
-/* [COMMENT] Function purpose: Compute a layer surface's on-output geometry
-from its anchor edges, margins, exclusive zone, and desired size, falling
-back to centering/stretching per the layer-shell protocol. */
-static void
-calculate_geometry(struct hikari_layer *layer)
-{
-  struct hikari_output *output = layer->output;
-  struct wlr_layer_surface_v1_state *state = &layer->surface->current;
-
-  struct wlr_box geometry = { .x = 0,
-    .y = 0,
-    .width = state->desired_width,
-    .height = state->desired_height };
-
-  struct wlr_box bounds = { .x = 0,
-    .y = 0,
-    .width = output->geometry.width,
-    .height = output->geometry.height };
-
-  const uint32_t both_horiz =
-      ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT | ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT;
-  if ((state->anchor & both_horiz) && geometry.width == 0) {
-    geometry.x = bounds.x;
-    geometry.width = bounds.width;
-  } else if ((state->anchor & ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT)) {
-    geometry.x = bounds.x;
-  } else if ((state->anchor & ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT)) {
-    geometry.x = bounds.x + (bounds.width - geometry.width);
-  } else {
-    geometry.x = bounds.x + ((bounds.width / 2) - (geometry.width / 2));
-  }
-
-  const uint32_t both_vert =
-      ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM;
-  if ((state->anchor & both_vert) && geometry.height == 0) {
-    geometry.y = bounds.y;
-    geometry.height = bounds.height;
-  } else if ((state->anchor & ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP)) {
-    geometry.y = bounds.y;
-  } else if ((state->anchor & ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM)) {
-    geometry.y = bounds.y + (bounds.height - geometry.height);
-  } else {
-    geometry.y = bounds.y + ((bounds.height / 2) - (geometry.height / 2));
-  }
-
-  if ((state->anchor & both_horiz) == both_horiz) {
-    geometry.x += state->margin.left;
-    geometry.width -= state->margin.left + state->margin.right;
-  } else if ((state->anchor & ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT)) {
-    geometry.x += state->margin.left;
-  } else if ((state->anchor & ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT)) {
-    geometry.x -= state->margin.right;
-  }
-  if ((state->anchor & both_vert) == both_vert) {
-    geometry.y += state->margin.top;
-    geometry.height -= state->margin.top + state->margin.bottom;
-  } else if ((state->anchor & ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP)) {
-    geometry.y += state->margin.top;
-  } else if ((state->anchor & ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM)) {
-    geometry.y -= state->margin.bottom;
-  }
-
-  layer->geometry = geometry;
-
-  /* [COMMENT] Action purpose: Position the scene node in layout-global
-  coordinates. layer->geometry is output-local, so translate by the output's
-  position in the output layout. */
-  if (layer->scene_layer_surface != NULL) {
-    wlr_scene_node_set_position(&layer->scene_layer_surface->tree->node,
-        output->geometry.x + geometry.x,
-        output->geometry.y + geometry.y);
-  }
-
-  wlr_layer_surface_v1_configure(
-      layer->surface, geometry.width, geometry.height);
 }
 
 static void
