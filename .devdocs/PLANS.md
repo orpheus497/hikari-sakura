@@ -22,6 +22,10 @@
 3. **Code Formatting:**
    - Run `clang-format` compliance check (TC-FORMAT-01).
 
+4. **Agent Protocol Enforcement:**
+   - Implement the "Ask → Explain → Justify → Wait for Approval" gate for all subsequent changes.
+   - Wait for explicit user authorization before executing shell commands or editing codebase files.
+
 *(Removed 2026-08-13: the `wlr_output_effective_resolution()` API-verification item — closed per TODOS completed list; the successful user build proves the symbol exists.)*
 
 

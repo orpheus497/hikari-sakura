@@ -18,6 +18,7 @@ cancel(void)
   wlr_seat_pointer_clear_focus(hikari_server.seat);
 }
 
+// [COMMENT] Function purpose: Handle keyboard events during drag-and-drop mode.
 static void
 key_handler(
     struct hikari_keyboard *keyboard, struct wlr_keyboard_key_event *event)
@@ -53,6 +54,7 @@ cursor_move(uint32_t time_msec)
   }
 }
 
+// [COMMENT] Function purpose: Handle pointer button events during drag-and-drop mode.
 static void
 button_handler(
     struct hikari_cursor *cursor, struct wlr_pointer_button_event *event)
@@ -65,6 +67,7 @@ button_handler(
   }
 }
 
+// [COMMENT] Function purpose: Initialize drag-and-drop mode state and handlers.
 void
 hikari_dnd_mode_init(struct hikari_dnd_mode *dnd_mode)
 {

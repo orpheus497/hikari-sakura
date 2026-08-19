@@ -64,6 +64,10 @@ commit_handler(struct wl_listener *listener, void *data)
     return;
   }
 
+  if (!xdg_surface->surface->mapped) {
+    return;
+  }
+
   uint32_t serial = surface->current.configure_serial;
 
   assert(view->surface != NULL);

@@ -273,7 +273,7 @@ submit_password(void)
     }
   }
 
-  size_t password_length = strnlen(input_buffer, 1023) + 1;
+  size_t password_length = strnlen(input_buffer, BUFFER_SIZE - 1) + 1;
 
   hikari_lock_indicator_set_verify(mode->lock_indicator);
   // [COMMENT] Action purpose: Write password to unlocker pipe. If write fails
@@ -555,9 +555,13 @@ hikari_lock_mode_fini(struct hikari_lock_mode *lock_mode)
   // so this blocking wait returns almost immediately.
   if (locker_pid > 0) {
     int status;
-    while (waitpid(locker_pid, &status, 0) == -1 && errno == EINTR)
-      ;
-    locker_pid = -1;
+    pid_t result;
+    do {
+      result = waitpid(locker_pid, &status, WNOHANG);
+    } while (result == -1 && errno == EINTR);
+    if (result > 0 || (result == -1 && errno == ECHILD)) {
+      locker_pid = -1;
+    }
   }
   munlock(input_buffer, BUFFER_SIZE);
 }

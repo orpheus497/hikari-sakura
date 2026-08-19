@@ -1,14 +1,14 @@
-// [COMMENT] Script function and purpose: Core Hikari Wayland server initialization, signal management, and main loop handling.
+// [COMMENT] Script function and purpose: Core Hikari Wayland server
+// initialization, signal management, and main loop handling.
 
 #include <hikari/server.h>
-
 
 #include <libinput.h>
 #include <unistd.h>
 #include <wayland-server-core.h>
 
+#include <drm_fourcc.h>
 #include <wlr/backend.h>
-#include <wlr/util/log.h>
 #include <wlr/backend/headless.h>
 #include <wlr/backend/libinput.h>
 #include <wlr/backend/session.h>
@@ -20,17 +20,18 @@
 #include <wlr/types/wlr_data_device.h>
 #include <wlr/types/wlr_input_device.h>
 #include <wlr/types/wlr_keyboard.h>
+#include <wlr/types/wlr_linux_dmabuf_v1.h>
 #include <wlr/types/wlr_output_layout.h>
 #include <wlr/types/wlr_primary_selection.h>
 #include <wlr/types/wlr_primary_selection_v1.h>
+#include <wlr/types/wlr_scene.h>
 #include <wlr/types/wlr_seat.h>
 #include <wlr/types/wlr_server_decoration.h>
-#include <wlr/types/wlr_xdg_output_v1.h>
-#include <wlr/types/wlr_xdg_shell.h>
-#include <wlr/types/wlr_scene.h>
 #include <wlr/types/wlr_shm.h>
 #include <wlr/types/wlr_subcompositor.h>
-#include <wlr/types/wlr_linux_dmabuf_v1.h>
+#include <wlr/types/wlr_xdg_output_v1.h>
+#include <wlr/types/wlr_xdg_shell.h>
+#include <wlr/util/log.h>
 
 #ifdef HAVE_LAYERSHELL
 #include <wlr/types/wlr_layer_shell_v1.h>
@@ -234,7 +235,8 @@ new_output_handler(struct wl_listener *listener, void *data)
           wlr_output, server->allocator, server->renderer)) {
     /* [COMMENT] Action purpose: Report which output failed render init before
     bailing out -- a silent exit is indistinguishable from a crash in logs. */
-    fprintf(stderr, "error: could not initialize rendering for output \"%s\"\n",
+    fprintf(stderr,
+        "error: could not initialize rendering for output \"%s\"\n",
         wlr_output->name);
     exit(EXIT_FAILURE);
   }
@@ -388,7 +390,12 @@ node_at(double lx,
       unmanaged_output_views) {
     node = (struct hikari_node *)xwayland_unmanaged_view;
 
-    if (surface_at(node, lx - output->geometry.x, ly - output->geometry.y, surface, sx, sy)) {
+    if (surface_at(node,
+            lx - output->geometry.x,
+            ly - output->geometry.y,
+            surface,
+            sx,
+            sy)) {
       return node;
     }
   }
@@ -410,7 +417,12 @@ node_at(double lx,
   wl_list_for_each (view, &output_workspace->views, workspace_views) {
     node = (struct hikari_node *)view;
 
-    if (surface_at(node, lx - output->geometry.x, ly - output->geometry.y, surface, sx, sy)) {
+    if (surface_at(node,
+            lx - output->geometry.x,
+            ly - output->geometry.y,
+            surface,
+            sx,
+            sy)) {
       return node;
     }
   }
@@ -444,10 +456,12 @@ hikari_server_node_at(double x,
 void
 hikari_server_cursor_focus(void)
 {
-  // [COMMENT] Action purpose: Retrieve monotonic clock time and convert to milliseconds for Wayland event timestamping.
+  // [COMMENT] Action purpose: Retrieve monotonic clock time and convert to
+  // milliseconds for Wayland event timestamping.
   struct timespec now;
   clock_gettime(CLOCK_MONOTONIC, &now);
-  uint32_t time_msec = (uint32_t)(now.tv_sec * 1000LL + now.tv_nsec / 1000000LL);
+  uint32_t time_msec =
+      (uint32_t)(now.tv_sec * 1000LL + now.tv_nsec / 1000000LL);
   hikari_server.mode->cursor_move(time_msec);
 }
 
@@ -501,6 +515,7 @@ new_xwayland_surface_handler(struct wl_listener *listener, void *data)
   }
 }
 
+// [COMMENT] Function purpose: Handle XWayland ready event, setting the DISPLAY environment variable.
 static void
 xwayland_ready_handler(struct wl_listener *listener, void *data)
 {
@@ -515,14 +530,18 @@ setup_xwayland(struct hikari_server *server)
 {
   server->xwayland =
       wlr_xwayland_create(server->display, server->compositor, true);
+  if (server->xwayland == NULL) {
+    fprintf(stderr, "error: failed to create XWayland server\n");
+    hikari_server_stop();
+    return;
+  }
 
   server->new_xwayland_surface.notify = new_xwayland_surface_handler;
   wl_signal_add(
       &server->xwayland->events.new_surface, &server->new_xwayland_surface);
 
   server->xwayland_ready.notify = xwayland_ready_handler;
-  wl_signal_add(
-      &server->xwayland->events.ready, &server->xwayland_ready);
+  wl_signal_add(&server->xwayland->events.ready, &server->xwayland_ready);
 }
 #endif
 
@@ -551,6 +570,7 @@ server_decoration_mode_handler(struct wl_listener *listener, void *data)
   }
 }
 
+// [COMMENT] Function purpose: Handle server decoration destroy event, freeing the decoration structure.
 static void
 server_decoration_destroy_handler(struct wl_listener *listener, void *data)
 {
@@ -567,26 +587,29 @@ server_decoration_handler(struct wl_listener *listener, void *data)
 {
   struct wlr_server_decoration *wlr_decoration = data;
 
-  // [COMMENT] Action purpose: Guard against surfaces without a role — they cannot be XDG toplevels.
+  // [COMMENT] Action purpose: Guard against surfaces without a role — they
+  // cannot be XDG toplevels.
   if (wlr_decoration->surface->role == NULL) {
     return;
   }
 
-  // [COMMENT] Action purpose: Retrieve the XDG surface from the wlr_surface using the wlroots 0.17+ helper
-  // to safely determine if this decoration belongs to an XDG toplevel. The
-  // wl_container_of pattern cannot be used here because hikari_view embeds
-  // wlr_surface as a pointer field, not as a value.
+  // [COMMENT] Action purpose: Retrieve the XDG surface from the wlr_surface
+  // using the wlroots 0.17+ helper to safely determine if this decoration
+  // belongs to an XDG toplevel. The wl_container_of pattern cannot be used here
+  // because hikari_view embeds wlr_surface as a pointer field, not as a value.
   struct wlr_xdg_surface *xdg_surface =
       wlr_xdg_surface_try_from_wlr_surface(wlr_decoration->surface);
 
-  // [COMMENT] Action purpose: Guard against non-XDG surfaces (e.g. layer shell) before accessing XDG-specific data.
+  // [COMMENT] Action purpose: Guard against non-XDG surfaces (e.g. layer shell)
+  // before accessing XDG-specific data.
   if (xdg_surface == NULL) {
     return;
   }
 
-  // [COMMENT] Action purpose: Retrieve the scene_tree stored in xdg_surface->data
-  // (wlroots popup parenting convention), then look up the hikari_xdg_view from
-  // scene_tree->node.data where it was stored by hikari_xdg_view_init.
+  // [COMMENT] Action purpose: Retrieve the scene_tree stored in
+  // xdg_surface->data (wlroots popup parenting convention), then look up the
+  // hikari_xdg_view from scene_tree->node.data where it was stored by
+  // hikari_xdg_view_init.
   struct wlr_scene_tree *scene_tree = xdg_surface->data;
 
   if (scene_tree == NULL) {
@@ -595,7 +618,8 @@ server_decoration_handler(struct wl_listener *listener, void *data)
 
   struct hikari_xdg_view *xdg_view = scene_tree->node.data;
 
-  // [COMMENT] Action purpose: Guard against a decoration event arriving before the xdg_view is fully initialized.
+  // [COMMENT] Action purpose: Guard against a decoration event arriving before
+  // the xdg_view is fully initialized.
   if (xdg_view == NULL) {
     return;
   }
@@ -603,7 +627,8 @@ server_decoration_handler(struct wl_listener *listener, void *data)
   wl_signal_add(&wlr_decoration->events.mode, &xdg_view->view.decoration.mode);
   xdg_view->view.decoration.mode.notify = server_decoration_mode_handler;
 
-  wl_signal_add(&wlr_decoration->events.destroy, &xdg_view->view.decoration.destroy);
+  wl_signal_add(
+      &wlr_decoration->events.destroy, &xdg_view->view.decoration.destroy);
   xdg_view->view.decoration.destroy.notify = server_decoration_destroy_handler;
 
   xdg_view->view.decoration.wlr_decoration = wlr_decoration;
@@ -734,8 +759,8 @@ setup_scene_graph(struct hikari_server *server)
     exit(EXIT_FAILURE);
   }
 
-  server->scene_layout = wlr_scene_attach_output_layout(
-      server->scene, server->output_layout);
+  server->scene_layout =
+      wlr_scene_attach_output_layout(server->scene, server->output_layout);
   // [COMMENT] Action purpose: Guard against output-layout attachment failure.
   // Without a valid scene_layout, scene outputs cannot be registered and
   // frame commits will crash on a null pointer.
@@ -753,8 +778,7 @@ setup_xdg_shell(struct hikari_server *server)
   server->xdg_shell = wlr_xdg_shell_create(server->display, 3);
 
   server->new_toplevel.notify = new_toplevel_handler;
-  wl_signal_add(
-      &server->xdg_shell->events.new_toplevel, &server->new_toplevel);
+  wl_signal_add(&server->xdg_shell->events.new_toplevel, &server->new_toplevel);
 }
 
 #ifdef HAVE_LAYERSHELL
@@ -791,7 +815,8 @@ output_layout_change_handler(struct wl_listener *listener, void *data)
   wl_list_for_each (output, &server->outputs, server_outputs) {
     struct wlr_output *wlr_output = output->wlr_output;
     struct wlr_box output_box;
-    wlr_output_layout_get_box(hikari_server.output_layout, wlr_output, &output_box);
+    wlr_output_layout_get_box(
+        hikari_server.output_layout, wlr_output, &output_box);
 
     output->geometry.x = output_box.x;
     output->geometry.y = output_box.y;
@@ -806,6 +831,14 @@ output_layout_change_handler(struct wl_listener *listener, void *data)
       hikari_output_load_background(output,
           output_config->background.value,
           output_config->background_fit.value);
+    }
+
+    struct hikari_view *view;
+    wl_list_for_each (view, &output->views, output_views) {
+      if (view->scene_node != NULL) {
+        wlr_scene_node_set_position(
+            view->scene_node, view->geometry.x + output->geometry.x, view->geometry.y + output->geometry.y);
+      }
     }
 
 #ifdef HAVE_XWAYLAND
@@ -824,8 +857,12 @@ drop_privileges(struct hikari_server *server)
   }
 
   if (geteuid() == 0) {
-    fprintf(stderr, "running as root is prohibited (uid=%d, euid=%d, gid=%d, egid=%d)\n",
-            getuid(), geteuid(), getgid(), getegid());
+    fprintf(stderr,
+        "running as root is prohibited (uid=%d, euid=%d, gid=%d, egid=%d)\n",
+        getuid(),
+        geteuid(),
+        getgid(),
+        getegid());
     return false;
   }
 
@@ -850,17 +887,30 @@ hikari_server_prepare_privileged(void)
     goto done;
   }
 
-  server->backend = wlr_backend_autocreate(server->event_loop, &server->session);
+  server->backend =
+      wlr_backend_autocreate(server->event_loop, &server->session);
   if (server->backend == NULL) {
     fprintf(stderr, "error: could not create backend\n");
-    fprintf(stderr, "--------------------------------------------------------------------------------\n");
-    fprintf(stderr, "Hikari failed to acquire a Wayland backend. Common causes include:\n");
-    fprintf(stderr, "  1. Running natively without 'seatd' or seat management running/accessible.\n");
+    fprintf(stderr,
+        "----------------------------------------------------------------------"
+        "----------\n");
+    fprintf(stderr,
+        "Hikari failed to acquire a Wayland backend. Common causes include:\n");
+    fprintf(stderr,
+        "  1. Running natively without 'seatd' or seat management "
+        "running/accessible.\n");
     fprintf(stderr, "  2. XDG_RUNTIME_DIR is not set in your environment.\n");
-    fprintf(stderr, "  3. You are attempting to nest but WAYLAND_DISPLAY is invalid or inaccessible.\n");
-    fprintf(stderr, "  4. You lack permission to access DRM nodes (/dev/dri/card*).\n");
-    fprintf(stderr, "Please verify your session environment or use a proper wrapper script.\n");
-    fprintf(stderr, "--------------------------------------------------------------------------------\n");
+    fprintf(stderr,
+        "  3. You are attempting to nest but WAYLAND_DISPLAY is invalid or "
+        "inaccessible.\n");
+    fprintf(stderr,
+        "  4. You lack permission to access DRM nodes (/dev/dri/card*).\n");
+    fprintf(stderr,
+        "Please verify your session environment or use a proper wrapper "
+        "script.\n");
+    fprintf(stderr,
+        "----------------------------------------------------------------------"
+        "----------\n");
     goto done;
   }
 
@@ -869,8 +919,8 @@ hikari_server_prepare_privileged(void)
 done:
   if (!drop_privileges(server) || !success) {
     if (server->backend != NULL) {
-      // [COMMENT] Action purpose: Destroy backend, which also destroys the session
-      // internally in wlroots 0.20. Do NOT call wlr_session_destroy
+      // [COMMENT] Action purpose: Destroy backend, which also destroys the
+      // session internally in wlroots 0.20. Do NOT call wlr_session_destroy
       // separately -- the session is owned by the backend.
       wlr_backend_destroy(server->backend);
     }
@@ -882,23 +932,26 @@ done:
   }
 }
 
-// [COMMENT] Function purpose: Initialize headless fallback output for window management when no physical monitor is attached.
+// [COMMENT] Function purpose: Initialize headless fallback output for window
+// management when no physical monitor is attached.
 static void
 init_noop_output(struct hikari_server *server)
 {
-  // [COMMENT] Action purpose: Create the headless fallback backend. wlroots 0.20
-  // wlr_headless_backend_create() takes the compositor's struct wl_event_loop *
-  // (NOT the wl_display *). Passing the display is an incompatible-pointer-type
-  // error that compiles to a warning and corrupts the backend's event loop
-  // usage at runtime (undefined behavior). server->event_loop was captured in
-  // hikari_server_prepare_privileged() via wl_display_get_event_loop().
+  // [COMMENT] Action purpose: Create the headless fallback backend. wlroots
+  // 0.20 wlr_headless_backend_create() takes the compositor's struct
+  // wl_event_loop * (NOT the wl_display *). Passing the display is an
+  // incompatible-pointer-type error that compiles to a warning and corrupts the
+  // backend's event loop usage at runtime (undefined behavior).
+  // server->event_loop was captured in hikari_server_prepare_privileged() via
+  // wl_display_get_event_loop().
   server->noop_backend = wlr_headless_backend_create(server->event_loop);
 
-  // [COMMENT] Action purpose: Guard against headless backend allocation failure.
-  // Without a noop backend, the compositor cannot manage views when no physical
-  // monitor is attached.
+  // [COMMENT] Action purpose: Guard against headless backend allocation
+  // failure. Without a noop backend, the compositor cannot manage views when no
+  // physical monitor is attached.
   if (server->noop_backend == NULL) {
-    fprintf(stderr, "error: could not create headless backend for noop output\n");
+    fprintf(
+        stderr, "error: could not create headless backend for noop output\n");
     wl_display_destroy(server->display);
     exit(EXIT_FAILURE);
   }
@@ -913,10 +966,11 @@ init_noop_output(struct hikari_server *server)
     exit(EXIT_FAILURE);
   }
 
-  // [COMMENT] Action purpose: Initialize render backend for the noop output, matching
-  // what new_output_handler does for real outputs. Without this, any rendering
-  // path that touches the noop output will fail.
-  if (!wlr_output_init_render(wlr_output, server->allocator, server->renderer)) {
+  // [COMMENT] Action purpose: Initialize render backend for the noop output,
+  // matching what new_output_handler does for real outputs. Without this, any
+  // rendering path that touches the noop output will fail.
+  if (!wlr_output_init_render(
+          wlr_output, server->allocator, server->renderer)) {
     fprintf(stderr, "error: could not initialize render for noop output\n");
     wl_display_destroy(server->display);
     exit(EXIT_FAILURE);
@@ -953,7 +1007,8 @@ session_active_handler(struct wl_listener *listener, void *data)
 
   /* Action purpose: Log session active state transitions to provide structured
   context if a compositor crash occurs after a VT switch. */
-  wlr_log(WLR_INFO, "session_active_handler: VT session switched to %s",
+  wlr_log(WLR_INFO,
+      "session_active_handler: VT session switched to %s",
       active ? "active" : "inactive");
 
   /* Action purpose: Update session-active flag unconditionally; frame_handler
@@ -991,7 +1046,8 @@ server_init(struct hikari_server *server, char *config_path)
     /* [COMMENT] Action purpose: Emit a hikari-side diagnostic on configuration
     failure (covers non-parse failures such as keymap compilation errors that
     print nothing themselves) so startup never exits silently. */
-    fprintf(stderr, "error: could not load configuration \"%s\"\n", config_path);
+    fprintf(
+        stderr, "error: could not load configuration \"%s\"\n", config_path);
     hikari_configuration_fini(hikari_configuration);
     hikari_free(hikari_configuration);
 
@@ -1006,8 +1062,6 @@ server_init(struct hikari_server *server, char *config_path)
 
   server->cycling = false;
   server->workspace = NULL;
-
-
 
   hikari_indicator_init(
       &server->indicator, hikari_configuration->indicator_selected);
@@ -1039,7 +1093,8 @@ server_init(struct hikari_server *server, char *config_path)
 
   setenv("WAYLAND_DISPLAY", server->socket, true);
 
-  server->compositor = wlr_compositor_create(server->display, 5, server->renderer);
+  server->compositor =
+      wlr_compositor_create(server->display, 5, server->renderer);
 
   wlr_subcompositor_create(server->display);
 
@@ -1051,7 +1106,8 @@ server_init(struct hikari_server *server, char *config_path)
   server->output_layout = wlr_output_layout_create(server->display);
   // [COMMENT] Action purpose: Guard against output layout allocation failure.
   if (server->output_layout == NULL) {
-    // [COMMENT] Action purpose: Abort server initialization on output layout allocation failure.
+    // [COMMENT] Action purpose: Abort server initialization on output layout
+    // allocation failure.
     wl_display_destroy(server->display);
     exit(EXIT_FAILURE);
   }
@@ -1086,7 +1142,8 @@ server_init(struct hikari_server *server, char *config_path)
   modifiers, causing GL errors, black windows, or posix_fallocate crashes on
   ZFS. Must be called AFTER setup_scene_graph() since the scene must exist. */
   struct wlr_linux_dmabuf_v1 *linux_dmabuf =
-      wlr_linux_dmabuf_v1_create_with_renderer(server->display, 4, server->renderer);
+      wlr_linux_dmabuf_v1_create_with_renderer(
+          server->display, 4, server->renderer);
   if (linux_dmabuf != NULL) {
     wlr_scene_set_linux_dmabuf_v1(server->scene, linux_dmabuf);
   }
@@ -1137,8 +1194,7 @@ server_init(struct hikari_server *server, char *config_path)
   if (server->session != NULL) {
     server->session_active_listener.notify = session_active_handler;
     wl_signal_add(
-        &server->session->events.active,
-        &server->session_active_listener);
+        &server->session->events.active, &server->session_active_listener);
   } else {
     /* Action purpose: Pre-initialise the listener link as an empty list when
     no session exists (nested compositor) so hikari_server_stop can safely
@@ -1169,12 +1225,13 @@ hikari_server_start(char *config_path, char *autostart)
   server_init(&hikari_server, config_path);
   signal(SIGTERM, sig_handler);
 
-  // [COMMENT] Action purpose: Verify the backend actually started before entering
-  // the event loop. wlr_backend_start() returns false when the session/DRM/
-  // libinput side fails (seatd down, VT or DRM-node permission errors, etc.).
-  // Continuing anyway would run the compositor with zero outputs and zero input
-  // devices -- a live process presenting a black screen with dead keyboard and
-  // frozen mouse. Fail loudly instead so the user gets a diagnostic on stderr.
+  // [COMMENT] Action purpose: Verify the backend actually started before
+  // entering the event loop. wlr_backend_start() returns false when the
+  // session/DRM/ libinput side fails (seatd down, VT or DRM-node permission
+  // errors, etc.). Continuing anyway would run the compositor with zero outputs
+  // and zero input devices -- a live process presenting a black screen with
+  // dead keyboard and frozen mouse. Fail loudly instead so the user gets a
+  // diagnostic on stderr.
   if (!wlr_backend_start(hikari_server.backend)) {
     fprintf(stderr, "error: could not start backend\n");
     fprintf(stderr,
@@ -1665,7 +1722,7 @@ hikari_server_session_change_vt(void *arg)
   assert(vt >= 1 && vt <= 12);
 
   if (hikari_server.session != NULL) {
-   wlr_session_change_vt(hikari_server.session, vt);
+    wlr_session_change_vt(hikari_server.session, vt);
   }
 }
 
@@ -1821,6 +1878,43 @@ move_resize_view(int dx, int dy, int dwidth, int dheight)
     hikari_server_migrate_focus_view(wlr_output->data, lx, ly, false);
     hikari_view_resize(focus_view, dwidth, dheight);
   }
+}
+
+struct wlr_buffer *
+hikari_server_create_argb8888_buffer(int width, int height, unsigned char *data, int stride)
+{
+  const struct wlr_drm_format_set *formats = wlr_renderer_get_texture_formats(
+      hikari_server.renderer, hikari_server.allocator->buffer_caps);
+  const struct wlr_drm_format *format =
+      formats != NULL ? wlr_drm_format_set_get(formats, DRM_FORMAT_ARGB8888)
+                      : NULL;
+  struct wlr_buffer *buffer =
+      format != NULL ? wlr_allocator_create_buffer(
+                           hikari_server.allocator, width, height, format)
+                     : NULL;
+
+  if (buffer != NULL) {
+    void *mapped_data;
+    uint32_t mapped_format;
+    size_t mapped_stride;
+    if (wlr_buffer_begin_data_ptr_access(buffer,
+            WLR_BUFFER_DATA_PTR_ACCESS_WRITE,
+            &mapped_data,
+            &mapped_format,
+            &mapped_stride)) {
+      for (int y = 0; y < height; y++) {
+        memcpy((char *)mapped_data + y * mapped_stride,
+            data + y * stride,
+            width * 4);
+      }
+      wlr_buffer_end_data_ptr_access(buffer);
+    } else {
+      wlr_buffer_drop(buffer);
+      buffer = NULL;
+    }
+  }
+
+  return buffer;
 }
 
 void

@@ -100,6 +100,7 @@ hikari_output_schedule_frame(struct hikari_output *output)
   wlr_output_schedule_frame(output->wlr_output);
 }
 
+// [COMMENT] Function purpose: Request a frame for an output based on surface damage, checking for enablement and transitioning states.
 static inline void
 hikari_output_add_effective_surface_damage(
     struct hikari_output *output, struct wlr_surface *surface, int x, int y)

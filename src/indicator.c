@@ -125,6 +125,11 @@ hikari_indicator_update_sheet(struct hikari_indicator *indicator,
 
   hikari_indicator_bar_update(&indicator->sheet, output, text);
 
+  if (hikari_server.workspace->focus_view != NULL) {
+    hikari_indicator_bar_position(
+        &indicator->sheet, output, hikari_view_border_geometry(hikari_server.workspace->focus_view));
+  }
+
   hikari_free(text);
 }
 

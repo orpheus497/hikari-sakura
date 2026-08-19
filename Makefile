@@ -95,7 +95,7 @@ LDFLAGS += ${LDFLAGS_EXTRA}
 # backend initialises. Enable ASan only when explicitly needed via ASAN=YES
 # (e.g. unit-testing non-graphics code paths).
 CFLAGS += -g -Werror -Wno-unused-function -Wno-unused-variable -O0
-.ifdef ASAN
+.if "${ASAN}" == "YES"
 CFLAGS += -fsanitize=address
 LDFLAGS += -fsanitize=address
 .endif
@@ -322,5 +322,6 @@ install-user: share/backgrounds/hikari/hikari_wallpaper.png etc/hikari/hikari.co
 	fi
 
 uninstall-user:
-	-rm ${HOME}/.config/hikari/hikari_wallpaper.png
+	@test -n "${HOME}" || { echo "error: HOME is not set" >&2; exit 1; }
+	-rm "${HOME}/.config/hikari/hikari_wallpaper.png"
 	@echo "uninstall-user: ${HOME}/.config/hikari/hikari.conf left in place -- remove it manually if desired"

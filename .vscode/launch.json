@@ -60,7 +60,8 @@
                 { "name": "XDG_RUNTIME_DIR",     "value": "/var/run/user/1001" },
                 // WLR_DRM_DEVICES lets you pin to a specific GPU node if
                 // the system has multiple DRM devices (e.g. /dev/drm/0).
-                { "name": "WLR_DRM_DEVICES",     "value": "/dev/drm/0" }
+                { "name": "WLR_DRM_DEVICES",     "value": "/dev/drm/0" },
+                { "name": "WLR_DRM_NO_ATOMIC",   "value": "0" }
             ],
             "externalConsole": false,
             "MIMode": "lldb",
@@ -74,11 +75,6 @@
                 {
                     "description": "Break on request_state_handler to observe Phase 28 guard",
                     "text": "breakpoint set --name request_state_handler",
-                    "ignoreFailures": true
-                },
-                {
-                    "description": "Log wlroots DRM backend events to stderr",
-                    "text": "process launch --environment WLR_DRM_NO_ATOMIC=0",
                     "ignoreFailures": true
                 }
             ],

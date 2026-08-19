@@ -28,6 +28,7 @@ cancel(void)
   }
 }
 
+// [COMMENT] Function purpose: Handle keyboard events during resize mode.
 static void
 key_handler(
     struct hikari_keyboard *keyboard, struct wlr_keyboard_key_event *event)
@@ -63,6 +64,7 @@ cursor_move(uint32_t time_msec)
   }
 }
 
+// [COMMENT] Function purpose: Handle pointer button events during resize mode.
 static void
 button_handler(
     struct hikari_cursor *cursor, struct wlr_pointer_button_event *event)
@@ -72,6 +74,7 @@ button_handler(
   }
 }
 
+// [COMMENT] Function purpose: Initialize resize mode state and handlers.
 void
 hikari_resize_mode_init(struct hikari_resize_mode *resize_mode)
 {

@@ -4,11 +4,11 @@
 
 ## Current Status
 
-- **Phase:** Phase 36 in progress — XWayland unmanaged view listener wiring UB fix (P1), VT/session active guard on frame/state handlers (P2), and layer-shell popup depth guard (P3) implemented; awaiting build verification.
+- **Phase:** Phase 37 in progress — Codebase documentation headers applied, build scripts and configuration hardened, and complete devdocs consistency review completed.
 - **Branch:** wlroots-0.20
-- **Overall progress:** All code changes for Phase 36 are written. Trial build running. Root-owned artifacts from prior sudo build may require `sudo make clean && sudo make install` for the user's full verification run.
+- **Overall progress:** All code and documentation changes completed. Awaiting user review and execution.
 - **Target OS:** FreeBSD 15.1-RELEASE (ZFS root)
-- **Current step:** Build verification of Phase 36 changes; user to `sudo make clean && sudo make install` and run smoke tests (XWayland context menus/tooltips, VT switch, waybar).
+- **Current step:** User to verify documentation and configuration changes.
 - **Blockers:** (1) Root-owned build artifacts block standard local `make`; user must run `sudo make clean && sudo make install`. (2) eDP-1 scanout swapchain test failure — Mesa/EGL/GBM ↔ drm-kmod layer (pre-existing, not Phase 36 scope).
 
 ## Remaining Work

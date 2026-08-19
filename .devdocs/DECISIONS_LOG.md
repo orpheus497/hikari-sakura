@@ -1,6 +1,13 @@
-## [2026-08-19 20:30] Phase 36: XWayland Unmanaged View and VT Session Guards
+## [2026-08-19 23:05] Phase 37: Wayland Client Initialization Crash Fix
 
 *(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
+
+### Architecture: Safe Handling of Intermediate Unmapped Wayland Client Commits
+* **Context:** In Phase 10 (wlroots 0.20 API migration), the `commit_handler` registration was moved from `map` to `hikari_xdg_view_init` in order to catch the `initial_commit` from the client. However, this exposed the `commit_handler` to all subsequent unmapped commits. Modern Wayland clients (like Alacritty) frequently perform an intermediate `wl_surface.commit` without an attached buffer to acknowledge compositor configure events. When this happened, `surface->mapped` was false, meaning `map_handler` had not run, and `view->surface` remained `NULL`. The `commit_handler` would then hit `assert(view->surface != NULL);` and immediately crash the compositor on client launch.
+* **Decision:** Added a `if (!xdg_surface->surface->mapped) { return; }` safeguard inside `commit_handler` in `src/xdg_view.c`. This gracefully ignores any intermediate commits from the client before a buffer is attached.
+* **Impact:** Prevents the immediate compositor crash when launching clients that perform bufferless intermediate commits.
+
+## [2026-08-19 20:30] Phase 36: XWayland Unmanaged View and VT Session Guards
 
 ### Architecture: XWayland Override-Redirect Listener Lifecycle
 * **Context:** `hikari_xwayland_unmanaged_view_init` failed to initialize or wire `map` and `unmap` listeners, causing `destroy_handler` to unconditionally call `wl_list_remove` on uninitialized memory whenever an override-redirect window (tooltip, dropdown, context menu) was closed.
@@ -42,10 +49,12 @@
 
 * **Context:** `hikari` attached a `mode` listener to a `wlr_server_decoration` (KDE protocol, used by `firefox`) when created but never detached it. If the client disconnected or destroyed the decoration object, wlroots asserted that all listeners must be empty before freeing it, bringing down the entire compositor.
 * **Decision:** Added a `destroy` listener to `struct hikari_view_decoration` and wired it to `wlr_decoration->events.destroy` in `src/server.c`. Handled listener cleanup explicitly in both `server_decoration_destroy_handler` and `hikari_view_fini`.
-* **Impact:** Prevents `firefox` and other legacy-protocol clients from crashing the compositor when they close their windows.
+  * **Addendum:** `hikari_view_init` did not previously initialize `view->decoration.wlr_decoration = NULL`. Because memory is allocated via `malloc` (not `calloc`), the uninitialized pointer contained garbage memory. When ANY non-server-decoration view (like `foot` or `alacritty`) was destroyed, `hikari_view_fini` passed the `!= NULL` check and called `wl_list_remove` on random memory addresses, causing an immediate segmentation fault that crashed the entire compositor. Added `view->decoration.wlr_decoration = NULL` to `hikari_view_init` to fix this regression.
+* **Impact:** Prevents `firefox` and other legacy-protocol clients from crashing the compositor when they close their windows, and fixes a critical segfault regression when destroying standard views.
 
 ---
 
+## [2026-08-19 16:00] Phase 34: wlroots 0.20 XDG Toplevel Initialization and Background Fallback
 ### Architecture: wlroots 0.20 XDG Toplevel Initialization
 
 * **Context:** In wlroots 0.18+, `wlr_xdg_surface_schedule_configure` asserts `surface->initialized`. Calling it directly on an `initial_commit` for a toplevel crashes the compositor because the surface role setup is incomplete.
@@ -135,7 +144,7 @@
 
 ---
 
-
+## [2026-08-13 13:30] Phase 28: Initial Modeset CRTC Disable Guard
 *(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
 
 * **Context:** The deep architectural audit (Phase 27 / `implementation_plan.md`) identified that `request_state_handler` in `src/output.c` unconditionally forwarded all `request_state` events from wlroots to `wlr_output_commit_state`, including disable-CRTC states emitted by wlroots 0.20 during initial DRM connector probe/negotiation. This produced the \"Failed to disable CRTC <N>\" error on compositor startup.
@@ -146,7 +155,7 @@
 
 ---
 
-
+## [2026-08-13 13:45] Phase 26: Phase 24 Hardening Backlog — P2/P3 Batch Executed
 
 *(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
 

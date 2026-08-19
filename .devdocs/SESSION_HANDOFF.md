@@ -1,4 +1,19 @@
-## Session Handoff (Phase 36)
+# Session Handoff Ledger
+
+*Note: Most recent entries are listed at the top.*
+
+## Session Date: 2026-08-19 23:05 — Phase 37: Wayland Client Initialization Crash Fix
+**Timestamp:** 2026-08-19 23:05
+**Current Status:** Fixed a compositor crash during Wayland client launch caused by intermediate unmapped commits.
+**Accomplishments:**
+- Identified a regression introduced during Phase 10 when the `commit_handler` registration was moved from `map` to `hikari_xdg_view_init`. This move was necessary to catch the wlroots 0.20 `initial_commit`, but it inadvertently exposed intermediate unmapped commits (which frequently happen before a client attaches its first real buffer) to the `assert(view->surface != NULL)` check.
+- Added `if (!xdg_surface->surface->mapped) { return; }` to `commit_handler` in `src/xdg_view.c` to gracefully discard commits on unmapped surfaces.
+**Modified Files:**
+- `src/xdg_view.c`
+**Decisions Logged:**
+- Architecture: Safe handling of intermediate unmapped Wayland client commits.
+
+## Session Date: 2026-08-19 20:30 — Phase 36: XWayland Unmanaged View, VT Session Guards, and Follow-ups
 **Timestamp:** 2026-08-19 20:30
 **Current Status:** Implemented three stability fixes: an XWayland UB crash fix for override-redirect windows, a VT switch session guard, and a layer shell popup cycle guard.
 **Accomplishments:**
@@ -28,12 +43,15 @@
 - Test VT switching (`Ctrl+Alt+F2` -> wait -> `Ctrl+Alt+F1`).
 - Proceed with PAM verification and remaining P2 diagnostic backlog.
 
-## Session Handoff (Phase 35)
+---
+
+## Session Date: 2026-08-19 17:55 — Phase 35: Wayland Decoration Lifecycle Fixes
 **Timestamp:** 2026-08-19 17:55
 **Current Status:** Resolved two critical decoration lifecycle crashes in wlroots 0.20.0 involving `wlr_xdg_toplevel_decoration_v1_set_mode` asserting before initial commit, and `wlr_server_decoration` leaking listeners on destroy.
 **Accomplishments:**
 - **BUG-1 (XDG Decoration Assert):** Modified `set_mode` in `src/decoration.c` to check `surface->initialized`. If false, `decoration->scheduled_mode` is assigned directly to prevent wlroots from scheduling an invalid configure event, fixing the compositor crash when launching terminals like `alacritty` and `foot`.
-- **BUG-2 (Server Decoration Listener Leak):** Added a `destroy` listener to `struct hikari_view_decoration` and wired it up in `server_decoration_handler` (`src/server.c`) and `hikari_view_fini` (`src/view.c`). This properly unlinks the `events.mode` listener when a client like `firefox` tears down its server decoration, preventing the `server_decoration_destroy` assertion.
+- **BUG-2 (Server Decoration Listener Leak & View Init Crash):** Added a `destroy` listener to `struct hikari_view_decoration` and wired it up in `server_decoration_handler` (`src/server.c`) and `hikari_view_fini` (`src/view.c`). This properly unlinks the `events.mode` listener when a client like `firefox` tears down its server decoration. 
+  - *Critical Regression Fix:* Discovered that `hikari_view_init` (`src/view.c`) failed to initialize `view->decoration.wlr_decoration = NULL`. Because views are allocated via `malloc` (not `calloc`), this pointer contained garbage memory. When ANY non-server-decoration client (like `foot` or `alacritty`) was destroyed or crashed on startup, `hikari_view_fini` passed the `!= NULL` check and called `wl_list_remove` on random addresses, causing a segmentation fault that crashed the entire compositor. Added `view->decoration.wlr_decoration = NULL` to `hikari_view_init` to permanently resolve this.
 **Modified Files:**
 - `src/decoration.c`
 - `include/hikari/view.h`
@@ -46,7 +64,9 @@
 - Compile `hikari` locally (requires `sudo` due to root ownership of object files).
 - Run `start-hikari` and test native Wayland terminal stability.
 
-## Session Handoff (Phase 34)
+---
+
+## Session Date: 2026-08-19 17:20 — Phase 34: wlroots 0.20 API Correctness Fixes
 **Timestamp:** 2026-08-19 17:20
 **Current Status:** Implemented three critical wlroots 0.20.0 API correctness fixes identified by cross-reference audit against the bundled wlroots source tree.
 **Accomplishments:**
@@ -64,7 +84,9 @@
 - Run `sudo make clean && sudo make install` on the target FreeBSD system.
 - Start hikari natively and verify: layer shell clients (rofi, waybar, mako) map and render correctly; GPU terminals do not show GL errors; foot/alacritty open without Wayland pipe breaks.
 
-## Session Handoff (Phase 33)
+---
+
+## Session Date: 2026-08-19 16:48 — Phase 33: Hardware Buffer sharing and CPU Background Rendering
 **Timestamp:** 2026-08-19 16:48
 **Current Status:** Resolved Wayland client `posix_fallocate` crashes on ZFS and the wlroots 0.20 `wlr_allocator` background rendering issue.
 **Accomplishments:**
@@ -79,7 +101,9 @@
 **Next Steps:**
 - User verification of fixes via running Hikari natively and launching `foot`/`kitty`.
 
-## Session Handoff (Phase 26)
+---
+
+## Session Date: 2026-08-19 15:51 — Phase 26: wlroots 0.20 Initialization and Mapping Fixes
 **Timestamp:** 2026-08-19 15:51
 **Current Status:** Resolved the Wayland pipe crash triggered by launching `foot` terminal, and fixed the silent wallpaper mapping failure that resulted in a black screen.
 **Accomplishments:**
@@ -96,14 +120,6 @@
 **Next Steps:**
 - Restart the Wayland session manually using `start-hikari` to verify the terminal launches successfully without breaking the Wayland pipe.
 - Determine if the user wishes to migrate the OS-level `XDG_RUNTIME_DIR` to a `tmpfs` setup as documented in the scripts, which may restore `posix_fallocate` and potentially `wl_shm` fallback abilities for CPU mapping of buffers.
-
----
-## Session Handoff (Phase 26)
-
-**Timestamp:** `date +%Y-%m-%d
-# Session Handoff Ledger
-
-*Note: Most recent entries are listed at the top.*
 
 ---
 

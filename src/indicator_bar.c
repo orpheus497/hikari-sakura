@@ -5,10 +5,10 @@
 #include <pango/pangocairo.h>
 #include <string.h>
 
+#include <wlr/interfaces/wlr_buffer.h>
 #include <wlr/render/allocator.h>
 #include <wlr/render/drm_format_set.h>
 #include <wlr/render/wlr_renderer.h>
-#include <wlr/interfaces/wlr_buffer.h>
 
 #include <hikari/color.h>
 #include <hikari/configuration.h>
@@ -50,7 +50,8 @@ hikari_indicator_bar_fini(struct hikari_indicator_bar *indicator_bar)
   }
 }
 
-// [COMMENT] Function purpose: Reposition the indicator bar scene buffer relative to view geometry.
+// [COMMENT] Function purpose: Reposition the indicator bar scene buffer
+// relative to view geometry.
 void
 hikari_indicator_bar_position(struct hikari_indicator_bar *indicator_bar,
     struct hikari_output *output,
@@ -60,12 +61,13 @@ hikari_indicator_bar_position(struct hikari_indicator_bar *indicator_bar,
     return;
   }
 
-  wlr_scene_node_set_position(&indicator_bar->scene_buffer->node, 
-      view_geometry->x + 5, 
+  wlr_scene_node_set_position(&indicator_bar->scene_buffer->node,
+      view_geometry->x + 5,
       view_geometry->y + indicator_bar->offset);
 }
 
-// [COMMENT] Function purpose: Replace the existing scene buffer (if any) and create a new one with rendered text content.
+// [COMMENT] Function purpose: Replace the existing scene buffer (if any) and
+// create a new one with rendered text content.
 void
 hikari_indicator_bar_update(struct hikari_indicator_bar *indicator_bar,
     struct hikari_output *output,
@@ -86,7 +88,6 @@ hikari_indicator_bar_update(struct hikari_indicator_bar *indicator_bar,
   struct hikari_font *font = &hikari_configuration->font;
   int width = hikari_configuration->font.character_width * len + 8;
   int height = hikari_configuration->font.height;
-
 
   indicator_bar->width = width;
 
@@ -125,29 +126,12 @@ hikari_indicator_bar_update(struct hikari_indicator_bar *indicator_bar,
   unsigned char *data = cairo_image_surface_get_data(surface);
   int stride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, width);
 
-  const struct wlr_drm_format_set *formats = wlr_renderer_get_texture_formats(
-      hikari_server.renderer, hikari_server.allocator->buffer_caps);
-  const struct wlr_drm_format *format =
-      formats != NULL ? wlr_drm_format_set_get(formats, DRM_FORMAT_ARGB8888) : NULL;
-  struct wlr_buffer *buffer = format != NULL
-      ? wlr_allocator_create_buffer(hikari_server.allocator, width, height, format)
-      : NULL;
+  struct wlr_buffer *buffer =
+      hikari_server_create_argb8888_buffer(width, height, data, stride);
 
-  // [COMMENT] Action purpose: Check if buffer allocation succeeded.
   if (buffer != NULL) {
-    void *mapped_data;
-    uint32_t mapped_format;
-    size_t mapped_stride;
-    // [COMMENT] Action purpose: Guard against failed buffer data mapping.
-    if (wlr_buffer_begin_data_ptr_access(buffer, WLR_BUFFER_DATA_PTR_ACCESS_WRITE, &mapped_data, &mapped_format, &mapped_stride)) {
-      // [COMMENT] Action purpose: Copy rendered cairo image data into mapped buffer by row.
-      for (int y = 0; y < height; y++) {
-        memcpy((char*)mapped_data + y * mapped_stride, data + y * stride, width * 4);
-      }
-      wlr_buffer_end_data_ptr_access(buffer);
-
-      indicator_bar->scene_buffer = wlr_scene_buffer_create(&hikari_server.scene->tree, buffer);
-    }
+    indicator_bar->scene_buffer =
+        wlr_scene_buffer_create(&hikari_server.scene->tree, buffer);
     wlr_buffer_drop(buffer);
   }
 

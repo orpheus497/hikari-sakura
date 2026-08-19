@@ -434,6 +434,7 @@ hikari_view_init(
   view->title = NULL;
   view->id = NULL;
   view->tile = NULL;
+  view->decoration.wlr_decoration = NULL;
   view->use_csd = false;
   view->child = child;
   view->current_geometry = &view->geometry;
@@ -1789,7 +1790,8 @@ hikari_view_refresh_geometry(struct hikari_view *view, struct wlr_box *geometry)
   
   // [COMMENT] Action purpose: Guard against missing scene node before updating position.
   if (view->scene_node != NULL) {
-    wlr_scene_node_set_position(view->scene_node, new_geometry->x, new_geometry->y);
+    wlr_scene_node_set_position(
+        view->scene_node, new_geometry->x + view->output->geometry.x, new_geometry->y + view->output->geometry.y);
   }
 
   refresh_border_geometry(view);
@@ -1839,7 +1841,9 @@ hikari_view_commit_pending_operation(
   view->pending_operation.geometry.width = geometry->width;
   view->pending_operation.geometry.height = geometry->height;
 
-  hikari_indicator_position(&hikari_server.indicator, view);
+  if (!hikari_view_is_hidden(view)) {
+    hikari_indicator_position(&hikari_server.indicator, view);
+  }
   hikari_view_damage_whole(view);
 
   commit_operation(&view->pending_operation, view);

@@ -1,4 +1,5 @@
-/* [COMMENT] Script function and purpose: Defines the main hikari_server struct and lifecycle function prototypes for the Wayland compositor. */
+/* [COMMENT] Script function and purpose: Defines the main hikari_server struct
+ * and lifecycle function prototypes for the Wayland compositor. */
 
 #if !defined(HIKARI_SERVER_H)
 #define HIKARI_SERVER_H
@@ -39,7 +40,8 @@ struct wlr_input_device;
 struct hikari_output;
 struct hikari_group;
 
-/* [COMMENT] Function purpose: Represents the central hikari Wayland compositor server instance, holding display, backend, mode, and view layout state. */
+/* [COMMENT] Function purpose: Represents the central hikari Wayland compositor
+ * server instance, holding display, backend, mode, and view layout state. */
 struct hikari_server {
 
   bool cycling;
@@ -112,7 +114,6 @@ struct hikari_server {
 
   struct hikari_workspace *workspace;
 
-
   struct hikari_cursor cursor;
 
   struct wl_list pointers;
@@ -177,6 +178,9 @@ hikari_server_unset_cycling(void)
 void
 hikari_server_migrate_focus_view(
     struct hikari_output *output, double lx, double ly, bool center);
+
+struct wlr_buffer *
+hikari_server_create_argb8888_buffer(int width, int height, unsigned char *data, int stride);
 
 void
 hikari_server_prepare_privileged(void);

@@ -149,13 +149,21 @@ hikari_output_load_background(struct hikari_output *output,
   unsigned char *data = cairo_image_surface_get_data(output_surface);
   int stride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, output_width);
 
+  size_t byte_count = (size_t)stride * (size_t)output_height;
+  if (byte_count == 0 || byte_count / (size_t)stride != (size_t)output_height) {
+    fprintf(stderr, "error: output background buffer size overflow\n");
+    cairo_surface_destroy(image);
+    cairo_surface_destroy(output_surface);
+    goto done;
+  }
+
   struct hikari_background_buffer *bg_buffer =
       hikari_malloc(sizeof(struct hikari_background_buffer));
   wlr_buffer_init(&bg_buffer->base, &bg_buffer_impl, output_width, output_height);
   bg_buffer->format = DRM_FORMAT_ARGB8888;
   bg_buffer->stride = stride;
-  bg_buffer->data = hikari_malloc(stride * output_height);
-  memcpy(bg_buffer->data, data, stride * output_height);
+  bg_buffer->data = hikari_malloc(byte_count);
+  memcpy(bg_buffer->data, data, byte_count);
 
   struct wlr_scene_buffer *scene_buffer =
       wlr_scene_buffer_create(&hikari_server.scene->tree, &bg_buffer->base);
@@ -178,10 +186,17 @@ hikari_output_load_background(struct hikari_output *output,
     };
     struct wlr_scene_rect *rect = wlr_scene_rect_create(
         &hikari_server.scene->tree, output_width, output_height, color);
-    output->background = &rect->node;
-    wlr_scene_node_set_position(
-        output->background, output->geometry.x, output->geometry.y);
-    wlr_scene_node_lower_to_bottom(output->background);
+    if (rect != NULL) {
+      output->background = &rect->node;
+      wlr_scene_node_set_position(
+          output->background, output->geometry.x, output->geometry.y);
+      wlr_scene_node_lower_to_bottom(output->background);
+    } else {
+      fprintf(stderr,
+          "error: could not create scene rect for background on output \"%s\"\n",
+          output->wlr_output->name);
+      output->background = NULL;
+    }
   }
 
   wlr_buffer_drop(&bg_buffer->base);
@@ -483,6 +498,25 @@ hikari_output_init(struct hikari_output *output, struct wlr_output *wlr_output)
             hikari_configuration, wlr_output->name);
 
     struct wlr_scene_output *scene_output = wlr_scene_output_create(hikari_server.scene, wlr_output);
+    if (scene_output == NULL) {
+      fprintf(stderr,
+          "error: failed to create scene output for \"%s\"; output "
+          "will remain disabled\n",
+          wlr_output->name);
+
+      struct wlr_output_state state;
+      wlr_output_state_init(&state);
+      wlr_output_state_set_enabled(&state, false);
+      if (wlr_output_commit_state(wlr_output, &state)) {
+        wl_list_remove(&output->server_outputs);
+        wl_list_remove(&output->frame.link);
+        wl_list_remove(&output->request_state.link);
+        output->scene_output = NULL;
+        output->enabled = false;
+      }
+      wlr_output_state_finish(&state);
+      return;
+    }
     output->scene_output = scene_output;
 
     struct wlr_output_layout_output *l_output;
@@ -507,12 +541,19 @@ hikari_output_init(struct hikari_output *output, struct wlr_output *wlr_output)
           "error: failed to add output \"%s\" to the output layout; output "
           "will remain disabled\n",
           wlr_output->name);
-      wl_list_remove(&output->server_outputs);
-      wl_list_remove(&output->frame.link);
-      wl_list_remove(&output->request_state.link);
-      wlr_scene_output_destroy(scene_output);
-      output->scene_output = NULL;
-      output->enabled = false;
+
+      struct wlr_output_state state;
+      wlr_output_state_init(&state);
+      wlr_output_state_set_enabled(&state, false);
+      if (wlr_output_commit_state(wlr_output, &state)) {
+        wl_list_remove(&output->server_outputs);
+        wl_list_remove(&output->frame.link);
+        wl_list_remove(&output->request_state.link);
+        wlr_scene_output_destroy(scene_output);
+        output->scene_output = NULL;
+        output->enabled = false;
+      }
+      wlr_output_state_finish(&state);
       return;
     }
 

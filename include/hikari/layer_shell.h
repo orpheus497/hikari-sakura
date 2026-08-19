@@ -48,6 +48,12 @@ struct hikari_layer {
   enum zwlr_layer_shell_v1_layer layer;
   bool mapped;
   bool configured;
+
+  uint32_t desired_width, desired_height;
+  uint32_t anchor;
+  struct {
+    int32_t top, right, bottom, left;
+  } margin;
 };
 
 struct hikari_layer_popup {

@@ -124,7 +124,7 @@ Input handling (keyboard and pointer) does not happen globally. Instead, `server
 2. **Hardcoded Limits**:
    - `workspace.c` hardcodes exactly 10 sheets (`HIKARI_NR_OF_SHEETS`). 
    - `mark.c` hardcodes exactly 26 marks ('a' through 'z').
-3. **UI Buffer Allocation Strategy**: In `indicator.c`, `border.c`, and `lock_indicator.c`, the compositor uses `cairo` to render UI elements, maps the memory, copies it to a `wlr_buffer`, and attaches it to the scene graph. This is CPU intensive. While fine for static borders, redrawing the circular `lock_indicator.c` on every timer tick via cairo software rendering is suboptimal compared to a simple GLES2 shader.
+3. **UI Buffer Allocation Strategy**: In `indicator.c`, `border.c`, and `lock_indicator.c`, the compositor uses `cairo` to render UI elements, maps the memory, copies it to a `wlr_buffer` via `hikari_server_create_argb8888_buffer()`, and attaches it to the scene graph. This is CPU intensive. While fine for static borders, redrawing the circular `lock_indicator.c` on every timer tick via cairo software rendering is suboptimal compared to a simple GLES2 shader.
 4. **Missing Graceful Degradation on XWayland**: If XWayland crashes, the `wlr_xwayland_surface` callbacks can sometimes trigger use-after-free bugs if the destruction signals aren't perfectly synchronized. The transition to the `wlr_scene` API mitigates this visually, but logical structs can leak.
 
 **Known Limitations (verified, not defects):**
@@ -406,7 +406,7 @@ Hikari dynamically re-routes input based on the active `hikari_server.mode`.
 
 **Lifecycle & Init Functions (`src/server.c`):**
 - `int main(int argc, char **argv)`: 
-  - Validates `getuid() != 0` (refuses to run as root).
+  - Validates `geteuid() != 0` (refuses to run as root) using a runtime privilege check `if (geteuid() != 0) { exit(EXIT_FAILURE); }` instead of `assert()`.
   - Drops privileges using `setuid(getuid())` and `setgid(getgid())`.
   - Sets `WAYLAND_DISPLAY`.
   - Calls `hikari_server_prepare_privileged()` to acquire seatd before finishing user mode setup.
@@ -491,10 +491,7 @@ Hikari dynamically re-routes input based on the active `hikari_server.mode`.
 - `void hikari_output_load_background(struct hikari_output *output, const char *path, enum hikari_background_fit background_fit)`:
   - Reads PNG via `cairo_image_surface_create_from_png`.
   - Performs CPU-bound scaling/tiling onto a target ARGB32 cairo surface.
-  - **Manual Buffer Allocation**: Allocates a `wlr_buffer` natively using `wlr_allocator_create_buffer(allocator, width, height, &format)`.
-  - Maps the buffer memory via `wlr_buffer_begin_data_ptr_access(WLR_BUFFER_DATA_PTR_ACCESS_WRITE)`.
-  - `memcpy`s the cairo pixels directly into the Wayland buffer.
-  - Wraps it in a `wlr_scene_buffer` via `wlr_scene_buffer_create()` and lowers it to the bottom of the scene graph.
+  - **Manual Buffer Allocation**: Allocates memory via `hikari_background_buffer` receiving Cairo ARGB32 pixels and its wrapping in a `wlr_scene_buffer`, with a solid-color `wlr_scene_rect` fallback when creation fails.
 
 **Output Layout Updates (`src/output.c`):**
 - `static void output_geometry(struct hikari_output *output)`:

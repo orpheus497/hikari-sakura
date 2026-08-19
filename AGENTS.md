@@ -27,7 +27,7 @@ Maintain the following files to manage state and continuity:
 
 ## CODE DOCUMENTATION STANDARDS
 
-Documentation precedes code. All files must be reviewed and updated to meet this standard. Use the following exact prefixes directly above the relevant code blocks, using the native comment syntax of the language (e.g., `//`, `#`, or `##`), to ensure immediate legibility:
+Documentation precedes code. All files must be reviewed and updated to meet this standard. Use the following exact prefixes directly above the relevant code blocks, using the native comment syntax of the language (e.g., `//`, `#`, or `##`), to ensure immediate legibility. For shell scripts, place the comment directly beneath the shebang:
 
 * `Script function and purpose:` [What this script does] - Top of every script/source.
 * `Function purpose:` [Why this function exists and how it is used] - Before standalone functions.
@@ -64,7 +64,7 @@ For every approved step:
 
 1. Update `.devdocs/` with final session status.
 2. Append a detailed entry to `SESSION_HANDOFF.md` detailing accomplishments, modified files, decisions, and next steps.
-3. Output final report to the user.
+3. Output final report to the user and halt for user confirmation before exiting or moving to a new phase.
 
 ## STANDARD OPERATING CYCLE
 
