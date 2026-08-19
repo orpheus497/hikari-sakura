@@ -56,16 +56,26 @@ hikari_border_refresh_geometry(
   border->geometry.width = geometry->width + border_width * 2;
   border->geometry.height = geometry->height + border_width * 2;
 
-  wlr_scene_node_set_position(&border->top->node, border->geometry.x, border->geometry.y);
+  /* [COMMENT] Action purpose: Position the rects PARENT-RELATIVE. These nodes
+  are children of the view's scene tree, which hikari_view_refresh_geometry has
+  already positioned at the view's layout-absolute origin, and
+  wlr_scene_node_set_position is relative to the parent. Using the absolute
+  border->geometry here would apply the view origin twice and draw the border
+  at roughly double the intended offset. border->geometry itself stays absolute
+  because hit-testing and damage tracking consume it in layout coordinates. */
+  wlr_scene_node_set_position(&border->top->node, -border_width, -border_width);
   wlr_scene_rect_set_size(border->top, border->geometry.width, border_width);
 
-  wlr_scene_node_set_position(&border->bottom->node, border->geometry.x, border->geometry.y + border->geometry.height - border_width);
+  wlr_scene_node_set_position(
+      &border->bottom->node, -border_width, geometry->height);
   wlr_scene_rect_set_size(border->bottom, border->geometry.width, border_width);
 
-  wlr_scene_node_set_position(&border->left->node, border->geometry.x, border->geometry.y);
+  wlr_scene_node_set_position(
+      &border->left->node, -border_width, -border_width);
   wlr_scene_rect_set_size(border->left, border_width, border->geometry.height);
 
-  wlr_scene_node_set_position(&border->right->node, border->geometry.x + border->geometry.width - border_width, border->geometry.y);
+  wlr_scene_node_set_position(
+      &border->right->node, geometry->width, -border_width);
   wlr_scene_rect_set_size(border->right, border_width, border->geometry.height);
 
   wlr_scene_node_set_enabled(&border->top->node, true);

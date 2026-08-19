@@ -1794,10 +1794,17 @@ hikari_view_refresh_geometry(struct hikari_view *view, struct wlr_box *geometry)
   view->current_geometry = new_geometry;
   view->current_unmaximized_geometry = refresh_unmaximized_geometry(view);
   
-  // [COMMENT] Action purpose: Guard against missing scene node before updating position.
-  if (view->scene_node != NULL) {
-    wlr_scene_node_set_position(
-        view->scene_node, new_geometry->x + view->output->geometry.x, new_geometry->y + view->output->geometry.y);
+  // [COMMENT] Action purpose: Guard against BOTH a missing scene node and a
+  // missing output before updating position. view->output is NULL between
+  // hikari_view_init and hikari_view_configure, but scene_node is already set
+  // by then (hikari_xdg_view_init assigns it at new_toplevel time). first_map
+  // calls this function in that window, so guarding only on scene_node
+  // dereferences a NULL output on every single window creation. The position
+  // is recomputed once the view is configured onto an output.
+  if (view->scene_node != NULL && view->output != NULL) {
+    wlr_scene_node_set_position(view->scene_node,
+        new_geometry->x + view->output->geometry.x,
+        new_geometry->y + view->output->geometry.y);
   }
 
   refresh_border_geometry(view);

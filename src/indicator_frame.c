@@ -93,26 +93,35 @@ hikari_indicator_frame_refresh_geometry(
 
   int border = hikari_configuration->border;
 
+  /* [COMMENT] Action purpose: Convert to PARENT-RELATIVE coordinates. These
+  rects are children of the view's scene tree, which is already positioned at
+  the view's layout-absolute origin, and wlr_scene_node_set_position is
+  relative to the parent. The geometries selected above are absolute, so the
+  view origin is subtracted out; using them directly would offset the frame by
+  the view position twice. */
+  struct wlr_box *origin = hikari_view_geometry(view);
+
   // [COMMENT] Action purpose: Position and size each rect to form a frame around the view.
   wlr_scene_node_set_position(&indicator_frame->top->node,
-      top_bottom_geometry->x, top_bottom_geometry->y);
+      top_bottom_geometry->x - origin->x, top_bottom_geometry->y - origin->y);
   wlr_scene_rect_set_size(indicator_frame->top,
       top_bottom_geometry->width, border);
 
   wlr_scene_node_set_position(&indicator_frame->bottom->node,
-      top_bottom_geometry->x,
-      top_bottom_geometry->y + top_bottom_geometry->height - border);
+      top_bottom_geometry->x - origin->x,
+      top_bottom_geometry->y + top_bottom_geometry->height - border
+          - origin->y);
   wlr_scene_rect_set_size(indicator_frame->bottom,
       top_bottom_geometry->width, border);
 
   wlr_scene_node_set_position(&indicator_frame->left->node,
-      left_right_geometry->x, left_right_geometry->y);
+      left_right_geometry->x - origin->x, left_right_geometry->y - origin->y);
   wlr_scene_rect_set_size(indicator_frame->left,
       border, left_right_geometry->height);
 
   wlr_scene_node_set_position(&indicator_frame->right->node,
-      left_right_geometry->x + left_right_geometry->width - border,
-      left_right_geometry->y);
+      left_right_geometry->x + left_right_geometry->width - border - origin->x,
+      left_right_geometry->y - origin->y);
   wlr_scene_rect_set_size(indicator_frame->right,
       border, left_right_geometry->height);
 }

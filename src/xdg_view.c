@@ -311,6 +311,19 @@ destroy_handler(struct wl_listener *listener, void *data)
   wl_list_remove(&xdg_view->destroy.link);
 
   hikari_view_fini(view);
+
+  /* [COMMENT] Action purpose: Destroy the hikari-owned parent tree, which also
+  destroys the border and indicator rects parented to it. wlroots has already
+  destroyed surface_tree from its own xdg_surface destroy listener by this
+  point, so only hikari's own nodes remain to clean up. Without this the tree
+  and its rects leak for every window that is ever opened. */
+  if (xdg_view->scene_tree != NULL) {
+    wlr_scene_node_destroy(&xdg_view->scene_tree->node);
+    xdg_view->scene_tree = NULL;
+    xdg_view->surface_tree = NULL;
+    view->scene_node = NULL;
+  }
+
   hikari_free(xdg_view);
 }
 
@@ -550,12 +563,43 @@ hikari_xdg_view_init(struct hikari_xdg_view *xdg_view,
 
   xdg_view->surface = xdg_surface;
   xdg_view->xdg_toplevel = xdg_surface->toplevel;
-  xdg_view->scene_tree = wlr_scene_xdg_surface_create(&hikari_server.scene->tree, xdg_view->xdg_toplevel->base);
+
+  /* [COMMENT] Action purpose: Create a hikari-owned parent tree first. wlroots
+  installs its own xdg_surface destroy listener inside
+  wlr_scene_xdg_surface_create (see wlroots types/scene/xdg_shell.c) that
+  destroys the tree it returns -- along with every child node. Parenting
+  hikari's border and indicator rects into that tree would hand their lifetime
+  to wlroots and leave hikari holding dangling pointers. Owning the parent
+  ourselves keeps hikari's nodes under hikari's control, matching the structure
+  hikari_xwayland_view_init already uses. */
+  xdg_view->scene_tree = wlr_scene_tree_create(&hikari_server.scene->tree);
+  if (xdg_view->scene_tree == NULL) {
+    fprintf(stderr, "error: could not create scene tree for xdg view\n");
+    hikari_view_fini(&xdg_view->view);
+    hikari_free(xdg_view);
+    return;
+  }
+
+  /* [COMMENT] Action purpose: Attach the wlroots-managed surface tree beneath
+  the hikari-owned parent. wlroots keeps this subtree positioned against the
+  surface's own geometry offset and tears it down on xdg_surface destroy. */
+  xdg_view->surface_tree =
+      wlr_scene_xdg_surface_create(xdg_view->scene_tree, xdg_surface);
+  if (xdg_view->surface_tree == NULL) {
+    fprintf(stderr, "error: could not create scene surface for xdg view\n");
+    wlr_scene_node_destroy(&xdg_view->scene_tree->node);
+    hikari_view_fini(&xdg_view->view);
+    hikari_free(xdg_view);
+    return;
+  }
+
   xdg_view->view.scene_node = &xdg_view->scene_tree->node;
   xdg_view->scene_tree->node.data = xdg_view;
-  // [COMMENT] Action purpose: Store the scene_tree in xdg_surface->data for wlroots
-  // popup parenting convention (wlr_scene_xdg_surface_create uses parent->data to
-  // find the scene tree). The view back-reference is in scene_tree->node.data.
+  // [COMMENT] Action purpose: Store the hikari-owned scene_tree (NOT the wlroots
+  // surface_tree) in xdg_surface->data. server_decoration_handler resolves a
+  // decoration back to its view via xdg_surface->data->node.data, and only
+  // scene_tree carries that back-reference; pointing this at surface_tree would
+  // hand that lookup a tree whose node.data was never set.
   xdg_surface->data = xdg_view->scene_tree;
   hikari_border_init(&xdg_view->view.border, xdg_view->scene_tree);
   hikari_indicator_frame_init(&xdg_view->view.indicator_frame, xdg_view->scene_tree);
