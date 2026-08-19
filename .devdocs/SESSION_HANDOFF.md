@@ -1,3 +1,33 @@
+## Session Handoff (Phase 36)
+**Timestamp:** 2026-08-19 20:30
+**Current Status:** Implemented three stability fixes: an XWayland UB crash fix for override-redirect windows, a VT switch session guard, and a layer shell popup cycle guard.
+**Accomplishments:**
+- **P1 (XWayland UB Fix):** Implemented safe listener wiring for unmanaged XWayland views. Previously, `map`/`unmap` lists were never initialized, causing `destroy_handler` to crash on `wl_list_remove` via uninitialized memory. Added `associate` and `dissociate` handlers to safely attach listeners.
+- **P2 (VT Session Guard):** Tracked `wlr_session.events.active` to gate `frame_handler` and `request_state_handler` commits in `output.c`, preventing lockups and CRTC state corruption when switching VTs.
+- **P3 (Popup Cycle Guard):** Added a depth limit of 64 to `for(;;)` parent-walk loops in `layer_shell.c` to prevent infinite spins.
+- **P3 Follow-up (View List UAF):** Fixed a use-after-free risk in `src/view.c` by ensuring `hikari_view_evacuate` unlinks and relinks `sheet_views` and `output_views` even when the view is hidden, preventing corrupted list nodes when merging workspaces.
+- **P3 Follow-up (Crash Logging):** Fixed `src/main.c` to call `wlr_log_init(WLR_INFO, NULL)` in release builds so crash context isn't silenced. Added structured VT transition logging to `session_active_handler` in `server.c`.
+**Modified Files:**
+- `src/xwayland_unmanaged_view.c`
+- `include/hikari/xwayland_unmanaged_view.h`
+- `src/server.c`
+- `include/hikari/server.h`
+- `src/output.c`
+- `src/layer_shell.c`
+- `src/view.c`
+- `main.c`
+**Decisions Logged:**
+- Architecture: XWayland Override-Redirect Listener Lifecycle
+- Architecture: VT Switch Session Commits Guard
+- Architecture: Layer Shell Popup Parent-Walk Depth Limits
+- Architecture: View List Migration Use-After-Free Guard
+- Architecture: Crash Context Structured Logging
+**Next Steps:**
+- User must run `sudo make clean && sudo make install` to clear root-owned objects from prior compilations.
+- Test XWayland override-redirect surfaces (e.g. tooltips/context menus in Firefox/GTK/Qt).
+- Test VT switching (`Ctrl+Alt+F2` -> wait -> `Ctrl+Alt+F1`).
+- Proceed with PAM verification and remaining P2 diagnostic backlog.
+
 ## Session Handoff (Phase 35)
 **Timestamp:** 2026-08-19 17:55
 **Current Status:** Resolved two critical decoration lifecycle crashes in wlroots 0.20.0 involving `wlr_xdg_toplevel_decoration_v1_set_mode` asserting before initial commit, and `wlr_server_decoration` leaking listeners on destroy.

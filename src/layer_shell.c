@@ -275,6 +275,12 @@ static void
 popup_unconstrain(struct hikari_layer_popup *layer_popup)
 {
   struct hikari_layer *layer = get_layer(layer_popup);
+  /* Action purpose: get_layer returns NULL only when the depth guard fires
+  (a compositor-side cycle bug); bail out gracefully rather than dereferencing
+  a NULL output pointer. */
+  if (layer == NULL) {
+    return;
+  }
   struct hikari_output *output = layer->output;
 
   /* [COMMENT] Action purpose: Provide the popup with a constraint box in
@@ -317,7 +323,19 @@ static struct hikari_layer *
 get_layer(struct hikari_layer_popup *layer_popup)
 {
   struct hikari_layer_popup *current = layer_popup;
+
+  /* Action purpose: Guard against an infinite loop if popup parent links ever
+  form a cycle (a compositor bug, not a client bug). Depth > 64 is impossible
+  in any real UI stack; hitting the limit indicates corrupted parent pointers. */
+  int depth = 0;
+  const int MAX_POPUP_DEPTH = 64;
+
   for (;;) {
+    if (++depth > MAX_POPUP_DEPTH) {
+      wlr_log(WLR_ERROR,
+          "get_layer: popup parent chain exceeded depth limit -- aborting walk");
+      return NULL;
+    }
     switch (current->parent.type) {
       case HIKARI_LAYER_NODE_TYPE_LAYER:
         return current->parent.node.layer;
@@ -364,7 +382,18 @@ damage_popup(struct hikari_layer_popup *layer_popup, bool whole)
 
   struct hikari_layer *layer;
   struct hikari_layer_popup *current = layer_popup;
+
+  /* Action purpose: Guard against an infinite loop if popup parent links ever
+  form a cycle. Mirrors the guard in get_layer. */
+  int depth = 0;
+  const int MAX_POPUP_DEPTH = 64;
+
   for (;;) {
+    if (++depth > MAX_POPUP_DEPTH) {
+      wlr_log(WLR_ERROR,
+          "damage_popup: popup parent chain exceeded depth limit -- aborting walk");
+      return;
+    }
     switch (current->parent.type) {
       case HIKARI_LAYER_NODE_TYPE_LAYER:
         layer = current->parent.node.layer;

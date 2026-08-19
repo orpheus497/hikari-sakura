@@ -8,6 +8,7 @@
 #include <wayland-server-core.h>
 
 #include <wlr/backend.h>
+#include <wlr/util/log.h>
 #include <wlr/backend/headless.h>
 #include <wlr/backend/libinput.h>
 #include <wlr/backend/session.h>
@@ -936,6 +937,43 @@ init_noop_output(struct hikari_server *server)
 singleton -- configuration, wayland globals, scene graph, shells, input, and
 the noop fallback output. Called by hikari_server_start before the backend
 is started. */
+/* Function purpose: Listener for wlr_session.events.active -- fired by
+wlroots on VT switch-in (data=true) and switch-out (data=false). Sets the
+global session_active flag consumed by frame_handler and
+request_state_handler, and reschedules frames on all outputs when the
+compositor becomes the foreground VT again so the display repaints
+immediately after return. */
+static void
+session_active_handler(struct wl_listener *listener, void *data)
+{
+  struct hikari_server *server =
+      wl_container_of(listener, server, session_active_listener);
+
+  bool active = *(bool *)data;
+
+  /* Action purpose: Log session active state transitions to provide structured
+  context if a compositor crash occurs after a VT switch. */
+  wlr_log(WLR_INFO, "session_active_handler: VT session switched to %s",
+      active ? "active" : "inactive");
+
+  /* Action purpose: Update session-active flag unconditionally; frame_handler
+  and request_state_handler read this flag to gate commit calls on an active
+  CRTC. */
+  server->session_active = active;
+
+  if (active) {
+    /* Action purpose: After VT switch-back all outputs need one frame-done
+    cycle to re-synchronise the swapchain. Schedule frames on every enabled
+    output so the compositor repaints without waiting for a client commit. */
+    struct hikari_output *output;
+    wl_list_for_each (output, &server->outputs, server_outputs) {
+      if (output->enabled) {
+        hikari_output_schedule_frame(output);
+      }
+    }
+  }
+}
+
 static void
 server_init(struct hikari_server *server, char *config_path)
 {
@@ -1088,6 +1126,25 @@ server_init(struct hikari_server *server, char *config_path)
   hikari_marks_init();
 
   init_noop_output(server);
+
+  /* Action purpose: Subscribe to the session active signal so frame_handler
+  and request_state_handler can gate commits on VT-active state. The session
+  pointer is populated by wlr_backend_autocreate; it is NULL when running
+  nested (Wayland-on-Wayland), in which case VT switching cannot occur and
+  the guard is safely skipped. session_active is initialised true so frames
+  proceed normally on startup. */
+  server->session_active = true;
+  if (server->session != NULL) {
+    server->session_active_listener.notify = session_active_handler;
+    wl_signal_add(
+        &server->session->events.active,
+        &server->session_active_listener);
+  } else {
+    /* Action purpose: Pre-initialise the listener link as an empty list when
+    no session exists (nested compositor) so hikari_server_stop can safely
+    call wl_list_remove on it unconditionally. */
+    wl_list_init(&server->session_active_listener.link);
+  }
 }
 
 static void
@@ -1206,6 +1263,11 @@ hikari_server_stop(void)
   wl_list_remove(&server->output_layout_change.link);
   wl_list_remove(&server->new_decoration.link);
   wl_list_remove(&server->new_toplevel_decoration.link);
+  // [COMMENT] Action purpose: Remove the session-active listener before the
+  // backend (and therefore the session) are destroyed. The link is always
+  // initialised (either via wl_signal_add or wl_list_init when no session
+  // exists), so removal is unconditionally safe.
+  wl_list_remove(&server->session_active_listener.link);
 #ifdef HAVE_LAYERSHELL
   wl_list_remove(&server->new_layer_shell_surface.link);
 #endif

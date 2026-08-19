@@ -126,6 +126,8 @@ destroy_handler(struct wl_listener *listener, void *data)
 
   wl_list_remove(&xwayland_unmanaged_view->map.link);
   wl_list_remove(&xwayland_unmanaged_view->unmap.link);
+  wl_list_remove(&xwayland_unmanaged_view->associate.link);
+  wl_list_remove(&xwayland_unmanaged_view->dissociate.link);
   wl_list_remove(&xwayland_unmanaged_view->destroy.link);
   wl_list_remove(&xwayland_unmanaged_view->request_configure.link);
 
@@ -165,6 +167,62 @@ static void
 focus(struct hikari_node *node)
 {}
 
+/* Function purpose: Wire map/unmap listeners to the underlying wlr_surface
+once wlroots associates it with the X11 surface. Called either directly from
+hikari_xwayland_unmanaged_view_init (when surface is already associated) or
+deferred via associate_handler (wlroots 0.20 may deliver surface later). */
+static void
+attach_surface_listeners_unmanaged(
+    struct hikari_xwayland_unmanaged_view *xwayland_unmanaged_view)
+{
+  struct wlr_xwayland_surface *xwayland_surface =
+      xwayland_unmanaged_view->surface;
+
+  xwayland_unmanaged_view->map.notify = map_handler;
+  wl_signal_add(
+      &xwayland_surface->surface->events.map, &xwayland_unmanaged_view->map);
+
+  xwayland_unmanaged_view->unmap.notify = unmap_handler;
+  wl_signal_add(
+      &xwayland_surface->surface->events.unmap,
+      &xwayland_unmanaged_view->unmap);
+}
+
+/* Function purpose: wlroots 0.20 lifecycle hook -- the wlr_surface only
+becomes valid when `associate` fires (it is NULL between new_surface and
+associate for some surface types). Mirrors associate_handler in
+xwayland_view.c. */
+static void
+associate_handler(struct wl_listener *listener, void *data)
+{
+  struct hikari_xwayland_unmanaged_view *xwayland_unmanaged_view =
+      wl_container_of(listener, xwayland_unmanaged_view, associate);
+
+  attach_surface_listeners_unmanaged(xwayland_unmanaged_view);
+}
+
+/* Function purpose: Drop map/unmap listeners when wlroots dissociates the
+wlr_surface (e.g. X11 surface recreation). Links are re-initialised so a
+later re-associate and destroy_handler remain safe. Mirrors
+dissociate_handler in xwayland_view.c. */
+static void
+dissociate_handler(struct wl_listener *listener, void *data)
+{
+  struct hikari_xwayland_unmanaged_view *xwayland_unmanaged_view =
+      wl_container_of(listener, xwayland_unmanaged_view, dissociate);
+
+  wl_list_remove(&xwayland_unmanaged_view->map.link);
+  wl_list_init(&xwayland_unmanaged_view->map.link);
+  wl_list_remove(&xwayland_unmanaged_view->unmap.link);
+  wl_list_init(&xwayland_unmanaged_view->unmap.link);
+}
+
+/* Function purpose: Initialise an unmanaged (override-redirect) XWayland
+view wrapper. Wires the full wlroots 0.20 lifecycle: map/unmap links are
+pre-initialised with wl_list_init so destroy_handler can always call
+wl_list_remove safely, regardless of whether surface association has
+occurred. Associate/dissociate listeners defer or withdraw map/unmap wiring
+around the wlr_surface lifetime, mirroring hikari_xwayland_view_init. */
 void
 hikari_xwayland_unmanaged_view_init(
     struct hikari_xwayland_unmanaged_view *xwayland_unmanaged_view,
@@ -185,6 +243,33 @@ hikari_xwayland_unmanaged_view_init(
   xwayland_unmanaged_view->surface->data =
       (struct hikari_node *)xwayland_unmanaged_view;
   xwayland_unmanaged_view->hidden = true;
+
+  /* Action purpose: Pre-initialise map/unmap listener links as empty lists so
+  wl_list_remove in destroy_handler is always safe, even when the surface was
+  never associated (and therefore map/unmap were never wl_signal_add'd). This
+  eliminates the undefined behaviour on every override-redirect window close. */
+  wl_list_init(&xwayland_unmanaged_view->map.link);
+  wl_list_init(&xwayland_unmanaged_view->unmap.link);
+
+  /* Action purpose: Subscribe to associate/dissociate so map/unmap listeners
+  are wired to the wlr_surface only while it is valid. wlroots 0.20 may not
+  have populated xwayland_surface->surface yet at new-surface time. */
+  xwayland_unmanaged_view->associate.notify = associate_handler;
+  wl_signal_add(
+      &xwayland_surface->events.associate,
+      &xwayland_unmanaged_view->associate);
+
+  xwayland_unmanaged_view->dissociate.notify = dissociate_handler;
+  wl_signal_add(
+      &xwayland_surface->events.dissociate,
+      &xwayland_unmanaged_view->dissociate);
+
+  /* Action purpose: If the wlr_surface is already associated at init time
+  (common for override-redirect surfaces), wire map/unmap immediately rather
+  than waiting for the associate signal, matching xwayland_view.c:513. */
+  if (xwayland_surface->surface != NULL) {
+    attach_surface_listeners_unmanaged(xwayland_unmanaged_view);
+  }
 
   xwayland_unmanaged_view->destroy.notify = destroy_handler;
   wl_signal_add(

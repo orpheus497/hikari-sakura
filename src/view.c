@@ -1431,6 +1431,16 @@ hikari_view_evacuate(struct hikari_view *view, struct hikari_sheet *sheet)
   view->output = sheet->workspace->output;
   view->sheet = sheet;
 
+  /* Action purpose: Unconditionally move the view's list links to the new
+  sheet and output before evaluating visibility. If the view is hidden, its
+  sheet_views and output_views links are NOT removed during hide(), meaning
+  they would otherwise be left dangling in the old (potentially destroyed)
+  output's lists. */
+  wl_list_remove(&view->sheet_views);
+  wl_list_insert(&sheet->views, &view->sheet_views);
+
+  wl_list_remove(&view->output_views);
+  wl_list_insert(&view->output->views, &view->output_views);
 
   if (!hikari_view_is_hidden(view)) {
     if (hikari_view_is_forced(view)) {

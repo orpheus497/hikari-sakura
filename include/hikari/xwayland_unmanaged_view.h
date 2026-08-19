@@ -25,6 +25,8 @@ struct hikari_xwayland_unmanaged_view {
   struct wl_listener destroy;
   struct wl_listener request_configure;
   struct wl_listener commit;
+  struct wl_listener associate;
+  struct wl_listener dissociate;
 
   struct wl_list unmanaged_output_views;
 };

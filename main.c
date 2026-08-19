@@ -7,9 +7,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#ifndef NDEBUG
 #include <wlr/util/log.h>
-#endif
 
 #include <hikari/server.h>
 
@@ -232,12 +230,14 @@ parse_options(int argc, char **argv, struct options *options)
 int
 main(int argc, char **argv)
 {
-  // [COMMENT] Action purpose: Enable verbose wlroots logging in debug builds only.
-  // wlr_log_init and WLR_DEBUG are declared in <wlr/util/log.h>, which is
-  // included only under #ifndef NDEBUG above. The call must be guarded
-  // identically or it will reference undeclared identifiers in release builds.
+  // [COMMENT] Action purpose: Enable wlroots logging. Use WLR_DEBUG for debug
+  // builds (extremely verbose, useful for wayland protocol tracing), but fall
+  // back to WLR_INFO for release builds to ensure fatal errors and crashes
+  // are logged diagnostically rather than failing silently.
 #ifndef NDEBUG
   wlr_log_init(WLR_DEBUG, NULL);
+#else
+  wlr_log_init(WLR_INFO, NULL);
 #endif
   struct options options;
 

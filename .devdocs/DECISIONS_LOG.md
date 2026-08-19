@@ -1,5 +1,35 @@
-## [2026-08-19 17:55] Phase 35: Wayland Decoration Lifecycle Fixes (wlroots 0.20)
+## [2026-08-19 20:30] Phase 36: XWayland Unmanaged View and VT Session Guards
 
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
+
+### Architecture: XWayland Override-Redirect Listener Lifecycle
+* **Context:** `hikari_xwayland_unmanaged_view_init` failed to initialize or wire `map` and `unmap` listeners, causing `destroy_handler` to unconditionally call `wl_list_remove` on uninitialized memory whenever an override-redirect window (tooltip, dropdown, context menu) was closed.
+* **Decision:** Implemented the full `wlroots 0.20` associate/dissociate lifecycle in `src/xwayland_unmanaged_view.c` (mirroring `xwayland_view.c`). Initialized listener links unconditionally at creation time so destruction is always safe, and deferred `map`/`unmap` signal wiring to the `associate` event when `wlr_surface` becomes valid.
+* **Impact:** Prevents the compositor from crashing due to undefined behavior (UB) on `wl_list_remove` when tooltips, dropdowns, and context menus are closed.
+
+### Architecture: VT Switch Session Commits Guard
+* **Context:** Switching Virtual Terminals (e.g., `Ctrl+Alt+F2`) caused the compositor to continue attempting to commit frames and state to an inactive CRTC, leading to failed commits, swapchain corruption, and lockups upon return.
+* **Decision:** Added a `session_active` boolean to `hikari_server`, updated via a listener on `wlr_session.events.active`. Guarded `frame_handler` and `request_state_handler` in `src/output.c` to discard commits and state requests when inactive. Forced a frame schedule on all enabled outputs when the session reactivates to resync the swapchain.
+* **Impact:** Fixes compositor lockups and state corruption associated with VT switching.
+
+### Architecture: Layer Shell Popup Parent-Walk Depth Limits
+* **Context:** The `get_layer` and `damage_popup` functions in `src/layer_shell.c` used unbounded `for(;;)` loops to traverse popup parent chains, posing a risk of an infinite event-loop spin if a cycle ever formed.
+* **Decision:** Added a `MAX_POPUP_DEPTH = 64` limit to the walk. If the limit is hit, the traversal aborts gracefully (returning `NULL` in `get_layer`, which is now safely checked in its callers).
+* **Impact:** Cheap insurance against compositor lockups from circular popup parent references.
+
+### Architecture: View List Migration Use-After-Free Guard
+* **Context:** `hikari_view_evacuate` changes a view's `sheet` and `output` when merging workspaces (e.g. output disconnect). However, for *hidden* views, it skipped relinking the view's `sheet_views` and `output_views` nodes. This left the hidden view's nodes pointing into the old output's memory space, which becomes corrupted when that output is freed.
+* **Decision:** Extracted the `wl_list_remove` and `wl_list_insert` logic out of the visibility guard in `src/view.c`. List nodes are now unconditionally relinked to the new sheet and output prior to evaluating visibility.
+* **Impact:** Fixes a critical use-after-free vulnerability during output hotplugging.
+
+### Architecture: Crash Context Structured Logging
+* **Context:** `wlr_log_init(WLR_DEBUG)` was conditionally compiled under `#ifndef NDEBUG` in `main.c`. Release builds had no explicit log initialization, silencing fatal errors. Furthermore, VT session switches lacked context tracing.
+* **Decision:** Updated `main.c` to fallback to `wlr_log_init(WLR_INFO, NULL)` for release builds. Added `wlr_log(WLR_INFO, ...)` to `session_active_handler` in `server.c` to trace VT switches.
+* **Impact:** Ensures crashes produce actionable structured logs rather than failing opaquely.
+
+---
+
+## [2026-08-19 17:55] Phase 35: Wayland Decoration Lifecycle Fixes (wlroots 0.20)
 *(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
 
 ### Architecture: Deferred XDG Decoration Mode Setup (wlroots 0.20)

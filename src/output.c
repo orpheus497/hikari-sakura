@@ -10,6 +10,7 @@
 #include <drm_fourcc.h>
 
 #include <wlr/backend.h>
+#include <wlr/util/log.h>
 #include <wlr/render/allocator.h>
 #include <wlr/render/drm_format_set.h>
 #include <wlr/render/wlr_renderer.h>
@@ -311,6 +312,15 @@ static void
 frame_handler(struct wl_listener *listener, void *data)
 {
   struct hikari_output *output = wl_container_of(listener, output, frame);
+
+  // [COMMENT] Action purpose: Skip frame commits while the session is inactive
+  // (VT switched away) or the output is disabled. wlr_scene_output_commit on
+  // an inactive CRTC returns false and can corrupt swapchain state. Both flags
+  // are set/cleared by session_active_handler and hikari_output_enable.
+  if (!hikari_server.session_active || !output->enabled) {
+    return;
+  }
+
   struct wlr_scene *scene = output->server->scene;
 
   struct wlr_scene_output *scene_output = wlr_scene_get_scene_output(
@@ -319,7 +329,15 @@ frame_handler(struct wl_listener *listener, void *data)
     return;
   }
 
-  wlr_scene_output_commit(scene_output, NULL);
+  // [COMMENT] Action purpose: Check the commit return value so failures are
+  // logged rather than silently discarded. send_frame_done is only called on
+  // success to avoid advancing client buffer timestamps after a failed commit.
+  if (!wlr_scene_output_commit(scene_output, NULL)) {
+    wlr_log(WLR_ERROR,
+        "frame_handler: wlr_scene_output_commit failed for output %s",
+        output->wlr_output->name);
+    return;
+  }
 
   struct timespec now;
   clock_gettime(CLOCK_MONOTONIC, &now);
@@ -333,6 +351,14 @@ request_state_handler(struct wl_listener *listener, void *data)
   struct hikari_output *output =
       wl_container_of(listener, output, request_state);
   const struct wlr_output_event_request_state *event = data;
+
+  // [COMMENT] Action purpose: Discard DRM state change requests while the
+  // compositor is in the background (VT switched away). Forwarding an output
+  // state commit to an inactive CRTC can corrupt hardware state and races
+  // with the VT owner.
+  if (!hikari_server.session_active) {
+    return;
+  }
 
   // [COMMENT] Action purpose: Guard against forwarding a disable-CRTC commit
   // from wlroots during initial DRM probing, before the output is fully

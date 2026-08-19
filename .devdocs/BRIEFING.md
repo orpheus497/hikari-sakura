@@ -1,19 +1,20 @@
 # Hikari Project Briefing
 
-*Last Updated:* 2026-08-19 17:55
+*Last Updated:* 2026-08-19 20:26
 
 ## Current Status
 
-- **Phase:** Phase 35 complete — XDG and Server Decoration lifecycle assertions in wlroots 0.20 have been resolved, preventing compositor crashes on terminal/browser launches.
+- **Phase:** Phase 36 in progress — XWayland unmanaged view listener wiring UB fix (P1), VT/session active guard on frame/state handlers (P2), and layer-shell popup depth guard (P3) implemented; awaiting build verification.
 - **Branch:** wlroots-0.20
-- **Overall progress:** Phase 35 fixes: Deferred `wlr_xdg_toplevel_decoration_v1_set_mode` until `initial_commit` in `src/decoration.c`. Fixed listener leak on `wlr_server_decoration` destruction in `src/server.c` and `src/view.c`.
+- **Overall progress:** All code changes for Phase 36 are written. Trial build running. Root-owned artifacts from prior sudo build may require `sudo make clean && sudo make install` for the user's full verification run.
 - **Target OS:** FreeBSD 15.1-RELEASE (ZFS root)
-- **Current step:** User compilation of the fixes (sudo required) and subsequent verification. Remaining queue: user-run Phase 19 diagnostics (eDP-1 swapchain), runtime-blocked verifications (P2-14, PAM, layer-client spot check), optional hygiene.
-- **Blockers:** (1) root-owned build artifacts (`main.o`, `hikari`) block standard local compilation; user must run `sudo make clean && sudo make install`. (2) eDP-1 scanout swapchain test failure — Mesa/EGL/GBM ↔ drm-kmod layer.
+- **Current step:** Build verification of Phase 36 changes; user to `sudo make clean && sudo make install` and run smoke tests (XWayland context menus/tooltips, VT switch, waybar).
+- **Blockers:** (1) Root-owned build artifacts block standard local `make`; user must run `sudo make clean && sudo make install`. (2) eDP-1 scanout swapchain test failure — Mesa/EGL/GBM ↔ drm-kmod layer (pre-existing, not Phase 36 scope).
 
 ## Remaining Work
 
-- **CRITICAL:** Resolve the eDP-1 scanout swapchain failure (run Phase 19 diagnostics matrix). Phase 28 guard eliminates the spurious disable commit; underlying GBM/drm-kmod issue may still require Mesa/kernel-side action.
+- **CRITICAL (pre-existing):** Resolve the eDP-1 scanout swapchain failure (run Phase 19 diagnostics matrix). Phase 28 guard eliminates the spurious disable commit; underlying GBM/drm-kmod issue may still require Mesa/kernel-side action.
+- **Phase 36 verification (user-run):** `sudo make clean && sudo make install`; smoke test XWayland override-redirect windows (context menus, tooltips), VT switch, waybar with sub-menus.
 - PAM unlocker live verification (setuid 4555 path; blocked on runtime bring-up).
 - P2-14 `current_mode` retention across output disable/enable (blocked on runtime bring-up).
 - Layer-client spot check (blocked on runtime bring-up).
