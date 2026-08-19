@@ -2,6 +2,48 @@
 
 *Note: Most recent entries are listed at the top.*
 
+## Session Date: 2026-08-20 — Phase 38: Window Creation Crash and Scene Tree Ownership
+**Timestamp:** 2026-08-20 (session context date; `date` not executed — IDE-only tooling directive this session)
+**Current Status:** Window creation works. User confirms this is the most functional the compositor has been. Runtime-verified by the user, not just static analysis.
+**Accomplishments:**
+- **P1 (Window Creation Crash — root cause):** `hikari_view_refresh_geometry` in `src/view.c` guarded only `view->scene_node != NULL` before dereferencing `view->output->geometry`. `view->output` is `NULL` from `hikari_view_init` until `hikari_view_configure`, while `scene_node` is already set — and `first_map` calls `refresh_geometry` inside exactly that window. Every window creation segfaulted. Guard now requires both pointers. Introduced by the Phase 36 output-origin change, which is why it survived Phases 36 and 37.
+- **P2 (Scene Tree Ownership):** Verified against the vendored wlroots source (`wlroots-0.20.0/types/scene/xdg_shell.c`) that `wlr_scene_xdg_surface_create` installs its own `xdg_surface.destroy` listener destroying the returned tree and all children. `hikari_xdg_view_init` now creates a hikari-owned parent tree and attaches the wlroots surface tree beneath it (new `surface_tree` field), matching the pattern `hikari_xwayland_view_init` already used. Border/indicator rects parent to the hikari-owned tree.
+- **P3 (Coordinate Space):** `hikari_border_refresh_geometry` and `hikari_indicator_frame_refresh_geometry` now use parent-relative coordinates; they were applying the view origin twice inside an already-positioned parent tree.
+- **P3 (Leak):** XDG `destroy_handler` now destroys its hikari-owned scene tree. XWayland already did this correctly.
+- **Also fixed earlier in the session:** unlocker PATH hijack (`execl` on a compile-time absolute `HIKARI_UNLOCKER_PATH` instead of `/bin/sh -c`), lock-mode hangup race (`WL_EVENT_HANGUP` now terminal), `wlr_buffer_drop(NULL)` crash in `hikari_lock_indicator_fini`, uninitialised `view->scene_node`, uninitialised-read `assert` in `hikari_output_init`, and the `xdg_surface`/`surface` compile error in `commit_handler`.
+**Post-review additions (CodeRabbit run `b5658ede`, risk downgraded 🔴 Critical → 🟠 High):**
+- **Independent confirmation of the root cause:** the review flagged the same `view->output` NULL dereference before the first geometry refresh, reached independently. It proposed the stronger fix, which was adopted: `hikari_view_init` now seeds `view->output = workspace->output` so the *first* refresh positions correctly, rather than being skipped. The NULL guard in `hikari_view_refresh_geometry` is retained as defence in depth.
+- **Event-loop blocking (valid, fixed):** `locker_result_handler` called a *blocking* `waitpid(..., 0)` from inside a Wayland event-loop callback. `hikari-unlocker` writes its result before finishing PAM cleanup, so the compositor stalled for the duration of that teardown. Replaced with `try_reap_locker()` (WNOHANG) plus a 50 ms retry timer (`locker_reap_timer`, new field on `struct hikari_lock_mode`), torn down in `hikari_lock_mode_fini` so a pending callback cannot fire against freed state.
+- **Packaging (valid, fixed):** `start-hikari.sh` was missing from the `hikari-${VERSION}.tar.gz` file list while `install:` depends on it — `make install` from an extracted archive would fail. Added to the archive.
+- **Atomicity (valid, fixed):** `install-user` wrote `hikari.conf` straight through a `sed` pipeline; an interruption left a partial file that the `-e` check would then preserve forever. Now writes to `mktemp` and `mv -f`s into place, with `$HOME`-derived paths quoted.
+- **Deferred (style only):** Makefile `[COMMENT] Action purpose:` header rollout — tracked with the existing comment-header backlog item, no behavioural impact.
+
+**Modified Files:**
+- `src/view.c`
+- `src/xdg_view.c`
+- `include/hikari/xdg_view.h`
+- `src/border.c`
+- `src/indicator_frame.c`
+- `src/lock_mode.c`
+- `include/hikari/lock_mode.h`
+- `src/lock_indicator.c`
+- `src/indicator_bar.c`
+- `src/output.c`
+- `Makefile`
+**Decisions Logged:**
+- Architecture: Scene Node Positioning Requires a Non-NULL Output
+- Architecture: Hikari-Owned Parent Scene Tree for XDG Views
+- Architecture: Parent-Relative Coordinates for Border and Indicator Rects
+- Architecture: XDG View Scene Tree Teardown
+**Next Steps:**
+- Verify border and indicator-frame placement now that windows render (the coordinate fix is reasoned from wlroots scene semantics but has not been visually confirmed).
+- Verify window close does not crash or leak (scene tree teardown path).
+- Re-verify lock/unlock end to end: the unlocker is now resolved at `${PREFIX}/bin/hikari-unlocker`, so a helper installed elsewhere will fail to launch.
+- Multi-output check for indicator bar placement (`src/indicator_bar.c` output-origin fix is untested on a non-origin output).
+- Remaining pre-existing backlog: eDP-1 scanout swapchain failure, PAM live verification, P2-14 `current_mode` retention, TC-FORMAT-01.
+
+---
+
 ## Session Date: 2026-08-19 23:05 — Phase 37: Wayland Client Initialization Crash Fix
 **Timestamp:** 2026-08-19 23:05
 **Current Status:** Fixed a compositor crash during Wayland client launch caused by intermediate unmapped commits.

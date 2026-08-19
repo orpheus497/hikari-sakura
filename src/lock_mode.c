@@ -193,6 +193,72 @@ delete_char(void)
   }
 }
 
+/* [COMMENT] Function purpose: Attempt one non-blocking reap of the unlocker
+child. Returns true when the child has been collected (or was already gone),
+false when it is still running and a retry is needed. */
+static bool
+try_reap_locker(void)
+{
+  if (locker_pid <= 0) {
+    return true;
+  }
+
+  int status;
+  pid_t result;
+  do {
+    result = waitpid(locker_pid, &status, WNOHANG);
+  } while (result == -1 && errno == EINTR);
+
+  // [COMMENT] Action purpose: ECHILD means the child is already gone (e.g. reaped
+  // elsewhere); treat it as success so the pid state is cleared either way.
+  if (result > 0 || (result == -1 && errno == ECHILD)) {
+    locker_pid = -1;
+    return true;
+  }
+
+  return false;
+}
+
+/* [COMMENT] Function purpose: Timer callback that retries the non-blocking reap
+until the unlocker child is collected, then disarms itself. */
+static int
+reap_locker_handler(void *data)
+{
+  struct hikari_lock_mode *mode = data;
+
+  if (try_reap_locker()) {
+    if (mode->locker_reap_timer != NULL) {
+      wl_event_source_remove(mode->locker_reap_timer);
+      mode->locker_reap_timer = NULL;
+    }
+    return 0;
+  }
+
+  // [COMMENT] Action purpose: Child still running -- re-arm rather than spin.
+  wl_event_source_timer_update(mode->locker_reap_timer, 50);
+  return 0;
+}
+
+/* [COMMENT] Function purpose: Reap the unlocker child without ever blocking the
+event loop. Tries once inline; if the child has not exited yet, arms a short
+retry timer and returns immediately so the compositor keeps dispatching. */
+static void
+reap_locker_deferred(struct hikari_lock_mode *mode)
+{
+  if (try_reap_locker()) {
+    return;
+  }
+
+  if (mode->locker_reap_timer == NULL) {
+    mode->locker_reap_timer = wl_event_loop_add_timer(
+        hikari_server.event_loop, reap_locker_handler, mode);
+  }
+
+  if (mode->locker_reap_timer != NULL) {
+    wl_event_source_timer_update(mode->locker_reap_timer, 50);
+  }
+}
+
 // [COMMENT] Function purpose: Handle the authentication result from hikari-unlocker
 // asynchronously via the Wayland event loop. This callback fires when data is
 // available on the locker result pipe, preventing the compositor from blocking
@@ -251,15 +317,13 @@ locker_result_handler(int fd, uint32_t mask, void *data)
   }
 
   if (terminal) {
-    // [COMMENT] Action purpose: Reap the unlocker child process with a blocking
-    // waitpid on terminal results (success or fatal failure). Retries on EINTR
-    // to guarantee the child is collected before clearing locker_pid.
-    if (locker_pid > 0) {
-      int status;
-      while (waitpid(locker_pid, &status, 0) == -1 && errno == EINTR)
-        ;
-      locker_pid = -1;
-    }
+    // [COMMENT] Action purpose: Reap the unlocker child WITHOUT blocking. This
+    // runs inside a Wayland event-loop callback: hikari-unlocker writes its
+    // result and only then finishes PAM cleanup and exits, so a blocking
+    // waitpid() here stalls the entire compositor for the duration of that
+    // teardown. reap_locker_deferred tries once and falls back to a short retry
+    // timer, keeping the event loop dispatching either way.
+    reap_locker_deferred(mode);
 
     close(locker_pipe[1][0]);
     close(locker_pipe[0][1]);
@@ -557,6 +621,7 @@ hikari_lock_mode_init(struct hikari_lock_mode *lock_mode)
 
   lock_mode->lock_indicator = NULL;
   lock_mode->locker_event_source = NULL;
+  lock_mode->locker_reap_timer = NULL;
   lock_mode->outputs_disabled = false;
 
   mlock(input_buffer, BUFFER_SIZE);
@@ -569,20 +634,19 @@ hikari_lock_mode_init(struct hikari_lock_mode *lock_mode)
 void
 hikari_lock_mode_fini(struct hikari_lock_mode *lock_mode)
 {
-  // [COMMENT] Action purpose: Deferred reap for any unlocker child that was still
-  // running when cancel() used WNOHANG and got result == 0. The child exits
-  // shortly after its stdin received EOF (pipe write-end was closed in cancel()),
-  // so this blocking wait returns almost immediately.
-  if (locker_pid > 0) {
-    int status;
-    pid_t result;
-    do {
-      result = waitpid(locker_pid, &status, WNOHANG);
-    } while (result == -1 && errno == EINTR);
-    if (result > 0 || (result == -1 && errno == ECHILD)) {
-      locker_pid = -1;
-    }
+  // [COMMENT] Action purpose: Tear down the retry timer before the mode goes
+  // away so a pending reap callback cannot fire against freed state.
+  if (lock_mode->locker_reap_timer != NULL) {
+    wl_event_source_remove(lock_mode->locker_reap_timer);
+    lock_mode->locker_reap_timer = NULL;
   }
+
+  // [COMMENT] Action purpose: Final non-blocking reap attempt for any unlocker
+  // child still outstanding. The child exits shortly after its stdin receives
+  // EOF (the pipe write-end was closed in cancel()). If it somehow has not
+  // exited yet, leave it to init rather than blocking compositor shutdown.
+  try_reap_locker();
+
   munlock(input_buffer, BUFFER_SIZE);
 }
 

@@ -253,6 +253,7 @@ hikari-${VERSION}.tar.gz: version.h share/man/man1/hikari.1
 		LICENSE \
 		README.md \
 		CoC.md \
+		start-hikari.sh \
 		CHANGELOG.md \
 		share/man/man1/hikari.md \
 		share/man/man1/hikari.1 \
@@ -313,11 +314,14 @@ install-user: share/backgrounds/hikari/hikari_wallpaper.png etc/hikari/hikari.co
 	@test -n "${HOME}" || { echo "error: HOME is not set" >&2; exit 1; }
 	mkdir -p ${HOME}/.config/hikari
 	install -m 644 share/backgrounds/hikari/hikari_wallpaper.png ${HOME}/.config/hikari/hikari_wallpaper.png
-	@if [ -e ${HOME}/.config/hikari/hikari.conf ]; then \
+	@if [ -e "${HOME}/.config/hikari/hikari.conf" ]; then \
 		echo "install-user: ${HOME}/.config/hikari/hikari.conf already exists -- leaving it untouched"; \
 	else \
-		sed "s,PREFIX,${PREFIX}," etc/hikari/hikari.conf | sed "s,/share/backgrounds/hikari,${HOME}/.config/hikari," > ${HOME}/.config/hikari/hikari.conf && \
-		chmod 644 ${HOME}/.config/hikari/hikari.conf && \
+		tmp=$$(mktemp "${HOME}/.config/hikari/hikari.conf.XXXXXX") && \
+		sed "s,PREFIX,${PREFIX}," etc/hikari/hikari.conf | \
+		  sed "s,/share/backgrounds/hikari,${HOME}/.config/hikari," > "$$tmp" && \
+		chmod 644 "$$tmp" && \
+		mv -f "$$tmp" "${HOME}/.config/hikari/hikari.conf" && \
 		echo "install-user: wrote ${HOME}/.config/hikari/hikari.conf"; \
 	fi
 

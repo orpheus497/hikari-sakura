@@ -39,7 +39,10 @@ Hikari organizes its display logic hierarchically:
 Hikari delegates the heavy lifting of rendering and Z-ordering to the `wlr_scene` API.
 - Backgrounds, borders, views, and overlays (like the lock indicator or indicator bar) are represented as `wlr_scene_node`s.
 - `output.c` connects the `wlr_scene` to the physical `wlr_output`.
-- `indicator.c`, `border.c`, and `decoration.c` generate pixel buffers using `cairo` and attach them to the scene graph via `wlr_scene_buffer_create`.
+- Two distinct node strategies are in use: **solid-colour rects** and **cairo-rendered buffers**.
+  - `border.c` and `indicator_frame.c` use `wlr_scene_rect_create` — 4 solid-colour rects per frame, no cairo, no pixel buffer.
+  - `indicator_bar.c` and `lock_indicator.c` render text/shapes with `cairo`/Pango, copy the pixels into a `wlr_buffer` via `hikari_server_create_argb8888_buffer()`, and attach it with `wlr_scene_buffer_create`. `output.c` uses its own `wlr_buffer_impl` for the background.
+- Child nodes are positioned **parent-relative**. A view's `scene_tree` is placed at the view's layout-absolute origin, so nodes beneath it (borders, indicator frames) must use offsets relative to that origin, not absolute layout coordinates.
 
 ### Configuration (`configuration.c`)
 
@@ -100,7 +103,7 @@ Input handling (keyboard and pointer) does not happen globally. Instead, `server
 
 ### UI Components, Overlays & Geometry
 
-- **`border.c`**: Renders 1px/2px borders around windows using cairo buffers. Updates border colors based on active/inactive focus states.
+- **`border.c`**: Renders borders around windows as 4 solid-colour `wlr_scene_rect` nodes (no cairo). Updates border colors based on active/inactive focus states.
 - **`indicator.c` / `indicator_bar.c` / `indicator_frame.c`**: Renders the UI overlay that appears when switching sheets or modifying groups. Renders text using Pango/Cairo.
 - **`lock_indicator.c`**: Renders the circular typing/verifying/denied indicator during screen lock.
 - **`decoration.c`**: Handles server-side decorations (SSD) via `wlr_xdg_decoration_manager_v1`.
@@ -124,7 +127,7 @@ Input handling (keyboard and pointer) does not happen globally. Instead, `server
 2. **Hardcoded Limits**:
    - `workspace.c` hardcodes exactly 10 sheets (`HIKARI_NR_OF_SHEETS`). 
    - `mark.c` hardcodes exactly 26 marks ('a' through 'z').
-3. **UI Buffer Allocation Strategy**: In `indicator.c`, `border.c`, and `lock_indicator.c`, the compositor uses `cairo` to render UI elements, maps the memory, copies it to a `wlr_buffer` via `hikari_server_create_argb8888_buffer()`, and attaches it to the scene graph. This is CPU intensive. While fine for static borders, redrawing the circular `lock_indicator.c` on every timer tick via cairo software rendering is suboptimal compared to a simple GLES2 shader.
+3. **UI Buffer Allocation Strategy**: In `indicator_bar.c` and `lock_indicator.c`, the compositor uses `cairo` to render UI elements, maps the memory, copies it to a `wlr_buffer` via `hikari_server_create_argb8888_buffer()`, and attaches it to the scene graph. This is CPU intensive — redrawing the circular `lock_indicator.c` on every timer tick via cairo software rendering is suboptimal compared to a simple GLES2 shader. (Borders and indicator frames are *not* affected: they use solid-colour `wlr_scene_rect` nodes and allocate no buffers.)
 4. **Missing Graceful Degradation on XWayland**: If XWayland crashes, the `wlr_xwayland_surface` callbacks can sometimes trigger use-after-free bugs if the destruction signals aren't perfectly synchronized. The transition to the `wlr_scene` API mitigates this visually, but logical structs can leak.
 
 **Known Limitations (verified, not defects):**
@@ -363,8 +366,8 @@ Hikari dynamically re-routes input based on the active `hikari_server.mode`.
 
 ### 11.8 UI Overlays & Cairo Rendering
 
-- **`src/border.c`**: Renders 1px/2px colored frames via `cairo`.
-  - `hikari_border_refresh()`: Commits the cairo pixel buffer to a `wlr_scene_buffer`.
+- **`src/border.c`**: Renders coloured frames as 4 solid `wlr_scene_rect` nodes (no cairo, no buffer).
+  - `hikari_border_refresh_geometry()`: Repositions and resizes the 4 rects parent-relative to the view's scene tree, and sets their colour from the active/inactive configuration.
 - **`src/indicator.c`, `src/indicator_bar.c`, `src/indicator_frame.c`**: Text-based UI overlays.
   - `hikari_indicator_damage()`: Calculates damage regions for Pango/Cairo rendered text popups (e.g., sheet switching).
 - **`src/lock_indicator.c`**: Circular lock screen graphic.
@@ -637,14 +640,15 @@ Hikari dynamically re-routes input based on the active `hikari_server.mode`.
 - `struct hikari_xdg_view`: Concrete implementation of `struct hikari_view`.
   - **Inheritance**: Embeds `struct hikari_view view` as its first member (enabling safe casting between `hikari_view` and `hikari_xdg_view`).
   - **WLRoots Proxies**: `struct wlr_xdg_surface *surface`, `struct wlr_xdg_toplevel *xdg_toplevel`.
-  - **Scene Graph**: `struct wlr_scene_tree *scene_tree`.
+  - **Scene Graph**: `struct wlr_scene_tree *scene_tree` (hikari-owned parent) and `struct wlr_scene_tree *surface_tree` (wlroots-owned, parented beneath it). The split is deliberate — see the ownership note below.
   - **Listeners**: `map`, `unmap`, `destroy`, `commit`, `new_popup`, `request_fullscreen`, `set_title`.
 - `struct hikari_xdg_popup`: Represents menus and tooltips attached to a toplevel.
 
 **Initialization & wlroots 0.20 Lifecycle (`src/xdg_view.c`):**
 - `void hikari_xdg_view_init(struct hikari_xdg_view *xdg_view, struct wlr_xdg_surface *xdg_surface, struct hikari_workspace *workspace)`:
   - Invokes the superclass initializer: `hikari_view_init()`.
-  - Creates the primary scene node: `wlr_scene_xdg_surface_create()`.
+  - **Scene Tree Ownership (critical):** Creates a *hikari-owned* parent tree with `wlr_scene_tree_create()`, then attaches the wlroots-managed surface tree beneath it with `wlr_scene_xdg_surface_create(scene_tree, xdg_surface)`. This split is mandatory, not stylistic: `wlr_scene_xdg_surface_create` installs its own listener on `xdg_surface.events.destroy` (see `wlroots-0.20.0/types/scene/xdg_shell.c`) that destroys the tree it returned **and every child node**. Parenting hikari's border and indicator rects into that tree would hand their lifetime to wlroots and leave hikari with dangling pointers. Border and indicator rects therefore parent to `scene_tree`, never to `surface_tree`. `hikari_xwayland_view_init` uses the same ownership model.
+  - `xdg_surface->data` stores the **hikari-owned** `scene_tree`, not `surface_tree`, because `server_decoration_handler` (`src/server.c`) resolves a decoration back to its view via `xdg_surface->data->node.data` and only `scene_tree` carries that back-reference.
   - **Critical wlroots 0.20 Change**: Wires up the `commit` listener *immediately* upon object creation, before the client maps the window.
 - `static void commit_handler(struct wl_listener *listener, void *data)`:
   - **`initial_commit` Handling**: If `surface->initial_commit` is true, it replies with `wlr_xdg_toplevel_set_size(xdg_view->xdg_toplevel, 0, 0)` immediately. This signals wlroots to set `surface->initialized = true`, allowing the client to safely request a map.
@@ -879,6 +883,7 @@ Hikari dynamically re-routes input based on the active `hikari_server.mode`.
 - `void hikari_border_refresh_geometry(struct hikari_border *border, struct wlr_box *geometry)`:
   - Re-evaluates the view's requested geometry. If the border is active/inactive, it inflates the bounding box by `hikari_configuration->border`.
   - Mutates the scene graph position and size of the 4 border rects to precisely hug the new bounding box.
+  - **Coordinate space:** the rects are positioned **parent-relative**. `wlr_scene_node_set_position` is relative to the parent node, and the view's `scene_tree` has already been positioned at the view's layout-absolute origin by `hikari_view_refresh_geometry`. Passing absolute coordinates here applies the view origin twice. `border->geometry` itself remains **absolute**, because hit-testing and damage tracking consume it in layout coordinates. The same rule applies to `hikari_indicator_frame_refresh_geometry`.
   - Toggles the rect color between `hikari_configuration->border_active` and `border_inactive`.
 
 ### 12.19 Tiling Engine (`src/layout.c`, `src/split.c`, `src/tile.c`)

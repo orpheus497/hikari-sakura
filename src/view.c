@@ -429,7 +429,16 @@ hikari_view_init(
   view->mark = NULL;
   view->surface = NULL;
   view->maximized_state = NULL;
-  view->output = NULL;
+  /* [COMMENT] Action purpose: Seed the output from the workspace the view is
+  being created on, rather than leaving it NULL until hikari_view_configure()
+  runs. Both first_map() paths (xdg and xwayland) call
+  hikari_view_refresh_geometry() BEFORE hikari_view_configure(), and that
+  function positions the scene node against view->output->geometry. Leaving
+  this NULL made every window creation dereference a NULL output. Seeding it
+  here also means the first refresh positions the node correctly instead of
+  being skipped; hikari_view_configure() may still reassign it afterwards when
+  view config rules select a different output. */
+  view->output = workspace != NULL ? workspace->output : NULL;
   view->group = NULL;
   view->title = NULL;
   view->id = NULL;

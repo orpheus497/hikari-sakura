@@ -1,3 +1,35 @@
+## [2026-08-20] Phase 38: Window Creation Crash and Scene Tree Ownership
+
+*(Timestamp source: session context date. The assistant was directed to use IDE
+tooling only this session and could not execute `date`; time-of-day omitted
+rather than fabricated.)*
+
+### Architecture: Scene Node Positioning Requires a Non-NULL Output
+
+* **Context:** Phase 36 added the output layout origin to the scene node position in `hikari_view_refresh_geometry` (`src/view.c`), producing `new_geometry->x + view->output->geometry.x`. The surrounding guard only tested `view->scene_node != NULL`. On every window creation `scene_node` is assigned inside `hikari_xdg_view_init` while `view->output` is still `NULL` (set by `hikari_view_init`), and `first_map` calls `hikari_view_refresh_geometry` *before* `hikari_view_configure` assigns `view->output`. The guard therefore passed and the code dereferenced a NULL output, segfaulting the compositor on **every** window creation. `hikari.log` showed a clean startup with no wlroots error and abrupt termination — the signature of a raw SIGSEGV in compositor code.
+* **Decision:** Extended the guard to `view->scene_node != NULL && view->output != NULL`. Positioning is not lost: `hikari_view_configure` calls `hikari_view_refresh_geometry` again at its end, after `view->output` is assigned.
+* **Impact:** Fixes the total inability to open any window. This was the dominant crash and superseded the earlier Firefox/OBS-specific hypotheses.
+
+### Architecture: Hikari-Owned Parent Scene Tree for XDG Views
+
+* **Context:** `wlr_scene_xdg_surface_create` (wlroots `types/scene/xdg_shell.c`) installs its own listener on `xdg_surface.events.destroy` that calls `wlr_scene_node_destroy` on the tree it returns — destroying every child node with it. `hikari_xdg_view_init` parented hikari's border and indicator-frame rects directly into that wlroots-owned tree, handing their lifetime to wlroots and leaving hikari holding dangling pointers (`hikari_indicator_frame_fini` would then destroy already-freed nodes). `hikari_xwayland_view_init` already used the correct pattern with its own `wlr_scene_tree_create`.
+* **Decision:** `hikari_xdg_view` now owns a parent tree created with `wlr_scene_tree_create`, with the wlroots surface tree attached beneath it as a new `surface_tree` field. Border and indicator rects parent to the hikari-owned tree. Both creations have OOM bailouts. `xdg_surface->data` deliberately remains the hikari-owned `scene_tree`, because `server_decoration_handler` resolves a decoration back to its view via `xdg_surface->data->node.data`.
+* **Impact:** Hikari controls the lifetime of its own scene nodes; wlroots tearing down its subtree can no longer free hikari's rects underneath it.
+
+### Architecture: Parent-Relative Coordinates for Border and Indicator Rects
+
+* **Context:** `wlr_scene_node_set_position` is relative to the parent node. Border and indicator-frame rects are children of the view's scene tree, which `hikari_view_refresh_geometry` already positions at the view's layout-absolute origin, yet both were positioned using absolute geometry — applying the view origin twice.
+* **Decision:** `hikari_border_refresh_geometry` and `hikari_indicator_frame_refresh_geometry` now compute parent-relative offsets. `border->geometry` itself remains absolute, since hit-testing and damage tracking consume it in layout coordinates.
+* **Impact:** Borders and indicator frames render at their intended position instead of roughly double the offset.
+
+### Architecture: XDG View Scene Tree Teardown
+
+* **Context:** The XDG destroy path never destroyed its scene tree, leaking the tree and its rects for every window ever opened. The XWayland path already destroyed its own tree correctly.
+* **Decision:** `destroy_handler` in `src/xdg_view.c` destroys the hikari-owned tree after `hikari_view_fini`, clearing `scene_tree`, `surface_tree`, and `view->scene_node`. wlroots has already torn down `surface_tree` by that point, so only hikari's own nodes remain.
+* **Impact:** Removes a per-window scene-graph leak.
+
+---
+
 ## [2026-08-19 23:05] Phase 37: Wayland Client Initialization Crash Fix
 
 *(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
