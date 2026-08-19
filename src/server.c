@@ -27,6 +27,7 @@
 #include <wlr/types/wlr_xdg_output_v1.h>
 #include <wlr/types/wlr_xdg_shell.h>
 #include <wlr/types/wlr_scene.h>
+#include <wlr/types/wlr_shm.h>
 #include <wlr/types/wlr_subcompositor.h>
 
 #ifdef HAVE_LAYERSHELL
@@ -499,6 +500,15 @@ new_xwayland_surface_handler(struct wl_listener *listener, void *data)
 }
 
 static void
+xwayland_ready_handler(struct wl_listener *listener, void *data)
+{
+  struct hikari_server *server =
+      wl_container_of(listener, server, xwayland_ready);
+
+  setenv("DISPLAY", server->xwayland->display_name, true);
+}
+
+static void
 setup_xwayland(struct hikari_server *server)
 {
   server->xwayland =
@@ -508,7 +518,9 @@ setup_xwayland(struct hikari_server *server)
   wl_signal_add(
       &server->xwayland->events.new_surface, &server->new_xwayland_surface);
 
-  setenv("DISPLAY", server->xwayland->display_name, true);
+  server->xwayland_ready.notify = xwayland_ready_handler;
+  wl_signal_add(
+      &server->xwayland->events.ready, &server->xwayland_ready);
 }
 #endif
 
@@ -957,7 +969,7 @@ server_init(struct hikari_server *server, char *config_path)
     exit(EXIT_FAILURE);
   }
 
-  wlr_renderer_init_wl_display(server->renderer, server->display);
+  wlr_shm_create_with_renderer(server->display, 1, server->renderer);
 
   server->allocator =
       wlr_allocator_autocreate(server->backend, server->renderer);
@@ -1171,6 +1183,7 @@ hikari_server_stop(void)
 #endif
 #ifdef HAVE_XWAYLAND
   wl_list_remove(&server->new_xwayland_surface.link);
+  wl_list_remove(&server->xwayland_ready.link);
 #endif
 #ifdef HAVE_VIRTUAL_INPUT
   wl_list_remove(&server->new_virtual_keyboard.link);

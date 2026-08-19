@@ -85,6 +85,7 @@ struct hikari_server {
 
 #ifdef HAVE_XWAYLAND
   struct wl_listener new_xwayland_surface;
+  struct wl_listener xwayland_ready;
 
   struct wlr_xwayland *xwayland;
 #endif
