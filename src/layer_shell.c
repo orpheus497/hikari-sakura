@@ -196,6 +196,7 @@ hikari_layer_init(
   layer->layer = wlr_layer_surface->pending.layer;
   layer->surface = wlr_layer_surface;
   layer->mapped = false;
+  layer->configured = false;
   layer->geometry = (struct wlr_box){0};
 
   wlr_layer_surface->output = output->wlr_output;
@@ -433,16 +434,16 @@ commit_handler(struct wl_listener *listener, void *data)
   The compositor MUST respond with a configure event so the client can
   proceed to attach a buffer and map. Without this response, layer clients
   hang indefinitely waiting for the configure reply. */
-  if (layer->surface->initial_commit) {
+  if (!layer->configured) {
+    layer->configured = true;
     arrange_layers(output);
     return;
   }
 
   if (!layer->mapped) {
-    /* [COMMENT] Action purpose: Client committed again before mapping (e.g.
-    changed desired size or anchor before attaching a buffer). Re-arrange to
-    send an updated configure. */
-    arrange_layers(output);
+    /* [COMMENT] Action purpose: Client committed again before mapping.
+    Avoid infinite configure loops by only re-arranging if the desired size
+    or anchor actually changed. */
     return;
   }
 

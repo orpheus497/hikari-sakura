@@ -47,6 +47,7 @@ struct hikari_layer {
   struct hikari_output *output;
   enum zwlr_layer_shell_v1_layer layer;
   bool mapped;
+  bool configured;
 };
 
 struct hikari_layer_popup {

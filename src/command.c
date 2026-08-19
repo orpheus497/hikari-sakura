@@ -17,6 +17,7 @@ hikari_command_execute(const char *cmd)
     if (child == 0) {
       setsid();
       execl("/bin/sh", "/bin/sh", "-c", cmd, NULL);
+      _exit(EXIT_FAILURE);
     }
     _exit(child == -1);
   }

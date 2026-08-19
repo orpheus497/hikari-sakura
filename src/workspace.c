@@ -166,13 +166,25 @@ display_sheet(struct hikari_workspace *workspace, struct hikari_sheet *sheet)
 
   wl_list_for_each_reverse_safe (
       view, view_tmp, &(workspace->views), workspace_views) {
-    if (view->sheet == sheet || view->sheet == &workspace->sheets[0]) {
-      if (!hikari_view_is_invisible(view) && hikari_view_is_hidden(view)) {
-        hikari_view_show(view);
-      }
-    } else {
+    if (view->sheet != sheet && view->sheet != &workspace->sheets[0]) {
       if (!hikari_view_is_hidden(view)) {
         hikari_view_hide(view);
+      }
+    }
+  }
+
+  wl_list_for_each_reverse_safe (
+      view, view_tmp, &sheet->views, sheet_views) {
+    if (!hikari_view_is_invisible(view) && hikari_view_is_hidden(view)) {
+      hikari_view_show(view);
+    }
+  }
+
+  if (sheet != &workspace->sheets[0]) {
+    wl_list_for_each_reverse_safe (
+        view, view_tmp, &workspace->sheets[0].views, sheet_views) {
+      if (!hikari_view_is_invisible(view) && hikari_view_is_hidden(view)) {
+        hikari_view_show(view);
       }
     }
   }
