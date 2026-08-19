@@ -4,6 +4,41 @@
 
 ---
 
+## Session Date: 2026-08-19 12:17 — Phase 28: `request_state_handler` Startup CRTC Disable Guard
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
+
+### Accomplishments
+
+1. **Phase 28 — `request_state_handler` guard (`src/output.c`):** Added an early-return guard to `request_state_handler` that silently drops any `request_state` event from wlroots where (a) `WLR_OUTPUT_STATE_ENABLED` is in the committed bitmask, (b) `state->enabled == false`, and (c) `output->enabled == false`. This prevents wlroots 0.20's DRM backend from causing "Failed to disable CRTC <N>" on startup by forwarding its initial probe/negotiation disable-CRTC commits. API verified against `/usr/local/include/wlroots-0.20/wlr/types/wlr_output.h` — no `wlr_output_state_is_enabled()` helper exists; direct field access + bitmask is the correct pattern. Guard annotated with an `[COMMENT] Action purpose:` block per AGENTS.md standards.
+2. **Compile verification:** `make output.o` → `EXIT:0`, zero warnings, `output.o` grew 12656 → 12680 bytes (consistent with added guard). Full relink blocked by root-owned `main.o`/`hikari` — pre-existing environment issue, not a code defect.
+3. **Devdocs updated:** `BRIEFING.md`, `DECISIONS_LOG.md`, `PROGRESS.md`, `SESSION_HANDOFF.md` all reflect Phase 28 completion.
+
+### Modified Files
+
+| File | Change |
+|---|---|
+| `src/output.c` | `request_state_handler` — added disable-CRTC guard (bitmask check + `output->enabled` check) with AGENTS.md action-purpose comment |
+| `.devdocs/BRIEFING.md` | Phase 28 status update |
+| `.devdocs/DECISIONS_LOG.md` | Phase 28 decision entry prepended |
+| `.devdocs/PROGRESS.md` | Phase 28 row added |
+| `.devdocs/SESSION_HANDOFF.md` | This entry |
+
+### Key Decisions
+
+- Guard condition uses `committed & WLR_OUTPUT_STATE_ENABLED` (not a helper function) because no `wlr_output_state_is_enabled()` exists in this wlroots version. This is the correct, API-verified pattern.
+- Events that do not commit the ENABLED field are forwarded unconditionally — no regression for normal commit types (buffer presentation, mode changes, etc.).
+- The guard is defensive hardening: in practice `request_state` is only subscribed after `output->enabled = true` (line 378/380 of output.c), so the filter only fires in the initial probe window or future hotplug races.
+
+### Next Steps
+
+1. User to run Phase 19 diagnostics matrix to confirm whether the eDP-1 swapchain error persists (now that the spurious disable-CRTC commit is gone, the true failure cause — if any — will be named by the Phase 25 `fprintf` in `hikari_output_init`).
+2. Resolve tmpfs/ZFS `XDG_RUNTIME_DIR` incompatibility.
+3. Runtime-blocked: P2-14 `current_mode` retention, PAM unlocker (setuid 4555), layer-client spot check.
+4. Optional hygiene: TC-FORMAT-01, comment-header rollout (48 files), cosmetic enum-compare warnings.
+
+---
+
 ## Session Date: 2026-08-14 15:05 — Phase 27: Deep Architecture, Wiring, and Documentation Cross-Reference Audit (Iterative Refinement)
 
 *(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*

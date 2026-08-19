@@ -232,9 +232,7 @@ parse_options(int argc, char **argv, struct options *options)
 int
 main(int argc, char **argv)
 {
-#ifndef NDEBUG
   wlr_log_init(WLR_DEBUG, NULL);
-#endif
   struct options options;
   parse_options(argc, argv, &options);
 

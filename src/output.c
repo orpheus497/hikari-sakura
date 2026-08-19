@@ -108,7 +108,7 @@ hikari_output_load_background(struct hikari_output *output,
   int stride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, output_width);
 
   const struct wlr_drm_format_set *formats = wlr_renderer_get_texture_formats(
-      hikari_server.renderer, WLR_BUFFER_CAP_DMABUF);
+      hikari_server.renderer, hikari_server.allocator->buffer_caps);
   const struct wlr_drm_format *format =
       formats != NULL ? wlr_drm_format_set_get(formats, DRM_FORMAT_ARGB8888) : NULL;
   struct wlr_buffer *buffer = format != NULL
@@ -280,8 +280,23 @@ frame_handler(struct wl_listener *listener, void *data)
 static void
 request_state_handler(struct wl_listener *listener, void *data)
 {
-  struct hikari_output *output = wl_container_of(listener, output, request_state);
+  struct hikari_output *output =
+      wl_container_of(listener, output, request_state);
   const struct wlr_output_event_request_state *event = data;
+
+  // [COMMENT] Action purpose: Guard against forwarding a disable-CRTC commit
+  // from wlroots during initial DRM probing, before the output is fully
+  // initialised by hikari. wlroots 0.20 may emit a request_state with
+  // enabled=false while negotiating modeset feasibility; blindly forwarding
+  // that commit produces "Failed to disable CRTC <N>" on startup.
+  // WLR_OUTPUT_STATE_ENABLED (1<<3) presence in the committed bitmask
+  // indicates the state is explicitly toggling the enabled flag — only then
+  // do we inspect the value. If the field is not committed, forward as-is.
+  if ((event->state->committed & WLR_OUTPUT_STATE_ENABLED) &&
+      !event->state->enabled && !output->enabled) {
+    return;
+  }
+
   wlr_output_commit_state(output->wlr_output, event->state);
 }
 

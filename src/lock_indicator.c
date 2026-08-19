@@ -49,7 +49,7 @@ init_indicator_circle(float color[static 4])
   int stride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, size);
 
   const struct wlr_drm_format_set *formats = wlr_renderer_get_texture_formats(
-      hikari_server.renderer, WLR_BUFFER_CAP_DMABUF);
+      hikari_server.renderer, hikari_server.allocator->buffer_caps);
   const struct wlr_drm_format *format =
       formats != NULL ? wlr_drm_format_set_get(formats, DRM_FORMAT_ARGB8888) : NULL;
   wlr_buffer = format != NULL

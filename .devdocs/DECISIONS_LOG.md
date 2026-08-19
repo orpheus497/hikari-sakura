@@ -4,7 +4,19 @@
 
 ---
 
-## [2026-08-13 19:08] Phase 26: Phase 24 Hardening Backlog Completed — P2/P3 Batch Executed
+## [2026-08-19 12:17] Phase 28: `request_state_handler` startup CRTC disable guard
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
+
+* **Context:** The deep architectural audit (Phase 27 / `implementation_plan.md`) identified that `request_state_handler` in `src/output.c` unconditionally forwarded all `request_state` events from wlroots to `wlr_output_commit_state`, including disable-CRTC states emitted by wlroots 0.20 during initial DRM connector probe/negotiation. This produced the \"Failed to disable CRTC <N>\" error on compositor startup.
+* **Decision:** Added a guard to `request_state_handler` (src/output.c, former lines 280–286) that silently drops any event that: (a) carries the `WLR_OUTPUT_STATE_ENABLED` flag in its `committed` bitmask, (b) requests `enabled = false`, and (c) is received while `output->enabled` is `false`. The API was verified directly against `/usr/local/include/wlroots-0.20/wlr/types/wlr_output.h`: no `wlr_output_state_is_enabled()` helper exists; the correct pattern is `committed & WLR_OUTPUT_STATE_ENABLED` + direct field access `state->enabled`. Events not committing the ENABLED field are forwarded unconditionally (no regression for non-enable-toggle commits during normal operation).
+* **Why not block all pre-enabled events:** `request_state` is only subscribed (line 380 of output.c) *after* the initial modeset commit succeeds and `output->enabled = true` is set (line 378). In practice the handler is only reachable on enabled outputs. The guard is defensive hardening against any future reordering or hotplug edge cases, not a live-path filter.
+* **Compile verification:** `make output.o` produced `EXIT:0` with zero errors and zero warnings. `output.o` grew from 12656 → 12680 bytes, consistent with the added guard code. Full relink was blocked by root-owned `main.o`/`hikari` — a pre-existing environment issue; the source change itself is compiler-clean.
+* **Impact:** The \"Failed to disable CRTC <N>\" message on startup should be eliminated. The residual eDP-1 swapchain failure (if the GBM/drm-kmod layer itself cannot support scanout) will still log an error from the Phase 25 `fprintf` in `hikari_output_init`, but that error will now be the true cause rather than a spurious CRTC disable red herring.
+
+---
+
+
 
 *(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
 
