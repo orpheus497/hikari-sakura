@@ -23,6 +23,47 @@
 #include <hikari/view.h>
 #endif
 
+struct hikari_background_buffer {
+  struct wlr_buffer base;
+  unsigned char *data;
+  uint32_t format;
+  size_t stride;
+};
+
+static void
+bg_buffer_destroy(struct wlr_buffer *wlr_buffer)
+{
+  struct hikari_background_buffer *buffer =
+      wl_container_of(wlr_buffer, buffer, base);
+  hikari_free(buffer->data);
+  hikari_free(buffer);
+}
+
+static bool
+bg_buffer_begin_data_ptr_access(struct wlr_buffer *wlr_buffer, uint32_t flags,
+    void **data, uint32_t *format, size_t *stride)
+{
+  struct hikari_background_buffer *buffer =
+      wl_container_of(wlr_buffer, buffer, base);
+  if (flags & WLR_BUFFER_DATA_PTR_ACCESS_WRITE) {
+    return false;
+  }
+  *data = buffer->data;
+  *format = buffer->format;
+  *stride = buffer->stride;
+  return true;
+}
+
+static void
+bg_buffer_end_data_ptr_access(struct wlr_buffer *wlr_buffer)
+{}
+
+static const struct wlr_buffer_impl bg_buffer_impl = {
+  .destroy = bg_buffer_destroy,
+  .begin_data_ptr_access = bg_buffer_begin_data_ptr_access,
+  .end_data_ptr_access = bg_buffer_end_data_ptr_access,
+};
+
 static inline void
 render_image_to_surface(cairo_surface_t *output,
     cairo_surface_t *image,
@@ -107,54 +148,42 @@ hikari_output_load_background(struct hikari_output *output,
   unsigned char *data = cairo_image_surface_get_data(output_surface);
   int stride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, output_width);
 
-  const struct wlr_drm_format_set *formats = wlr_renderer_get_texture_formats(
-      hikari_server.renderer, hikari_server.allocator->buffer_caps);
-  const struct wlr_drm_format *format =
-      formats != NULL ? wlr_drm_format_set_get(formats, DRM_FORMAT_ARGB8888) : NULL;
-  struct wlr_buffer *buffer = format != NULL
-      ? wlr_allocator_create_buffer(hikari_server.allocator, output_width, output_height, format)
-      : NULL;
+  struct hikari_background_buffer *bg_buffer =
+      hikari_malloc(sizeof(struct hikari_background_buffer));
+  wlr_buffer_init(&bg_buffer->base, &bg_buffer_impl, output_width, output_height);
+  bg_buffer->format = DRM_FORMAT_ARGB8888;
+  bg_buffer->stride = stride;
+  bg_buffer->data = hikari_malloc(stride * output_height);
+  memcpy(bg_buffer->data, data, stride * output_height);
 
-  // [COMMENT] Action purpose: Check if buffer allocation succeeded.
-  if (buffer != NULL) {
-    void *mapped_data;
-    uint32_t mapped_format;
-    size_t mapped_stride;
-    // [COMMENT] Action purpose: Guard against failed buffer data mapping.
-    if (wlr_buffer_begin_data_ptr_access(buffer, WLR_BUFFER_DATA_PTR_ACCESS_WRITE, &mapped_data, &mapped_format, &mapped_stride)) {
-      // [COMMENT] Action purpose: Copy rendered cairo image data into mapped buffer by row.
-      for (int y = 0; y < output_height; y++) {
-        memcpy((char*)mapped_data + y * mapped_stride, data + y * stride, output_width * 4);
-      }
-      wlr_buffer_end_data_ptr_access(buffer);
+  struct wlr_scene_buffer *scene_buffer =
+      wlr_scene_buffer_create(&hikari_server.scene->tree, &bg_buffer->base);
 
-      struct wlr_scene_buffer *scene_buffer = wlr_scene_buffer_create(&hikari_server.scene->tree, buffer);
-      output->background = &scene_buffer->node;
-      wlr_scene_node_set_position(output->background, output->geometry.x, output->geometry.y);
-      wlr_scene_node_lower_to_bottom(output->background);
-    } else {
-      fprintf(stderr,
-          "error: could not access data pointer for background buffer on output \"%s\"\n",
-          output->wlr_output->name);
-
-      // [COMMENT] Action purpose: Fallback to solid color when image buffer mapping fails
-      float color[4] = {
-        hikari_configuration->clear[0],
-        hikari_configuration->clear[1],
-        hikari_configuration->clear[2],
-        hikari_configuration->clear[3]
-      };
-      struct wlr_scene_rect *rect = wlr_scene_rect_create(&hikari_server.scene->tree, output->geometry.width, output->geometry.height, color);
-      output->background = &rect->node;
-      wlr_scene_node_set_position(output->background, output->geometry.x, output->geometry.y);
-      wlr_scene_node_lower_to_bottom(output->background);
-    }
-    wlr_buffer_drop(buffer);
+  if (scene_buffer != NULL) {
+    output->background = &scene_buffer->node;
+    wlr_scene_node_set_position(
+        output->background, output->geometry.x, output->geometry.y);
+    wlr_scene_node_lower_to_bottom(output->background);
   } else {
     fprintf(stderr,
-        "error: could not allocate buffer for background on output \"%s\"\n",
+        "error: could not create scene buffer for background on output \"%s\"\n",
         output->wlr_output->name);
+
+    float color[4] = {
+      hikari_configuration->clear[0],
+      hikari_configuration->clear[1],
+      hikari_configuration->clear[2],
+      hikari_configuration->clear[3]
+    };
+    struct wlr_scene_rect *rect = wlr_scene_rect_create(
+        &hikari_server.scene->tree, output_width, output_height, color);
+    output->background = &rect->node;
+    wlr_scene_node_set_position(
+        output->background, output->geometry.x, output->geometry.y);
+    wlr_scene_node_lower_to_bottom(output->background);
   }
+
+  wlr_buffer_drop(&bg_buffer->base);
 
   cairo_surface_destroy(image);
   cairo_surface_destroy(output_surface);

@@ -16,3 +16,4 @@ wlr-layer-shell-unstable-v1-protocol.h
 compile_flags.txt
 .clangd
 hikari.log
+wlroots-0.20.0/

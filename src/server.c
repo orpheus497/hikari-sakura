@@ -29,6 +29,7 @@
 #include <wlr/types/wlr_scene.h>
 #include <wlr/types/wlr_shm.h>
 #include <wlr/types/wlr_subcompositor.h>
+#include <wlr/types/wlr_linux_dmabuf_v1.h>
 
 #ifdef HAVE_LAYERSHELL
 #include <wlr/types/wlr_layer_shell_v1.h>
@@ -970,6 +971,7 @@ server_init(struct hikari_server *server, char *config_path)
   }
 
   wlr_shm_create_with_renderer(server->display, 1, server->renderer);
+  wlr_linux_dmabuf_v1_create_with_renderer(server->display, 4, server->renderer);
 
   server->allocator =
       wlr_allocator_autocreate(server->backend, server->renderer);

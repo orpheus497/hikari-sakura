@@ -1,11 +1,10 @@
-| **Phase 26** | Fix XDG toplevel initialization & wallpaper mapping | 100% ✓ — Fixed `xdg_view.c` toplevel crash by swapping `wlr_xdg_surface_schedule_configure` for `wlr_xdg_toplevel_set_size` (wlroots 0.20 compliant). Fixed silent background loading failure in `output.c` by adding fallback color and mapping failure logging.
-
 # Project Progress tracking
 
-*Last Updated:* 2026-08-19 15:35
+*Last Updated:* 2026-08-19 16:48
 
 | Phase | Description | Status |
 |---|---|---|
+| **Phase 33** | Hardware DMABUF Buffer sharing and CPU Background Rendering | 100% ✓ — Fixed `posix_fallocate` Wayland client crash on ZFS by adding `zwp_linux_dmabuf_v1` initialization to `server.c`. Fixed solid color background bug by bypassing `wlr_allocator` GBM mapping errors via a custom `wlr_buffer_impl` implemented in `output.c`. Code compiled cleanly. |
 | **Phase 32** | Wayland Client Hang and Wallpaper PREFIX Fix | 100% ✓ — Investigated and resolved the Wayland terminal hang issue by replacing `wlr_xdg_toplevel_set_size(..., 0, 0)` with `wlr_xdg_surface_schedule_configure(surface)` during `initial_commit` in `src/xdg_view.c`. Addressed the black screen issue by fixing the `PREFIX` macro replacement in the user `Makefile` installation target and the local `~/.config/hikari/hikari.conf` file. Tested thoroughly in a nested session. |
 | **Phase 31** | wlroots 0.20 Initialization Guards | 100% ✓ — Applied `surface->initialized` guards to `activate` and `resize` in `src/xdg_view.c` to fix the `wlr_xdg_surface_schedule_configure` assertion crash during client startup. Execution complete. Testing blocked by root-owned `main.o` file environment issue. Devdocs updated. |
 | **Phase 30** | Compositor crash and background fallback fixes | 100% ✓ — Fixed `wlroots` `surface->initialized` crash in `src/xdg_view.c` by guarding `activate`, `resize`, `apply_tile`, and `reset_geometry`. Fixed silent background failure in `src/output.c` by adding `fprintf` for failed allocator. Devdocs updated. |

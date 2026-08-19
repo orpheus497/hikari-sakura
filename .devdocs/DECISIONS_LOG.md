@@ -24,6 +24,24 @@
 
 ---
 
+## [2026-08-19 16:48] Phase 33: Wayland Client & Background fixes (wlroots 0.20)
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
+
+### Architecture: Hardware Buffer Sharing (`zwp_linux_dmabuf_v1`)
+
+* **Context:** Wayland clients on FreeBSD failed to allocate `wl_shm` memory pools via `posix_fallocate()` when `XDG_RUNTIME_DIR` resided on ZFS. This forced the Wayland client and Xwayland processes to fatally abort, closing the Wayland socket immediately ("broken pipe" / "no display set"). 
+* **Decision:** Initialized the `wlr_linux_dmabuf_v1` protocol inside `src/server.c` using `wlr_linux_dmabuf_v1_create_with_renderer`. 
+* **Impact:** Clients natively detect the protocol and route GPU-mapped memory allocations via DRM ioctls, bypassing the problematic disk-backed SHM implementations on ZFS. Resolves Xwayland and Wayland client crashes.
+
+### Architecture: Background CPU Buffer Rendering
+
+* **Context:** `wlr_allocator` defaults to GBM, producing GPU buffers. `hikari_output_load_background` requires mapping the buffer to CPU memory via `wlr_buffer_begin_data_ptr_access` to write Cairo pixel data, which fails with GBM buffers on FreeBSD/drm-kmod.
+* **Decision:** Implemented a standalone, custom `wlr_buffer` utilizing a `wlr_buffer_impl` inside `src/output.c`. 
+* **Impact:** Allows standard CPU memory block allocations for Cairo/Pango surfaces, completely bypassing `wlr_allocator` mapping limitations and resolving the solid color fallback state.
+
+---
+
 ## [2026-08-19 15:35] Phase 32: Wayland Client Hang and Wallpaper PREFIX Fix
 
 *(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*

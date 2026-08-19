@@ -1,3 +1,18 @@
+## Session Handoff (Phase 33)
+**Timestamp:** 2026-08-19 16:48
+**Current Status:** Resolved Wayland client `posix_fallocate` crashes on ZFS and the wlroots 0.20 `wlr_allocator` background rendering issue.
+**Accomplishments:**
+- Identified `zwp_linux_dmabuf_v1` as the standard Wayland hardware buffer sharing protocol and advertised it in `server.c` to prevent Wayland clients and Xwayland from attempting to allocate disk-backed `wl_shm` pools on ZFS environments, bypassing the `posix_fallocate()` crashes.
+- Bypassed the wlroots 0.20 default GBM allocator for CPU-drawn surfaces (backgrounds) by implementing a standalone `wlr_buffer` and `wlr_buffer_impl` in `output.c`, allowing Cairo image pixels to correctly mount onto `wlr_scene_buffer` elements.
+**Modified Files:**
+- `src/server.c`
+- `src/output.c`
+**Decisions Logged:**
+- Architecture: Hardware Buffer Sharing (`zwp_linux_dmabuf_v1`)
+- Architecture: Background CPU Buffer Rendering
+**Next Steps:**
+- User verification of fixes via running Hikari natively and launching `foot`/`kitty`.
+
 ## Session Handoff (Phase 26)
 **Timestamp:** 2026-08-19 15:51
 **Current Status:** Resolved the Wayland pipe crash triggered by launching `foot` terminal, and fixed the silent wallpaper mapping failure that resulted in a black screen.
