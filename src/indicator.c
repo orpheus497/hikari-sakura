@@ -62,6 +62,13 @@ hikari_indicator_update(
   } else {
     hikari_indicator_update_mark(indicator, output, "");
   }
+
+  /* [COMMENT] Action purpose: hikari_indicator_bar_update() destroys and
+  recreates each bar's scene buffer, which defaults to position (0,0) and
+  enabled. Without repositioning here, every content update makes the
+  indicator bars flash at the layout origin until something unrelated (e.g.
+  move/resize) happens to reposition them. */
+  hikari_indicator_position(indicator, view);
 }
 
 void

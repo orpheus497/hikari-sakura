@@ -1959,6 +1959,14 @@ hikari_server_create_argb8888_buffer(int width, int height, unsigned char *data,
     return NULL;
   }
 
+  // [COMMENT] Action purpose: ARGB8888 is 4 bytes/pixel; a stride shorter than
+  // that would make row copies read past each source row's actual data. Guard
+  // the width*4 multiplication against overflow before comparing.
+  size_t min_stride = (size_t)width * 4;
+  if (min_stride / 4 != (size_t)width || (size_t)stride < min_stride) {
+    return NULL;
+  }
+
   size_t byte_count = (size_t)stride * (size_t)height;
   if (byte_count / (size_t)stride != (size_t)height) {
     return NULL;

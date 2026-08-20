@@ -1,6 +1,4 @@
-.ifmake clean
 WITH_ALL = YES
-.endif
 
 .ifdef WITH_ALL
 WITH_XWAYLAND = YES
@@ -103,6 +101,13 @@ LDFLAGS += -fsanitize=address
 .else
 CFLAGS += -DNDEBUG
 .endif
+
+# [COMMENT] Action purpose: Snapshot the shared DEBUG/ASAN/warning/hardening
+# flags for hikari-topbar before WITH_POSIX_C_SOURCE is applied below.
+# topbar.c deliberately requires __BSD_VISIBLE to stay set (u_int, IFF_UP,
+# usleep at 200809L) -- see the comment atop src/topbar.c -- so it must not
+# inherit -D_POSIX_C_SOURCE the way the compositor's own CFLAGS does.
+TOPBAR_CFLAGS = ${CFLAGS} -std=gnu11 -Wall
 
 .ifdef WITH_POSIX_C_SOURCE
 CFLAGS += -D_POSIX_C_SOURCE=200809L
@@ -229,8 +234,13 @@ hikari-unlocker: hikari_unlocker.c
 # binary. It is deliberately NOT linked into the compositor: it samples sensors
 # with blocking popen() calls, which would stall the Wayland event loop if run
 # in-process. hikari reads its swaybar-protocol output over a non-blocking pipe.
+# It shares the project's DEBUG/ASAN/warning/hardening/GNU11 settings but has
+# its own feature-test-macro handling: topbar.c explicitly relies on
+# __BSD_VISIBLE (u_int, IFF_UP) staying set, which _POSIX_C_SOURCE clears, so
+# WITH_POSIX_C_SOURCE is deliberately NOT inherited here (see the comment atop
+# src/topbar.c).
 hikari-topbar: src/topbar.c
-	${CC} ${CFLAGS_EXTRA} ${LDFLAGS_EXTRA} -o hikari-topbar src/topbar.c
+	${CC} ${LDFLAGS} ${TOPBAR_CFLAGS} -o hikari-topbar src/topbar.c
 
 clean-doc:
 	@test -e _darcs && echo "cleaning manpage" ||:

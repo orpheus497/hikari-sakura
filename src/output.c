@@ -322,13 +322,17 @@ output_geometry(struct hikari_output *output)
 
 
 #ifdef HAVE_LAYERSHELL
+/* [COMMENT] Action purpose: wlr_layer_surface_v1_destroy() synchronously fires
+the layer surface's destroy signal, and hikari's destroy_handler (layer_shell.c)
+responds by unmapping, finalising, and freeing `layer` before the call returns.
+`layer` is therefore already-freed memory by the time this loop regains
+control -- it must not be touched afterwards. */
 static void
 close_layers(struct wl_list *layers)
 {
   struct hikari_layer *layer, *layer_temp;
   wl_list_for_each_safe (layer, layer_temp, layers, layer_surfaces) {
     wlr_layer_surface_v1_destroy(layer->surface);
-    layer->output = NULL;
   }
 }
 #endif

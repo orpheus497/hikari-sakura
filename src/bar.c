@@ -5,6 +5,7 @@
 #include <hikari/bar.h>
 
 #include <assert.h>
+#include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
@@ -67,6 +68,12 @@ parse_hex_color(const char *text, float color[static 4])
 
   if (strlen(text) != 7) {
     return false;
+  }
+
+  for (int i = 1; i < 7; i++) {
+    if (!isxdigit((unsigned char)text[i])) {
+      return false;
+    }
   }
 
   unsigned int r, g, b;
@@ -156,6 +163,36 @@ json_int_field(const char *obj, const char *end, const char *key, int fallback)
   return atoi(p + 1);
 }
 
+/* [COMMENT] Function purpose: Find the closing '}' matching the '{' at `obj`,
+skipping over braces that appear inside JSON string values (and honouring
+backslash escapes within those strings) so a block's full_text can itself
+contain '{' or '}' without truncating the object early. */
+static const char *
+find_object_end(const char *obj)
+{
+  const char *p = obj + 1;
+  bool in_string = false;
+
+  for (; *p != '\0'; p++) {
+    if (in_string) {
+      if (*p == '\\' && *(p + 1) != '\0') {
+        p++;
+      } else if (*p == '"') {
+        in_string = false;
+      }
+      continue;
+    }
+
+    if (*p == '"') {
+      in_string = true;
+    } else if (*p == '}') {
+      return p;
+    }
+  }
+
+  return NULL;
+}
+
 /* [COMMENT] Function purpose: Parse one swaybar-protocol line -- a JSON array
 of block objects -- into the source's block set. Blocks beyond
 HIKARI_BAR_MAX_BLOCKS are dropped rather than allocated, bounding per-tick work
@@ -176,7 +213,7 @@ parse_line(struct hikari_topbar_source *source, const char *line)
       break;
     }
 
-    const char *end = strchr(obj, '}');
+    const char *end = find_object_end(obj);
     if (end == NULL) {
       break;
     }
@@ -201,6 +238,46 @@ parse_line(struct hikari_topbar_source *source, const char *line)
 
     p = end + 1;
   }
+}
+
+/* [COMMENT] Function purpose: Serialise the current block set into a flat
+string that uniquely identifies what would be painted -- full_text, colour,
+min_width, and alignment for every block, in order. Used by hikari_bar_refresh
+to detect a no-op repaint request. */
+static char *
+build_cache_key(struct hikari_topbar_source *source)
+{
+  size_t cap = 256;
+  char *key = hikari_malloc(cap);
+  size_t len = 0;
+  key[0] = '\0';
+
+  for (int i = 0; i < source->nr_blocks; i++) {
+    struct hikari_bar_block *block = &source->blocks[i];
+    const char *text = block->full_text != NULL ? block->full_text : "";
+
+    int needed = snprintf(NULL, 0, "\x1f%s\x1f%d\x1f%d\x1f%.6f,%.6f,%.6f,%.6f",
+        text, block->min_width, block->align_right,
+        block->color[0], block->color[1], block->color[2], block->color[3]);
+    if (needed < 0) {
+      continue;
+    }
+
+    while (len + (size_t)needed + 1 > cap) {
+      cap *= 2;
+      char *grown = hikari_malloc(cap);
+      memcpy(grown, key, len + 1);
+      hikari_free(key);
+      key = grown;
+    }
+
+    len += (size_t)snprintf(key + len, cap - len,
+        "\x1f%s\x1f%d\x1f%d\x1f%.6f,%.6f,%.6f,%.6f",
+        text, block->min_width, block->align_right,
+        block->color[0], block->color[1], block->color[2], block->color[3]);
+  }
+
+  return key;
 }
 
 // [COMMENT] Function purpose: Repaint every output's bar after new telemetry.
@@ -235,9 +312,25 @@ topbar_readable(int fd, uint32_t mask, void *data)
   }
 
   char chunk[4096];
-  ssize_t n;
+  ssize_t n = -1;
 
-  while ((n = read(fd, chunk, sizeof(chunk))) > 0) {
+  for (;;) {
+    n = read(fd, chunk, sizeof(chunk));
+    if (n == 0) {
+      /* [COMMENT] Action purpose: EOF -- the helper closed its end of the
+      pipe. Tear the source down the same way as the hangup path so the loop
+      stops polling a dead, now readable-forever fd. */
+      if (source->event_source != NULL) {
+        wl_event_source_remove(source->event_source);
+        source->event_source = NULL;
+      }
+      close(source->fd);
+      source->fd = -1;
+      return 0;
+    }
+    if (n <= 0) {
+      break;
+    }
     if (source->len + (size_t)n + 1 > source->cap) {
       size_t cap = source->cap ? source->cap * 2 : 8192;
       while (cap < source->len + (size_t)n + 1) {
@@ -328,11 +421,20 @@ hikari_topbar_source_init(struct hikari_topbar_source *source)
       close(fds[1]);
     }
     setsid();
+    /* [COMMENT] Action purpose: Close every inherited descriptor above stderr
+    -- listening sockets, DRM/GBM fds, and anything else the compositor had
+    open -- before exec. Only stdin/stdout/stderr are meant to cross into the
+    helper. */
+    closefrom(STDERR_FILENO + 1);
     /* [COMMENT] Action purpose: Resolve the helper through the same
     compile-time absolute prefix used for hikari-unlocker, so a modified PATH
     cannot substitute a different binary into the compositor's pipeline. */
     execl(HIKARI_TOPBAR_PATH, "hikari-topbar", NULL);
-    fprintf(stderr, "error: could not execute hikari-topbar\n");
+    /* [COMMENT] Action purpose: fprintf is not async-signal-safe and must not
+    be used this deep post-fork/pre-exec (its internal buffering can deadlock
+    on a lock left held by the parent at fork time); write() to a raw fd is. */
+    static const char msg[] = "error: could not execute hikari-topbar\n";
+    write(STDERR_FILENO, msg, sizeof(msg) - 1);
     _exit(EXIT_FAILURE);
   }
 
@@ -417,6 +519,9 @@ hikari_bar_fini(struct hikari_bar *bar)
     bar->scene_buffer = NULL;
   }
 
+  hikari_free(bar->cache_key);
+  bar->cache_key = NULL;
+
   bar->enabled = false;
 }
 
@@ -451,16 +556,45 @@ hikari_bar_refresh(struct hikari_bar *bar)
     return;
   }
 
+  /* [COMMENT] Action purpose: output->geometry is in output-logical pixels,
+  but the scene buffer's backing cairo surface must be allocated in physical
+  pixels on scaled (HiDPI) outputs, or the bar renders blurry/undersized.
+  cairo_scale() below keeps every drawing call in logical coordinates; only
+  the surface allocation and the eventual wlr_scene_buffer_set_dest_size()
+  call need to know about the scale factor. */
+  float scale = output->wlr_output->scale;
+  if (scale <= 0.0f) {
+    scale = 1.0f;
+  }
+  int pixel_width = (int)(width * scale + 0.5f);
+  int pixel_height = (int)(height * scale + 0.5f);
+  if (pixel_width <= 0 || pixel_height <= 0) {
+    return;
+  }
+
   struct hikari_topbar_source *source = &hikari_server.topbar;
 
+  /* [COMMENT] Action purpose: Skip the repaint entirely when neither the
+  rendered content nor the geometry changed since the last frame -- the
+  common case, since the helper ticks far faster than most blocks change. */
+  char *key = build_cache_key(source);
+  if (bar->scene_buffer != NULL && bar->cache_key != NULL &&
+      bar->cache_width == width && bar->cache_height == height &&
+      bar->cache_scale == scale && strcmp(bar->cache_key, key) == 0) {
+    hikari_free(key);
+    return;
+  }
+
   cairo_surface_t *surface =
-      cairo_image_surface_create(CAIRO_FORMAT_ARGB32, width, height);
+      cairo_image_surface_create(CAIRO_FORMAT_ARGB32, pixel_width, pixel_height);
   if (cairo_surface_status(surface) != CAIRO_STATUS_SUCCESS) {
     cairo_surface_destroy(surface);
+    hikari_free(key);
     return;
   }
 
   cairo_t *cairo = cairo_create(surface);
+  cairo_scale(cairo, scale, scale);
   PangoLayout *layout = pango_cairo_create_layout(cairo);
   pango_layout_set_font_description(layout, hikari_configuration->font.desc);
 
@@ -534,10 +668,10 @@ hikari_bar_refresh(struct hikari_bar *bar)
   cairo_surface_flush(surface);
 
   unsigned char *data = cairo_image_surface_get_data(surface);
-  int stride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, width);
+  int stride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, pixel_width);
 
   struct wlr_buffer *buffer =
-      hikari_server_create_argb8888_buffer(width, height, data, stride);
+      hikari_server_create_argb8888_buffer(pixel_width, pixel_height, data, stride);
 
   if (buffer == NULL) {
     /* [COMMENT] Action purpose: Report rather than fail silently. An invisible
@@ -546,10 +680,11 @@ hikari_bar_refresh(struct hikari_bar *bar)
     fprintf(stderr,
         "error: could not create bar buffer for output \"%s\" (%dx%d)\n",
         output->wlr_output->name,
-        width,
-        height);
+        pixel_width,
+        pixel_height);
   } else {
-    if (bar->scene_buffer == NULL) {
+    bool newly_created = bar->scene_buffer == NULL;
+    if (newly_created) {
       bar->scene_buffer =
           wlr_scene_buffer_create(&hikari_server.scene->tree, buffer);
     } else {
@@ -562,12 +697,34 @@ hikari_bar_refresh(struct hikari_bar *bar)
       the output origin must be added explicitly. */
       wlr_scene_node_set_position(&bar->scene_buffer->node,
           output->geometry.x, output->geometry.y);
-      wlr_scene_node_raise_to_top(&bar->scene_buffer->node);
+      /* [COMMENT] Action purpose: The backing buffer is in physical pixels
+      (pixel_width x pixel_height) but the scene node must occupy logical
+      output space; dest_size tells wlr_scene to scale it down accordingly. */
+      wlr_scene_buffer_set_dest_size(bar->scene_buffer, width, height);
+      /* [COMMENT] Action purpose: Raise only once, at creation. Raising on
+      every refresh (which happens multiple times a second) would repeatedly
+      pull the bar above the lock indicator and other overlays that are
+      raised less often, fighting their own raise_to_top calls. */
+      if (newly_created) {
+        wlr_scene_node_raise_to_top(&bar->scene_buffer->node);
+      }
       wlr_scene_node_set_enabled(&bar->scene_buffer->node, true);
     }
 
     wlr_buffer_drop(buffer);
+
+    /* [COMMENT] Action purpose: Only adopt the new identity once the buffer
+    actually made it to the scene -- a failed render should not poison the
+    cache into skipping the next (potentially successful) refresh. */
+    hikari_free(bar->cache_key);
+    bar->cache_key = key;
+    key = NULL;
+    bar->cache_width = width;
+    bar->cache_height = height;
+    bar->cache_scale = scale;
   }
+
+  hikari_free(key);
 
   g_object_unref(layout);
   cairo_destroy(cairo);

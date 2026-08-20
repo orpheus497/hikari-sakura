@@ -48,6 +48,7 @@ __BSD_VISIBLE whenever _POSIX_C_SOURCE/_XOPEN_SOURCE/_ANSI_SOURCE is defined, so
 defining any of those hides u_int, IFF_UP, and (at 200809L) usleep. The Makefile
 defines none of them; .clangd previously did, which is why the editor reported
 errors for code that builds cleanly. */
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -65,24 +66,84 @@ errors for code that builds cleanly. */
 #include <net/if.h>
 
 /* ═══════════════════════════════════════════════════════════════════════════
+ * JSON STRING ESCAPING
+ *
+ * Any nonconstant string emitted through the swaybar protocol (MPRIS track
+ * metadata, in particular, is fully attacker/user controlled -- artist and
+ * title tags can contain quotes, backslashes, or control characters) must be
+ * escaped before being embedded in a full_text field, or the emitted line is
+ * not valid JSON and hikari's parser (src/bar.c) desyncs.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+static void json_escape(const char *in, char *out, size_t out_size) {
+    size_t o = 0;
+    for (size_t i = 0; in[i] != '\0' && o + 1 < out_size; i++) {
+        unsigned char c = (unsigned char)in[i];
+        const char *esc = NULL;
+        char buf[8];
+
+        switch (c) {
+            case '"':  esc = "\\\""; break;
+            case '\\': esc = "\\\\"; break;
+            case '\n': esc = "\\n";  break;
+            case '\r': esc = "\\r";  break;
+            case '\t': esc = "\\t";  break;
+            default:
+                if (c < 0x20) {
+                    snprintf(buf, sizeof(buf), "\\u%04x", c);
+                    esc = buf;
+                }
+                break;
+        }
+
+        if (esc != NULL) {
+            size_t elen = strlen(esc);
+            if (o + elen + 1 > out_size) break;
+            memcpy(out + o, esc, elen);
+            o += elen;
+        } else {
+            out[o++] = (char)c;
+        }
+    }
+    out[o] = '\0';
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
  * PYWAL COLOUR PALETTE
  * ═══════════════════════════════════════════════════════════════════════════ */
 
 static char pywal_colors[16][10];
 
-static void read_pywal_colors(void) {
-    char path[256];
-    snprintf(path, sizeof(path), "%s/.cache/wal/colors", getenv("HOME"));
-    FILE *fp = fopen(path, "r");
-    if (!fp) {
-        for (int i = 0; i < 16; i++) strcpy(pywal_colors[i], "#ffffff");
-        return;
+static int is_valid_hex_color(const char *s) {
+    if (s[0] != '#') return 0;
+    for (int i = 1; i < 7; i++) {
+        if (!isxdigit((unsigned char)s[i])) return 0;
     }
+    return s[7] == '\0';
+}
+
+static void read_pywal_colors(void) {
+    for (int i = 0; i < 16; i++) strcpy(pywal_colors[i], "#ffffff");
+
+    const char *home = getenv("HOME");
+    if (!home) return;
+
+    char path[256];
+    int n = snprintf(path, sizeof(path), "%s/.cache/wal/colors", home);
+    if (n < 0 || (size_t)n >= sizeof(path)) return;
+
+    FILE *fp = fopen(path, "r");
+    if (!fp) return;
+
     char line[16];
     int i = 0;
     while (fgets(line, sizeof(line), fp) && i < 16) {
         line[strcspn(line, "\n")] = '\0';
-        strcpy(pywal_colors[i++], line);
+        if (is_valid_hex_color(line)) {
+            strncpy(pywal_colors[i], line, sizeof(pywal_colors[i]) - 1);
+            pywal_colors[i][sizeof(pywal_colors[i]) - 1] = '\0';
+        }
+        i++;
     }
     fclose(fp);
 }
@@ -266,10 +327,16 @@ static double get_mem_usage(void) {
     int          pagesize;
     size_t       len;
 
-    len = sizeof(total);    sysctlbyname("hw.physmem",                   &total,   &len, NULL, 0);
-    len = sizeof(pagesize); sysctlbyname("hw.pagesize",                  &pagesize,&len, NULL, 0);
-    len = sizeof(active);   sysctlbyname("vm.stats.vm.v_active_count",   &active,  &len, NULL, 0);
-    len = sizeof(wire);     sysctlbyname("vm.stats.vm.v_wire_count",     &wire,    &len, NULL, 0);
+    len = sizeof(total);
+    if (sysctlbyname("hw.physmem", &total, &len, NULL, 0) == -1) return 0.0;
+    len = sizeof(pagesize);
+    if (sysctlbyname("hw.pagesize", &pagesize, &len, NULL, 0) == -1) return 0.0;
+    len = sizeof(active);
+    if (sysctlbyname("vm.stats.vm.v_active_count", &active, &len, NULL, 0) == -1) return 0.0;
+    len = sizeof(wire);
+    if (sysctlbyname("vm.stats.vm.v_wire_count", &wire, &len, NULL, 0) == -1) return 0.0;
+
+    if (total <= 0 || pagesize <= 0) return 0.0;
 
     return 100.0 * (long long)(active + wire) * pagesize / total;
 }
@@ -331,27 +398,14 @@ static void get_net_status(char *buf) {
  * ═══════════════════════════════════════════════════════════════════════════ */
 
 static double get_home_usage(void) {
-    int nfs = getfsstat(NULL, 0, MNT_NOWAIT);
-    if (nfs <= 0) return 0.0;
-
-    struct statfs *fs = malloc(sizeof(struct statfs) * (size_t)nfs);
-    if (!fs) return 0.0;
-    nfs = getfsstat(fs, (long)(sizeof(struct statfs) * (size_t)nfs), MNT_NOWAIT);
-
-    const char *home  = getenv("HOME");
+    const char *home = getenv("HOME");
     if (!home) home = "/home";
 
-    double usage = 0.0;
-    for (int i = 0; i < nfs; i++) {
-        if (strcmp(fs[i].f_mntonname, home) == 0) {
-            if (fs[i].f_blocks > 0)
-                usage = 100.0 * (double)(fs[i].f_blocks - fs[i].f_bfree)
-                               / (double) fs[i].f_blocks;
-            break;
-        }
-    }
-    free(fs);
-    return usage;
+    struct statfs fs;
+    if (statfs(home, &fs) == -1) return 0.0;
+    if (fs.f_blocks == 0) return 0.0;
+
+    return 100.0 * (double)(fs.f_blocks - fs.f_bfree) / (double)fs.f_blocks;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -439,11 +493,13 @@ int main(void) {
         printf("[");
 
         /* Media / MPRIS */
-        if (s.mpris[0])
+        if (s.mpris[0]) {
+            char mpris_escaped[256];
+            json_escape(s.mpris, mpris_escaped, sizeof(mpris_escaped));
             printf("{\"full_text\":\"  %s \","
                    "\"color\":\"%s\",\"align\":\"left\"},",
-                   s.mpris, pywal_colors[14]);
-        else
+                   mpris_escaped, pywal_colors[14]);
+        } else
             printf("{\"full_text\":\"  Idle \","
                    "\"color\":\"%s\",\"align\":\"left\"},",
                    pywal_colors[8]);
@@ -456,7 +512,8 @@ int main(void) {
         printf("{\"full_text\":\"  %.0f%% \",\"color\":\"%s\"},",
                s.mem_usage, pywal_colors[3]);
 
-        /* CPU temperature */
+        /* CPU temperature -- omitted when no sensor is readable */
+        if (s.cpu_temp >= 0)
         printf("{\"full_text\":\"  %d°C \",\"color\":\"%s\"},",
                s.cpu_temp, pywal_colors[4]);
 
@@ -481,15 +538,18 @@ int main(void) {
         printf("{\"full_text\":\"  %s \",\"color\":\"%s\"},",
                s.net_status, pywal_colors[6]);
 
-        /* Battery */
+        /* Battery -- omitted when no battery is present */
+        if (s.bat_life >= 0)
         printf("{\"full_text\":\" 󰁹 %d%% \",\"color\":\"%s\"},",
                s.bat_life, pywal_colors[8]);
 
-        /* Volume */
+        /* Volume -- omitted when no sink is readable */
+        if (s.volume >= 0)
         printf("{\"full_text\":\" 󰖀 %d%% \",\"color\":\"%s\"},",
                s.volume, pywal_colors[9]);
 
-        /* Backlight */
+        /* Backlight -- omitted when no backlight tool is available */
+        if (s.backlight >= 0)
         printf("{\"full_text\":\" 󰃠 %d%% \",\"color\":\"%s\"},",
                s.backlight, pywal_colors[10]);
 
