@@ -5,6 +5,9 @@
 
 #include <libinput.h>
 #include <stdint.h>
+// [COMMENT] Action purpose: setgroups() lives in <unistd.h> on FreeBSD and in
+// <grp.h> on glibc; include both so the privilege drop compiles on either.
+#include <grp.h>
 #include <unistd.h>
 #include <wayland-server-core.h>
 
@@ -958,23 +961,41 @@ static bool
 drop_privileges(struct hikari_server *server)
 {
   if (getuid() != geteuid() || getgid() != getegid()) {
-    if (setuid(getuid()) != 0 || setgid(getgid()) != 0) {
+    gid_t gid = getgid();
+
+    // [COMMENT] Action purpose: Groups must go first -- once the effective UID
+    // is unprivileged, setgroups() and setgid() fail with EPERM.
+    if (geteuid() == 0 && setgroups(1, &gid) != 0) {
+      return false;
+    }
+
+    if (setgid(gid) != 0) {
+      return false;
+    }
+
+    if (setuid(getuid()) != 0) {
       return false;
     }
   }
 
-  // [COMMENT] Action purpose: Reject a retained privileged group as well as a
-  // retained privileged user. Checking only the effective UID misses a failed
-  // setgid() above: setuid(getuid()) can succeed while setgid(getgid()) fails,
-  // leaving the process in group 0 with a non-zero effective UID.
-  if (geteuid() == 0 || getegid() == 0) {
+  // [COMMENT] Action purpose: Confirm the drop took effect by comparing the
+  // effective credentials against the real ones. Testing for zero instead would
+  // reject a user whose real GID is legitimately 0 -- wheel is gid 0 on FreeBSD,
+  // and a primary group of wheel is not a retained privilege.
+  if (geteuid() != getuid() || getegid() != getgid()) {
     fprintf(stderr,
-        "running with privileged credentials is prohibited "
+        "failed to drop privileges "
         "(uid=%ju, euid=%ju, gid=%ju, egid=%ju)\n",
         (uintmax_t)getuid(),
         (uintmax_t)geteuid(),
         (uintmax_t)getgid(),
         (uintmax_t)getegid());
+    return false;
+  }
+
+  // [COMMENT] Action purpose: Refuse to run the compositor as actual root.
+  if (getuid() == 0) {
+    fprintf(stderr, "running as root is prohibited\n");
     return false;
   }
 

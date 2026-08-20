@@ -1549,8 +1549,13 @@ hikari_view_pin_to_sheet(struct hikari_view *view, struct hikari_sheet *sheet)
       hikari_server_cursor_focus();
     }
 
+    // [COMMENT] Action purpose: Move the list link with the pointer. hide()
+    // leaves sheet_views linked, so without this the view reports the new sheet
+    // while still sitting in the old sheet's list.
+    wl_list_remove(&view->sheet_views);
+    wl_list_insert(&sheet->views, &view->sheet_views);
+
     view->sheet = sheet;
-  
 
     if (hikari_view_is_tiled(view)) {
       queue_reset(view, true);

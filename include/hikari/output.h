@@ -104,7 +104,7 @@ hikari_output_add_damage(struct hikari_output *output, struct wlr_box *region)
 static inline void
 hikari_output_schedule_frame(struct hikari_output *output)
 {
-  if (output == NULL || !output->enabled) {
+  if (output == NULL || !output->enabled || output->scene_output == NULL) {
     return;
   }
 

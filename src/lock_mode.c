@@ -48,6 +48,11 @@ static int cursor = 0;
 static int locker_pipe[2][2] = { { -1, -1 }, { -1, -1 } };
 static pid_t locker_pid = -1;
 
+// [COMMENT] Action purpose: Unlocker children awaiting a non-blocking reap after
+// a restart replaced locker_pid. Entries <= 0 are free slots.
+#define HIKARI_MAX_PENDING_LOCKERS 8
+static pid_t pending_locker_pids[HIKARI_MAX_PENDING_LOCKERS];
+
 static struct hikari_lock_mode *
 get_mode(void)
 {
@@ -201,27 +206,75 @@ delete_char(void)
 /* [COMMENT] Function purpose: Attempt one non-blocking reap of the unlocker
 child. Returns true when the child has been collected (or was already gone),
 false when it is still running and a retry is needed. */
+/* [COMMENT] Function purpose: Non-blocking reap of a single pid. Returns true
+when it has been collected or was already gone. */
 static bool
-try_reap_locker(void)
+reap_pid(pid_t pid)
 {
-  if (locker_pid <= 0) {
-    return true;
-  }
-
   int status;
   pid_t result;
   do {
-    result = waitpid(locker_pid, &status, WNOHANG);
+    result = waitpid(pid, &status, WNOHANG);
   } while (result == -1 && errno == EINTR);
 
   // [COMMENT] Action purpose: ECHILD means the child is already gone (e.g. reaped
   // elsewhere); treat it as success so the pid state is cleared either way.
-  if (result > 0 || (result == -1 && errno == ECHILD)) {
-    locker_pid = -1;
-    return true;
+  return result > 0 || (result == -1 && errno == ECHILD);
+}
+
+static bool
+try_reap_locker(void)
+{
+  bool done = true;
+
+  // [COMMENT] Action purpose: Drain deferred children first. A restart parks the
+  // live pid here, so these are previous helpers that must still be collected.
+  for (size_t i = 0; i < HIKARI_MAX_PENDING_LOCKERS; i++) {
+    if (pending_locker_pids[i] > 0) {
+      if (reap_pid(pending_locker_pids[i])) {
+        pending_locker_pids[i] = -1;
+      } else {
+        done = false;
+      }
+    }
   }
 
-  return false;
+  if (locker_pid > 0) {
+    if (reap_pid(locker_pid)) {
+      locker_pid = -1;
+    } else {
+      done = false;
+    }
+  }
+
+  return done;
+}
+
+/* [COMMENT] Function purpose: Park the live unlocker pid in the pending set so a
+subsequent start_unlocker() can overwrite locker_pid without dropping the only
+reference to the previous child, which would leave it a zombie for the rest of
+the session. */
+static void
+defer_locker_pid(void)
+{
+  if (locker_pid <= 0) {
+    return;
+  }
+
+  for (size_t i = 0; i < HIKARI_MAX_PENDING_LOCKERS; i++) {
+    if (pending_locker_pids[i] <= 0) {
+      pending_locker_pids[i] = locker_pid;
+      locker_pid = -1;
+      return;
+    }
+  }
+
+  // [COMMENT] Action purpose: Table full (many rapid restarts). Block on this one
+  // child rather than leak it; the set is sized so this is not reached normally.
+  int status;
+  while (waitpid(locker_pid, &status, 0) == -1 && errno == EINTR) {
+  }
+  locker_pid = -1;
 }
 
 /* [COMMENT] Function purpose: Timer callback that retries the non-blocking reap
@@ -360,9 +413,12 @@ submit_password(void)
   // no usable descriptors — gating on it here would silently accept no further
   // password attempts ever again.
   if (locker_pipe[0][1] == -1 || locker_pipe[1][0] == -1) {
-    // [COMMENT] Action purpose: Collect the previous child before
-    // start_unlocker overwrites locker_pid, otherwise the old PID is leaked.
+    // [COMMENT] Action purpose: Park the previous child before start_unlocker
+    // overwrites locker_pid. A deferred reap alone is not enough: it leaves
+    // locker_pid set when the child has not exited yet, and the fork below would
+    // then drop the only reference to it.
     if (locker_pid > 0) {
+      defer_locker_pid();
       reap_locker_deferred(mode);
     }
     if (!start_unlocker()) {

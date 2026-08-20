@@ -474,8 +474,23 @@ hikari_topbar_source_init(struct hikari_topbar_source *source)
   from the Wayland event loop; a blocking read here would stall every client
   whenever the helper is mid-tick. */
   int flags = fcntl(source->fd, F_GETFL, 0);
-  if (flags != -1) {
-    fcntl(source->fd, F_SETFL, flags | O_NONBLOCK);
+  if (flags == -1 || fcntl(source->fd, F_SETFL, flags | O_NONBLOCK) == -1) {
+    /* [COMMENT] Action purpose: Registering a blocking fd would wedge the event
+    loop: topbar_readable reads until EAGAIN, which never arrives. Tear the
+    helper down instead of running the bar at that cost. */
+    fprintf(stderr, "error: could not set topbar pipe non-blocking\n");
+    close(source->fd);
+    source->fd = -1;
+
+    kill(child, SIGTERM);
+    int status;
+    pid_t result;
+    do {
+      result = waitpid(child, &status, WNOHANG);
+    } while (result == -1 && errno == EINTR);
+    source->pid = -1;
+
+    return;
   }
 
   source->event_source = wl_event_loop_add_fd(hikari_server.event_loop,

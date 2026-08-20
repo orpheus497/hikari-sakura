@@ -1,4 +1,6 @@
+.ifmake clean
 WITH_ALL = YES
+.endif
 
 .ifdef WITH_ALL
 WITH_XWAYLAND = YES
@@ -340,8 +342,8 @@ uninstall:
 # existing ~/.config/hikari/hikari.conf.
 install-user: share/backgrounds/hikari/hikari_wallpaper.png etc/hikari/hikari.conf
 	@test -n "${HOME}" || { echo "error: HOME is not set" >&2; exit 1; }
-	mkdir -p ${HOME}/.config/hikari
-	install -m 644 share/backgrounds/hikari/hikari_wallpaper.png ${HOME}/.config/hikari/hikari_wallpaper.png
+	mkdir -p "${HOME}/.config/hikari"
+	install -m 644 share/backgrounds/hikari/hikari_wallpaper.png "${HOME}/.config/hikari/hikari_wallpaper.png"
 	@if [ -e "${HOME}/.config/hikari/hikari.conf" ]; then \
 		echo "install-user: ${HOME}/.config/hikari/hikari.conf already exists -- leaving it untouched"; \
 	else \
