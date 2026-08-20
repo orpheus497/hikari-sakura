@@ -157,8 +157,8 @@ If you are using a display manager (GDM, SDDM, greetd), the installed
 `hikari.desktop` session file will call `start-hikari` automatically.
 
 `hikari` can be configured via `$XDG_CONFIG_HOME/hikari/hikari.conf`, the
-default configuration can be found under `$PREFIX/etc/hikari/hikari.conf`
-(depending on the value of `PREFIX` that was specified during the installation).
+default configuration can be found under `${ETC_PREFIX}/etc/hikari/hikari.conf`
+(depending on the value of `ETC_PREFIX` that was specified during the installation).
 
 The default configuration expects your default terminal emulator to be specified
 in the `$TERMINAL` environment variable.

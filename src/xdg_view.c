@@ -220,21 +220,23 @@ map_handler(struct wl_listener *listener, void *data)
   /* [COMMENT] Action purpose: Configure the view on its first map. Focus is
   resolved from the view configuration inside hikari_view_map() -- the removed
   focus out-parameter was never written and is intentionally gone. */
-  bool unmanaged = hikari_view_is_unmanaged(view);
-
-  if (unmanaged) {
+  if (hikari_view_is_unmanaged(view)) {
     first_map(xdg_view);
   }
 
   map(view, false);
 
-  // [COMMENT] Action purpose: Consume any fullscreen request the client made
-  // before its first commit -- request_fullscreen_handler is only registered
-  // once the surface is initialized, so a pre-map request would otherwise be
-  // silently dropped. This must run after map() / hikari_view_map() so the
-  // view is mapped by the time apply_requested_fullscreen() drives the
-  // full-maximize toggle, which otherwise no-ops on an unmapped view.
-  if (unmanaged && xdg_view->xdg_toplevel->requested.fullscreen) {
+  // [COMMENT] Action purpose: Reconcile hikari's full-maximize state with the
+  // toplevel's currently requested fullscreen state whenever they disagree
+  // after mapping -- covers both a pre-map request on a brand new view
+  // (request_fullscreen_handler only becomes observable once the surface is
+  // initialized) and a stale request left over from before an already
+  // managed view was unmapped and is now being remapped. This must run after
+  // map() / hikari_view_map() so the view is mapped by the time
+  // apply_requested_fullscreen() drives the full-maximize toggle, which
+  // otherwise no-ops on an unmapped view.
+  if (xdg_view->xdg_toplevel->requested.fullscreen !=
+      hikari_view_is_fully_maximized(view)) {
     apply_requested_fullscreen(xdg_view);
   }
 }
