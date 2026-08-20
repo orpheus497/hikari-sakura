@@ -21,6 +21,33 @@ hikari_border_init(struct hikari_border *border, struct wlr_scene_tree *parent)
   border->left = wlr_scene_rect_create(parent, 0, 0, color);
   border->right = wlr_scene_rect_create(parent, 0, 0, color);
 
+  // [COMMENT] Action purpose: wlr_scene_rect_create can return NULL under
+  // memory/resource pressure. Every consumer (refresh_geometry, fini) already
+  // treats border->top == NULL as "no border" and returns early, so on partial
+  // failure here we destroy whatever succeeded and null out all four fields
+  // to preserve that all-or-nothing invariant instead of dereferencing NULL
+  // below.
+  if (border->top == NULL || border->bottom == NULL ||
+      border->left == NULL || border->right == NULL) {
+    if (border->top != NULL) {
+      wlr_scene_node_destroy(&border->top->node);
+    }
+    if (border->bottom != NULL) {
+      wlr_scene_node_destroy(&border->bottom->node);
+    }
+    if (border->left != NULL) {
+      wlr_scene_node_destroy(&border->left->node);
+    }
+    if (border->right != NULL) {
+      wlr_scene_node_destroy(&border->right->node);
+    }
+    border->top = NULL;
+    border->bottom = NULL;
+    border->left = NULL;
+    border->right = NULL;
+    return;
+  }
+
   wlr_scene_node_lower_to_bottom(&border->top->node);
   wlr_scene_node_lower_to_bottom(&border->bottom->node);
   wlr_scene_node_lower_to_bottom(&border->left->node);

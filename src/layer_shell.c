@@ -8,6 +8,7 @@
 #include <wlr/types/wlr_scene.h>
 #include <wlr/types/wlr_seat.h>
 #include <wlr/types/wlr_xdg_shell.h>
+#include <wlr/util/log.h>
 
 #include <hikari/memory.h>
 #include <hikari/output.h>

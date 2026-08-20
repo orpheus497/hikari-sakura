@@ -644,6 +644,16 @@ queue_resize(struct hikari_view *view,
     int requested_width,
     int requested_height)
 {
+  // [COMMENT] Action purpose: Guard against a missing output. view->output is
+  // NULL between hikari_view_init and hikari_view_configure (see the matching
+  // guard and explanation in hikari_view_refresh_geometry); a resize queued
+  // in that window would otherwise dereference output->usable_area below on a
+  // NULL output. There is nothing to constrain the resize against yet, so
+  // simply defer it.
+  if (view->output == NULL) {
+    return;
+  }
+
   struct hikari_operation *op = &view->pending_operation;
 
   int min_width;
@@ -765,6 +775,14 @@ hikari_view_move(struct hikari_view *view, int x, int y)
 {
   assert(view != NULL);
 
+  // [COMMENT] Action purpose: Same view->output nullability precondition as
+  // queue_resize (view->output is NULL between hikari_view_init and
+  // hikari_view_configure) — move_view dereferences view->output->usable_area
+  // via move_view_constrained, so defer if there is no output yet.
+  if (view->output == NULL) {
+    return;
+  }
+
   struct wlr_box *geometry = hikari_view_geometry(view);
 
   move_view(view, geometry, geometry->x + x, geometry->y + y);
@@ -775,6 +793,10 @@ hikari_view_move_absolute(struct hikari_view *view, int x, int y)
 {
   assert(view != NULL);
 
+  if (view->output == NULL) {
+    return;
+  }
+
   struct wlr_box *geometry = hikari_view_geometry(view);
 
   move_view(view, geometry, x, y);
@@ -784,6 +806,10 @@ hikari_view_move_absolute(struct hikari_view *view, int x, int y)
   void hikari_view_move_##pos(struct hikari_view *view)                        \
   {                                                                            \
     assert(view != NULL);                                                      \
+                                                                               \
+    if (view->output == NULL) {                                                \
+      return;                                                                  \
+    }                                                                          \
                                                                                \
     struct hikari_output *output = view->output;                               \
     struct wlr_box *usable_area = &output->usable_area;                        \
@@ -845,15 +871,13 @@ hikari_view_map(struct hikari_view *view, struct wlr_surface *surface)
   wl_list_for_each (
       wlr_subsurface, &surface->current.subsurfaces_below, current.link) {
     struct hikari_view_subsurface *subsurface =
-        (struct hikari_view_subsurface *)malloc(
-            sizeof(struct hikari_view_subsurface));
+        hikari_malloc(sizeof(struct hikari_view_subsurface));
     hikari_view_subsurface_init(subsurface, view, wlr_subsurface);
   }
   wl_list_for_each (
       wlr_subsurface, &surface->current.subsurfaces_above, current.link) {
     struct hikari_view_subsurface *subsurface =
-        (struct hikari_view_subsurface *)malloc(
-            sizeof(struct hikari_view_subsurface));
+        hikari_malloc(sizeof(struct hikari_view_subsurface));
     hikari_view_subsurface_init(subsurface, view, wlr_subsurface);
   }
 

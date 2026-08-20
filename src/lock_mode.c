@@ -573,8 +573,10 @@ cancel(void)
     // result == 0: child still running; locker_pid retained for fini reap
   }
 
-  wl_event_source_remove(mode->disable_outputs);
-  mode->disable_outputs = NULL;
+  if (mode->disable_outputs != NULL) {
+    wl_event_source_remove(mode->disable_outputs);
+    mode->disable_outputs = NULL;
+  }
 
   struct hikari_output *output;
   wl_list_for_each (output, &hikari_server.outputs, server_outputs) {

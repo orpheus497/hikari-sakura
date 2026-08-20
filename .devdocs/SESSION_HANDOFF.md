@@ -2,6 +2,23 @@
 
 *Note: Most recent entries are listed at the top.*
 
+## Session Date: 2026-08-20 — Phase 40: Resize/Move NULL-Output Guard Sweep
+**Timestamp:** 2026-08-20 (session context date; `date` not executed this session)
+**Current Status:** Agent-side static investigation and fix complete; build/runtime verification pending user (root-owned `.o` artifacts block agent-side `make`; user opted to build independently).
+**Accomplishments:**
+- User reported crashes with multiple windows open, multiple workspaces, many Firefox tabs, and occasionally when resizing heavy clients (Firefox). Ran two Explore-agent passes plus manual review across the full view spawn/memory/workspace/sheet/group/teardown lifecycle, process spawning (`command.c`), output damage scheduling (`output.c`), and layer-shell teardown (`layer_shell.c`). All confirmed sound — the Phase 38/39 fixes already closed the obvious holes in those areas.
+- **Root cause found:** `queue_resize` (`src/view.c:684-692`, reached via `hikari_view_resize`/`hikari_view_resize_absolute`) dereferenced `view->output->usable_area` without guarding the `view->output == NULL` window between `hikari_view_init` and `hikari_view_configure` — the exact bug class Phase 38 fixed in `hikari_view_refresh_geometry`. Added the guard.
+- **Swept sibling call sites:** `hikari_view_move`, `hikari_view_move_absolute`, and the `MOVE(pos)` macro (`src/view.c`) dereference the same `view->output->usable_area` on the same precondition via user-triggered move keybindings; added matching guards to all three.
+- Audited remaining `view->output->` dereferences (`view.c`, `xdg_view.c`) and confirmed the rest are either already guarded (Phase 38's `refresh_geometry` fix) or only reachable from within `queue_resize` (now guarded) — no further unguarded sites found.
+**Modified Files:**
+- `src/view.c`
+
+**Next Steps:**
+- User builds (`sudo make clean && sudo make install`) and stress-tests: multiple windows/workspaces, many Firefox tabs, interactive Firefox resize.
+- If a crash still occurs, capture a debug/ASan backtrace (`NDEBUG` unset — existing debug tracing in `view.c`/`xdg_view.c` is already gated on it) rather than continuing static investigation; log the new finding as a fresh phase in `DECISIONS_LOG.md`.
+
+---
+
 ## Session Date: 2026-08-20 — Phase 38: Window Creation Crash and Scene Tree Ownership
 **Timestamp:** 2026-08-20 (session context date; `date` not executed — IDE-only tooling directive this session)
 **Current Status:** Window creation works. User confirms this is the most functional the compositor has been. Runtime-verified by the user, not just static analysis.

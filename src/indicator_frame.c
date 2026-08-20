@@ -25,6 +25,33 @@ hikari_indicator_frame_init(
   indicator_frame->left = wlr_scene_rect_create(parent, 0, 0, color);
   indicator_frame->right = wlr_scene_rect_create(parent, 0, 0, color);
 
+  // [COMMENT] Action purpose: wlr_scene_rect_create can return NULL under
+  // memory/resource pressure. Every consumer (refresh_geometry, show, hide,
+  // fini) already treats indicator_frame->top == NULL as "no frame" and
+  // returns early, so on partial failure here we destroy whatever succeeded
+  // and null out all four fields to preserve that all-or-nothing invariant
+  // instead of dereferencing NULL below.
+  if (indicator_frame->top == NULL || indicator_frame->bottom == NULL ||
+      indicator_frame->left == NULL || indicator_frame->right == NULL) {
+    if (indicator_frame->top != NULL) {
+      wlr_scene_node_destroy(&indicator_frame->top->node);
+    }
+    if (indicator_frame->bottom != NULL) {
+      wlr_scene_node_destroy(&indicator_frame->bottom->node);
+    }
+    if (indicator_frame->left != NULL) {
+      wlr_scene_node_destroy(&indicator_frame->left->node);
+    }
+    if (indicator_frame->right != NULL) {
+      wlr_scene_node_destroy(&indicator_frame->right->node);
+    }
+    indicator_frame->top = NULL;
+    indicator_frame->bottom = NULL;
+    indicator_frame->left = NULL;
+    indicator_frame->right = NULL;
+    return;
+  }
+
   // [COMMENT] Action purpose: Place frame rects above surface content but below other overlays.
   wlr_scene_node_raise_to_top(&indicator_frame->top->node);
   wlr_scene_node_raise_to_top(&indicator_frame->bottom->node);

@@ -1,3 +1,15 @@
+## [2026-08-20] Phase 40: Resize/Move NULL-Output Guard Sweep
+
+*(Timestamp source: session context date; `date` not executed this session.)*
+
+### Architecture: The view->output Nullability Window Applies to Every User-Action Entry Point, Not Just Geometry Refresh
+
+* **Context:** User reported crashes with multiple windows open, multiple workspaces, many Firefox tabs, and occasionally when resizing heavy clients (Firefox). Two Explore-agent passes plus manual review traced the full view spawn → memory → workspace/sheet/group → teardown lifecycle: `sheet_views`/`output_views`/`group_views`/`workspace_views`/`visible_*` link balance, the fixed 10-sheet-per-workspace array, `command.c` double-fork process spawning, `output.c` frame/damage scheduling, and `layer_shell.c` teardown were all read in full and found sound (the Phase 39 layer-shell UAF and Phase 38 `view->output` guard already closed the obvious holes). `queue_resize` (`src/view.c:684-692`, reached via `hikari_view_resize`/`hikari_view_resize_absolute`) was the one remaining unguarded site: it dereferences `view->output->usable_area` without checking for the same `view->output == NULL` window Phase 38 fixed in `hikari_view_refresh_geometry` (NULL between `hikari_view_init` and `hikari_view_configure`). A resize queued in that window — plausible under load with more windows/workspaces contending for configure serials — would segfault.
+* **Decision:** Added a `view->output == NULL` early-return guard to `queue_resize`, matching the guard style and reasoning already documented at `hikari_view_refresh_geometry` (`view.c:1811`). Swept the same call-path class (view actions reachable via user keybindings against `view->output`) and applied the identical guard to `hikari_view_move`, `hikari_view_move_absolute`, and the `MOVE(pos)` code-generation macro in `src/view.c`, all of which dereference `view->output->usable_area` on the same precondition.
+* **Impact:** Closes a resize-time NULL-pointer-dereference crash path and its move-path siblings. Static review of the rest of the lifecycle wiring found no second confirmed bug; a debug/ASan build plus live reproduction (many windows/workspaces/Firefox tabs, resize under load) is the recommended next step if crashes persist, so any remaining defect produces a real backtrace instead of further static guessing.
+
+---
+
 ## [2026-08-20] Phase 39: Layer Shell Destroy-Signal Lifetime Fix
 
 *(Timestamp source: session context date; `date` not executed — IDE-only tooling directive.)*
