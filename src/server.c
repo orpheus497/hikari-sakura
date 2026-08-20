@@ -598,6 +598,27 @@ server_decoration_destroy_handler(struct wl_listener *listener, void *data)
   decoration->wlr_decoration = NULL;
 }
 
+// [COMMENT] Function purpose: Resolve the hikari_xdg_view (if any) backing a
+// wlr_surface, following the xdg_surface -> scene_tree -> node.data chain
+// shared by request_activate_handler and server_decoration_handler.
+static struct hikari_xdg_view *
+hikari_xdg_view_try_from_wlr_surface(struct wlr_surface *surface)
+{
+  struct wlr_xdg_surface *xdg_surface =
+      wlr_xdg_surface_try_from_wlr_surface(surface);
+
+  if (xdg_surface == NULL) {
+    return NULL;
+  }
+
+  struct wlr_scene_tree *scene_tree = xdg_surface->data;
+  if (scene_tree == NULL) {
+    return NULL;
+  }
+
+  return scene_tree->node.data;
+}
+
 static void
 server_decoration_handler(struct wl_listener *listener, void *data)
 {
@@ -609,33 +630,12 @@ server_decoration_handler(struct wl_listener *listener, void *data)
     return;
   }
 
-  // [COMMENT] Action purpose: Retrieve the XDG surface from the wlr_surface
-  // using the wlroots 0.17+ helper to safely determine if this decoration
-  // belongs to an XDG toplevel. The wl_container_of pattern cannot be used here
-  // because hikari_view embeds wlr_surface as a pointer field, not as a value.
-  struct wlr_xdg_surface *xdg_surface =
-      wlr_xdg_surface_try_from_wlr_surface(wlr_decoration->surface);
+  // [COMMENT] Action purpose: Retrieve the hikari_xdg_view backing this
+  // decoration's surface, if any (guards against non-XDG surfaces and a
+  // decoration event arriving before the xdg_view is fully initialized).
+  struct hikari_xdg_view *xdg_view =
+      hikari_xdg_view_try_from_wlr_surface(wlr_decoration->surface);
 
-  // [COMMENT] Action purpose: Guard against non-XDG surfaces (e.g. layer shell)
-  // before accessing XDG-specific data.
-  if (xdg_surface == NULL) {
-    return;
-  }
-
-  // [COMMENT] Action purpose: Retrieve the scene_tree stored in
-  // xdg_surface->data (wlroots popup parenting convention), then look up the
-  // hikari_xdg_view from scene_tree->node.data where it was stored by
-  // hikari_xdg_view_init.
-  struct wlr_scene_tree *scene_tree = xdg_surface->data;
-
-  if (scene_tree == NULL) {
-    return;
-  }
-
-  struct hikari_xdg_view *xdg_view = scene_tree->node.data;
-
-  // [COMMENT] Action purpose: Guard against a decoration event arriving before
-  // the xdg_view is fully initialized.
   if (xdg_view == NULL) {
     return;
   }
@@ -793,28 +793,14 @@ setup_xdg_shell(struct hikari_server *server)
   wl_signal_add(&server->xdg_shell->events.new_toplevel, &server->new_toplevel);
 }
 
-// [COMMENT] Function purpose: Resolve an activation request's target
-// wlr_surface back to the hikari_xdg_view that owns it, using the same
-// xdg_surface->data (scene_tree) -> scene_tree->node.data (view) lookup
-// server_decoration_handler already relies on.
+// [COMMENT] Function purpose: Focus the view a client requested activation for.
 static void
 request_activate_handler(struct wl_listener *listener, void *data)
 {
   struct wlr_xdg_activation_v1_request_activate_event *event = data;
 
-  struct wlr_xdg_surface *xdg_surface =
-      wlr_xdg_surface_try_from_wlr_surface(event->surface);
-
-  if (xdg_surface == NULL) {
-    return;
-  }
-
-  struct wlr_scene_tree *scene_tree = xdg_surface->data;
-  if (scene_tree == NULL) {
-    return;
-  }
-
-  struct hikari_xdg_view *xdg_view = scene_tree->node.data;
+  struct hikari_xdg_view *xdg_view =
+      hikari_xdg_view_try_from_wlr_surface(event->surface);
   if (xdg_view == NULL) {
     return;
   }
@@ -1274,14 +1260,9 @@ server_init(struct hikari_server *server, char *config_path)
     wlr_scene_set_linux_dmabuf_v1(server->scene, linux_dmabuf);
   }
 
-  /* [COMMENT] Action purpose: Register the remaining protocols GPU-heavy and
-  media clients (browsers, video players) actively probe for. wlroots'
-  scene-graph helpers (wlr_scene_surface_create, invoked internally for every
-  mapped surface) pick up viewporter and presentation automatically once
-  these globals exist -- no wlr_scene_set_* call is needed for them, unlike
-  linux-dmabuf-v1 above. Absence of these was not fatal to spec-compliant
-  clients, but left this compositor never actually exercised against the
-  request patterns heavy GPU/video/browser clients send. */
+  /* [COMMENT] Action purpose: Protocols browsers and media players rely on for
+  video subsurface scaling, frame timing, and HiDPI. wlr_scene picks up
+  viewporter and presentation automatically once the globals exist. */
   wlr_viewporter_create(server->display);
   wlr_presentation_create(server->display, server->backend, 2);
   wlr_single_pixel_buffer_manager_v1_create(server->display);
@@ -1470,6 +1451,8 @@ hikari_server_stop(void)
   wl_list_remove(&server->output_layout_change.link);
   wl_list_remove(&server->new_decoration.link);
   wl_list_remove(&server->new_toplevel_decoration.link);
+  wl_list_remove(&server->request_activate.link);
+  wl_list_remove(&server->new_idle_inhibitor.link);
   // [COMMENT] Action purpose: Remove the session-active listener before the
   // backend (and therefore the session) are destroyed. The link is always
   // initialised (either via wl_signal_add or wl_list_init when no session

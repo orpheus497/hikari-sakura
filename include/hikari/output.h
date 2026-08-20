@@ -85,22 +85,28 @@ void
 hikari_output_rearrange_xwayland_views(struct hikari_output *output);
 #endif
 
+/* [COMMENT] Function purpose: Schedule a frame for damage on an output.
+Guards instead of asserting: NDEBUG erases asserts, and view->output is
+legitimately NULL before hikari_view_configure. */
 static inline void
 hikari_output_add_damage(struct hikari_output *output, struct wlr_box *region)
 {
-  assert(output != NULL);
-  assert(region != NULL);
+  if (output == NULL || region == NULL) {
+    return;
+  }
 
   if (output->enabled && output->scene_output != NULL) {
     wlr_output_schedule_frame(output->wlr_output);
   }
 }
 
+/* [COMMENT] Function purpose: Schedule a frame on an output, if it is usable. */
 static inline void
 hikari_output_schedule_frame(struct hikari_output *output)
 {
-  assert(output != NULL);
-  assert(output->enabled);
+  if (output == NULL || !output->enabled) {
+    return;
+  }
 
   wlr_output_schedule_frame(output->wlr_output);
 }
@@ -110,13 +116,12 @@ static inline void
 hikari_output_add_effective_surface_damage(
     struct hikari_output *output, struct wlr_surface *surface, int x, int y)
 {
-  assert(surface != NULL);
+  // [COMMENT] Action purpose: Subsurface commits reach here before the parent
+  // view is configured onto an output, so output may legitimately be NULL.
+  if (output == NULL || surface == NULL) {
+    return;
+  }
 
-  // [COMMENT] Action purpose: Guard against calling this on a disabled or
-  // transitioning output. The assert(output->enabled) pattern fires when
-  // commit handlers run during output teardown or before full init; a guarded
-  // return matches the pattern used by hikari_output_add_damage and prevents
-  // assert crashes in layer shell and XDG commit paths.
   if (!output->enabled || output->scene_output == NULL) {
     return;
   }

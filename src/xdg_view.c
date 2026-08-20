@@ -34,6 +34,9 @@ static void
 request_fullscreen_handler(struct wl_listener *listener, void *data);
 
 static void
+apply_requested_fullscreen(struct hikari_xdg_view *xdg_view);
+
+static void
 set_title_handler(struct wl_listener *listener, void *data)
 {
   struct hikari_xdg_view *xdg_view =
@@ -196,10 +199,6 @@ map(struct hikari_view *view, bool focus)
   wl_signal_add(
       &xdg_view->xdg_toplevel->events.set_title, &xdg_view->set_title);
 
-  xdg_view->request_fullscreen.notify = request_fullscreen_handler;
-  wl_signal_add(&xdg_surface->toplevel->events.request_fullscreen,
-      &xdg_view->request_fullscreen);
-
   xdg_view->new_popup.notify = new_popup_handler;
   wl_signal_add(&xdg_surface->events.new_popup, &xdg_view->new_popup);
 
@@ -221,11 +220,23 @@ map_handler(struct wl_listener *listener, void *data)
   /* [COMMENT] Action purpose: Configure the view on its first map. Focus is
   resolved from the view configuration inside hikari_view_map() -- the removed
   focus out-parameter was never written and is intentionally gone. */
-  if (hikari_view_is_unmanaged(view)) {
+  bool unmanaged = hikari_view_is_unmanaged(view);
+
+  if (unmanaged) {
     first_map(xdg_view);
   }
 
   map(view, false);
+
+  // [COMMENT] Action purpose: Consume any fullscreen request the client made
+  // before its first commit -- request_fullscreen_handler is only registered
+  // once the surface is initialized, so a pre-map request would otherwise be
+  // silently dropped. This must run after map() / hikari_view_map() so the
+  // view is mapped by the time apply_requested_fullscreen() drives the
+  // full-maximize toggle, which otherwise no-ops on an unmapped view.
+  if (unmanaged && xdg_view->xdg_toplevel->requested.fullscreen) {
+    apply_requested_fullscreen(xdg_view);
+  }
 }
 
 static void
@@ -242,7 +253,6 @@ unmap(struct hikari_view *view)
   hikari_view_unmap(view);
 
   wl_list_remove(&xdg_view->set_title.link);
-  wl_list_remove(&xdg_view->request_fullscreen.link);
   wl_list_remove(&xdg_view->new_popup.link);
   // [COMMENT] Action purpose: commit listener is removed in destroy_handler since it
 // lives for the full surface lifetime (registered at new_toplevel).
@@ -308,6 +318,7 @@ destroy_handler(struct wl_listener *listener, void *data)
   wl_list_remove(&xdg_view->map.link);
   wl_list_remove(&xdg_view->unmap.link);
   wl_list_remove(&xdg_view->commit.link);
+  wl_list_remove(&xdg_view->request_fullscreen.link);
   wl_list_remove(&xdg_view->destroy.link);
 
   hikari_view_fini(view);
@@ -494,12 +505,14 @@ xdg_popup_create(struct wlr_xdg_popup *wlr_popup, struct hikari_view *parent)
   popup_unconstrain(popup);
 }
 
+// [COMMENT] Function purpose: Apply the toplevel's currently requested
+// fullscreen state, both acking the protocol request and driving hikari's
+// own full-maximize state to match. Shared by request_fullscreen_handler
+// (subsequent requests) and first_map (a request made before the initial
+// commit, which is only observable once the surface is initialized).
 static void
-request_fullscreen_handler(struct wl_listener *listener, void *data)
+apply_requested_fullscreen(struct hikari_xdg_view *xdg_view)
 {
-  struct hikari_xdg_view *xdg_view =
-      wl_container_of(listener, xdg_view, request_fullscreen);
-
   struct hikari_view *view = (struct hikari_view *)xdg_view;
 
   // [COMMENT] Action purpose: Guard against calling configure before the surface
@@ -522,6 +535,15 @@ request_fullscreen_handler(struct wl_listener *listener, void *data)
       hikari_view_toggle_full_maximize(view);
     }
   }
+}
+
+static void
+request_fullscreen_handler(struct wl_listener *listener, void *data)
+{
+  struct hikari_xdg_view *xdg_view =
+      wl_container_of(listener, xdg_view, request_fullscreen);
+
+  apply_requested_fullscreen(xdg_view);
 }
 
 static void
@@ -631,6 +653,13 @@ hikari_xdg_view_init(struct hikari_xdg_view *xdg_view,
 // wlroots 0.20 lifecycle pattern — see tinywl server_new_xdg_toplevel.
   xdg_view->commit.notify = commit_handler;
   wl_signal_add(&xdg_surface->surface->events.commit, &xdg_view->commit);
+
+  // [COMMENT] Action purpose: Register the fullscreen request listener at
+  // new_toplevel time (not map time) so that a client requesting fullscreen
+  // before its first map is not silently dropped.
+  xdg_view->request_fullscreen.notify = request_fullscreen_handler;
+  wl_signal_add(&xdg_surface->toplevel->events.request_fullscreen,
+      &xdg_view->request_fullscreen);
 
   xdg_view->destroy.notify = destroy_handler;
   wl_signal_add(&xdg_surface->events.destroy, &xdg_view->destroy);

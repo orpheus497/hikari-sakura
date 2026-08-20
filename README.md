@@ -107,6 +107,7 @@ repository, breaking changes might be encountered. These are documented in the
 ### Dependencies
 
 * wlroots (0.20)
+* wayland-protocols
 * pango
 * cairo
 * libinput
@@ -119,12 +120,22 @@ repository, breaking changes might be encountered. These are documented in the
 
 ### Compiling and Installing
 
-The build process will produce two binaries `hikari` and `hikari-unlocker`, plus
-a `start-hikari` wrapper script. `hikari-unlocker` is used to check credentials
-for unlocking the screen, which needs to be installed with root setuid.
-`hikari` can rely on `seatd` to gain root privileges when required; however, if
-needed it can also be installed with root setuid — see "Installing with SUID"
-below. All three files are installed to `${PREFIX}/bin` by `make install`.
+The build process produces three binaries — `hikari`, `hikari-unlocker` and
+`hikari-topbar` — plus a `start-hikari` wrapper script.
+
+* `hikari-unlocker` checks credentials for unlocking the screen and is installed
+  setuid root (`4555`).
+* `hikari-topbar` feeds the native top bar with system telemetry. It runs as a
+  separate unprivileged process (`555`) so its sensor polling cannot stall the
+  compositor's event loop.
+* `hikari` can rely on `seatd` to gain root privileges when required; however, if
+  needed it can also be installed with root setuid — see "Installing with SUID"
+  below.
+
+All four files are installed to `${PREFIX}/bin` by `make install`, which also
+installs the default configuration to `${ETC_PREFIX}/etc/hikari/hikari.conf`, the
+PAM policy to `${ETC_PREFIX}/etc/pam.d/hikari-unlocker`, the manpage, the default
+wallpaper, and the `hikari.desktop` wayland-session entry.
 
 ### Launching
 
@@ -246,12 +257,21 @@ make WITH_SUID=YES install
 #### Building a DEBUG build
 
 In the case of a crash or a bug you should build a debug version of `hikari` and
-try to reproduce the issue. This builds `hikari` with debug symbols and
-sanitizers enabled. Extracting a stack trace for debugging purposes is also very
-helpful if you are planning to submit a bug report.
+try to reproduce the issue. `DEBUG=YES` builds with debug symbols, disables
+optimisation, and leaves `assert()` enabled (release builds define `NDEBUG`).
+Extracting a stack trace for debugging purposes is also very helpful if you are
+planning to submit a bug report.
 
 ```sh
 make DEBUG=YES
+```
+
+AddressSanitizer is **not** enabled by `DEBUG=YES`. It is opt-in, because ASan
+interferes with the privileged operations performed before the backend
+initialises. Enable it explicitly when you need it:
+
+```sh
+make DEBUG=YES ASAN=YES
 ```
 
 ## Community

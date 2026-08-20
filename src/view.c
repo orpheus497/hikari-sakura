@@ -584,11 +584,18 @@ hikari_view_damage_whole(struct hikari_view *view)
 {
   assert(view != NULL);
 
+  // [COMMENT] Action purpose: view->output is NULL until hikari_view_configure.
+  if (view->output == NULL) {
+    return;
+  }
+
   struct hikari_damage_data damage_data;
 
   damage_data.geometry = hikari_view_geometry(view);
   damage_data.output = view->output;
   damage_data.view = view;
+  damage_data.surface = NULL;
+  damage_data.whole = true;
 
   hikari_node_for_each_surface(
       (struct hikari_node *)view, damage_whole_surface, &damage_data);

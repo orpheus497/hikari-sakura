@@ -406,6 +406,10 @@ hikari_view_is_tiling(struct hikari_view *view)
 static inline void
 hikari_view_damage_border(struct hikari_view *view)
 {
+  if (view->output == NULL) {
+    return;
+  }
+
   struct wlr_box *geometry = hikari_view_border_geometry(view);
 
   hikari_output_add_damage(view->output, geometry);
