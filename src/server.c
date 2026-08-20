@@ -4,6 +4,7 @@
 #include <hikari/server.h>
 
 #include <libinput.h>
+#include <stdint.h>
 #include <unistd.h>
 #include <wayland-server-core.h>
 
@@ -510,9 +511,6 @@ new_xwayland_surface_handler(struct wl_listener *listener, void *data)
   } else {
     struct hikari_xwayland_view *xwayland_view =
         hikari_malloc(sizeof(struct hikari_xwayland_view));
-    if (xwayland_view == NULL) {
-      return;
-    }
 
     hikari_xwayland_view_init(xwayland_view, wlr_xwayland_surface, workspace);
   }
@@ -534,9 +532,15 @@ setup_xwayland(struct hikari_server *server)
   server->xwayland =
       wlr_xwayland_create(server->display, server->compositor, true);
   if (server->xwayland == NULL) {
+    // [COMMENT] Action purpose: Fail fast instead of calling
+    // hikari_server_stop(). setup_xwayland runs before setup_scene_graph,
+    // setup_decorations, setup_selection, setup_xdg_shell, setup_layer_shell,
+    // wl_list_init(&server->toplevels), and hikari_topbar_source_init, so the
+    // full shutdown path would wl_list_remove uninitialised listener links,
+    // finalise an uninitialised topbar source, and touch a NULL seat.
     fprintf(stderr, "error: failed to create XWayland server\n");
-    hikari_server_stop();
-    return;
+    wl_display_destroy(server->display);
+    exit(EXIT_FAILURE);
   }
 
   server->new_xwayland_surface.notify = new_xwayland_surface_handler;
@@ -742,10 +746,6 @@ new_toplevel_handler(struct wl_listener *listener, void *data)
 
   struct hikari_xdg_view *xdg_view =
       hikari_malloc(sizeof(struct hikari_xdg_view));
-  // [COMMENT] Action purpose: Guard against XDG view allocation failure.
-  if (xdg_view == NULL) {
-    return;
-  }
 
   hikari_xdg_view_init(xdg_view, xdg_surface, server->workspace);
 }
@@ -839,8 +839,14 @@ output_layout_change_handler(struct wl_listener *listener, void *data)
     struct hikari_view *view;
     wl_list_for_each (view, &output->views, output_views) {
       if (view->scene_node != NULL) {
-        wlr_scene_node_set_position(
-            view->scene_node, view->geometry.x + output->geometry.x, view->geometry.y + output->geometry.y);
+        // [COMMENT] Action purpose: Use the active geometry, not view->geometry
+        // directly -- maximized and tiled views position from
+        // maximized_state->geometry / tile->view_geometry, which can differ
+        // from view->geometry.
+        struct wlr_box *geometry = hikari_view_geometry(view);
+        wlr_scene_node_set_position(view->scene_node,
+            geometry->x + output->geometry.x,
+            geometry->y + output->geometry.y);
       }
     }
 
@@ -859,13 +865,18 @@ drop_privileges(struct hikari_server *server)
     }
   }
 
-  if (geteuid() == 0) {
+  // [COMMENT] Action purpose: Reject a retained privileged group as well as a
+  // retained privileged user. Checking only the effective UID misses a failed
+  // setgid() above: setuid(getuid()) can succeed while setgid(getgid()) fails,
+  // leaving the process in group 0 with a non-zero effective UID.
+  if (geteuid() == 0 || getegid() == 0) {
     fprintf(stderr,
-        "running as root is prohibited (uid=%d, euid=%d, gid=%d, egid=%d)\n",
-        getuid(),
-        geteuid(),
-        getgid(),
-        getegid());
+        "running with privileged credentials is prohibited "
+        "(uid=%ju, euid=%ju, gid=%ju, egid=%ju)\n",
+        (uintmax_t)getuid(),
+        (uintmax_t)geteuid(),
+        (uintmax_t)getgid(),
+        (uintmax_t)getegid());
     return false;
   }
 
@@ -1960,8 +1971,9 @@ hikari_server_create_argb8888_buffer(int width, int height, unsigned char *data,
   }
 
   // [COMMENT] Action purpose: ARGB8888 is 4 bytes/pixel; a stride shorter than
-  // that would make row copies read past each source row's actual data. Guard
-  // the width*4 multiplication against overflow before comparing.
+  // that would make the flat memcpy below (stride * height bytes) read past
+  // the end of the source buffer. Guard the width*4 multiplication against
+  // overflow before comparing.
   size_t min_stride = (size_t)width * 4;
   if (min_stride / 4 != (size_t)width || (size_t)stride < min_stride) {
     return NULL;

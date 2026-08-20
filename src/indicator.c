@@ -132,10 +132,12 @@ hikari_indicator_update_sheet(struct hikari_indicator *indicator,
 
   hikari_indicator_bar_update(&indicator->sheet, output, text);
 
-  if (hikari_server.workspace->focus_view != NULL) {
-    hikari_indicator_bar_position(
-        &indicator->sheet, output, hikari_view_border_geometry(hikari_server.workspace->focus_view));
-  }
+  // [COMMENT] Action purpose: Do not reposition from hikari_server.workspace
+  // here. This function receives output/sheet as parameters specifically so
+  // it can be called for a non-current workspace (e.g. during
+  // hikari_server_migrate_focus_view, before hikari_server.workspace is
+  // reassigned to the destination output), and hikari_indicator_position
+  // already positions all four bars from the correct view afterward.
 
   hikari_free(text);
 }

@@ -13,7 +13,7 @@ struct hikari_xdg_view {
 
   struct wlr_xdg_surface *surface;
   struct wlr_xdg_toplevel *xdg_toplevel;
-  /* [COMMENT] Class purpose: scene_tree is the hikari-owned parent tree for
+  /* scene_tree is the hikari-owned parent tree for
   this view -- hikari controls its lifetime and positions it at the view's
   layout-absolute origin. surface_tree is the wlroots-owned tree returned by
   wlr_scene_xdg_surface_create, parented under scene_tree; wlroots destroys it

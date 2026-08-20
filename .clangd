@@ -18,12 +18,22 @@ CompileFlags:
     - "-DHIKARI_ETC_PREFIX=/usr/local"
     - "-DHIKARI_PREFIX=/usr/local"
     - "-DHIKARI_TOPBAR_PATH=\"/usr/local/bin/hikari-topbar\""
-    # Match the Makefile's compiler mode. The build passes no -std, so cc uses a
-    # gnu* default which leaves __BSD_VISIBLE enabled. Do NOT define
-    # _POSIX_C_SOURCE here: on FreeBSD sys/cdefs.h sets __BSD_VISIBLE to 0
-    # whenever _POSIX_C_SOURCE/_XOPEN_SOURCE/_ANSI_SOURCE is defined, which hides
-    # BSD-only declarations the sources legitimately use (u_int via sys/ucred.h,
-    # IFF_UP via net/if.h) and, at 200809L specifically, usleep -- which POSIX
-    # removed in the 2008 revision. That made clangd stricter than the actual
-    # build and produced errors for code that compiles cleanly.
+    # Do NOT define _POSIX_C_SOURCE here: on FreeBSD sys/cdefs.h sets
+    # __BSD_VISIBLE to 0 whenever _POSIX_C_SOURCE/_XOPEN_SOURCE/_ANSI_SOURCE is
+    # defined, which hides BSD-only declarations the sources legitimately use
+    # (u_int via sys/ucred.h, IFF_UP via net/if.h) and, at 200809L
+    # specifically, usleep -- which POSIX removed in the 2008 revision. That
+    # made clangd stricter than the actual build and produced errors for code
+    # that compiles cleanly.
+    #
+    # Deliberately no blanket -std= here: the Makefile's main CFLAGS pass no
+    # -std, so cc falls through to FreeBSD's compiler default (gnu17), while
+    # only hikari-topbar's TOPBAR_CFLAGS pins -std=gnu11. A shared -std=gnu11
+    # for every file would make clangd disagree with the main target. See the
+    # per-file override below for src/topbar.c.
+---
+If:
+  PathMatch: "src/topbar\\.c"
+CompileFlags:
+  Add:
     - "-std=gnu11"

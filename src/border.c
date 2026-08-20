@@ -12,6 +12,10 @@
 #include <hikari/output.h>
 
 
+// [COMMENT] Function purpose: Create the four scene_rect nodes (disabled,
+// transparent) that make up a view's border, as children of the view's scene
+// tree. Called once per view; hikari_border_refresh_geometry positions and
+// enables them afterward.
 void
 hikari_border_init(struct hikari_border *border, struct wlr_scene_tree *parent)
 {
@@ -59,6 +63,10 @@ hikari_border_init(struct hikari_border *border, struct wlr_scene_tree *parent)
   wlr_scene_node_set_enabled(&border->right->node, false);
 }
 
+// [COMMENT] Function purpose: Recompute and reposition the four border rects
+// against the view's current geometry, and enable/disable them per
+// border->state. Called by hikari_view_refresh_geometry whenever a view's
+// geometry changes (map, move, resize, maximize, tile).
 void
 hikari_border_refresh_geometry(
     struct hikari_border *border, struct wlr_box *geometry)

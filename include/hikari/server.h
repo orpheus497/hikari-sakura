@@ -63,7 +63,7 @@ struct hikari_server {
   struct wlr_session *session;
   bool session_active;
   struct wl_listener session_active_listener;
-  /* [COMMENT] Class purpose: Telemetry feed for the native top bar. One helper
+  /* Telemetry feed for the native top bar. One helper
   process serves every output's bar. */
   struct hikari_topbar_source topbar;
   struct wlr_renderer *renderer;

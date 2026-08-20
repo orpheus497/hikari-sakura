@@ -21,8 +21,10 @@
  * entirely — no dead placeholders, no error text.
  *
  * Update cadence
- *   200 ms  — volume, backlight, battery  (fast-changing, cheap sysctl)
- *     1 s   — CPU, RAM, thermals, GPU, disk, network, MPRIS, pywal palette
+ *   200 ms  — battery  (fast-changing, cheap sysctl)
+ *     1 s   — CPU, RAM, thermals, GPU, disk, network, MPRIS, pywal palette,
+ *             volume, backlight  (each of the last two forks a shell
+ *             pipeline via popen, too expensive for the 200ms tick)
  *
  * LIBRARIES
  *   stdio.h       printf / popen / fgets / fclose
@@ -157,7 +159,6 @@ static void read_pywal_colors(void) {
  * ═══════════════════════════════════════════════════════════════════════════ */
 
 typedef struct {
-    char  name[128];    /* Hardware model string from pciconf        */
     float util;         /* Core utilisation, percent                 */
     long  vram_used;    /* Used VRAM, MiB                            */
     long  vram_total;   /* Total VRAM, MiB                           */
@@ -183,33 +184,6 @@ struct stats {
     char    full_time_str[128];
     GPUInfo gpu;
 };
-
-/* ═══════════════════════════════════════════════════════════════════════════
- * GPU — NAME PROBE  (runs once at startup)
- *
- * Queries the PCI bus via pciconf to obtain the human-readable device name.
- * The regex anchors on the indented 'device' line in pciconf -lv output and
- * extracts the quoted string.  Failure is non-fatal; name falls back to
- * "Unknown GPU".
- * ═══════════════════════════════════════════════════════════════════════════ */
-
-static void probe_gpu_name(const char *pci_slot, char *name, size_t size) {
-    char cmd[256];
-    snprintf(cmd, sizeof(cmd),
-        "pciconf -lv %s 2>/dev/null "
-        "| grep -E '^[[:space:]]+device' "
-        "| head -n 1 | cut -d \"'\" -f 2",
-        pci_slot);
-
-    FILE *fp = popen(cmd, "r");
-    if (fp && fgets(name, (int)size, fp)) {
-        name[strcspn(name, "\n")] = '\0';
-        pclose(fp);
-    } else {
-        strncpy(name, "Unknown GPU", size);
-        if (fp) pclose(fp);
-    }
-}
 
 /* ═══════════════════════════════════════════════════════════════════════════
  * GPU — NVIDIA TELEMETRY  (nvidia-smi, every ~1 s)
@@ -249,11 +223,11 @@ static void update_nvidia_info(GPUInfo *gpu) {
  * MPRIS — current track via playerctl
  * ═══════════════════════════════════════════════════════════════════════════ */
 
-static void get_mpris_info(char *buf) {
+static void get_mpris_info(char *buf, size_t size) {
     FILE *fp = popen(
         "playerctl metadata --format '{{artist}} - {{title}}' 2>/dev/null", "r");
     if (!fp) { buf[0] = '\0'; return; }
-    if (fgets(buf, 128, fp)) {
+    if (fgets(buf, (int)size, fp)) {
         size_t l = strlen(buf);
         if (l > 0 && buf[l - 1] == '\n') buf[l - 1] = '\0';
     } else {
@@ -305,10 +279,14 @@ static int get_cpu_temp(void) {
     int    temp;
     size_t len = sizeof(temp);
 
-    if (sysctlbyname("dev.cpu.0.temperature", &temp, &len, NULL, 0) == -1)
+    if (sysctlbyname("dev.cpu.0.temperature", &temp, &len, NULL, 0) == -1) {
+        /* sysctlbyname writes the returned size back through len, so the
+         * failed first call can leave it inconsistent with sizeof(temp). */
+        len = sizeof(temp);
         if (sysctlbyname("hw.acpi.thermal.tz0.temperature",
                          &temp, &len, NULL, 0) == -1)
             return -1;
+    }
 
     return (temp > 1000) ? (temp - 2732) / 10 : temp;
 }
@@ -375,13 +353,20 @@ static void get_net_status(char *buf) {
     if (getifaddrs(&ifaddr) == -1) { strcpy(buf, "DISCONNECTED"); return; }
 
     for (ifa = ifaddr; ifa; ifa = ifa->ifa_next) {
-        if (!ifa->ifa_addr || ifa->ifa_addr->sa_family != AF_INET) continue;
-        if (strcmp(ifa->ifa_name, "lo0") == 0)                     continue;
-        if (ifa->ifa_flags & IFF_UP) {
-            if      (strncmp(ifa->ifa_name, "wlan", 4) == 0) wifi = 1;
-            else if (strncmp(ifa->ifa_name, "em",   2) == 0 ||
-                     strncmp(ifa->ifa_name, "re",   2) == 0) eth  = 1;
-        }
+        if (!ifa->ifa_addr) continue;
+        /* Accept both address families so an IPv6-only host is not reported
+         * as disconnected. */
+        if (ifa->ifa_addr->sa_family != AF_INET &&
+            ifa->ifa_addr->sa_family != AF_INET6) continue;
+        if (ifa->ifa_flags & IFF_LOOPBACK) continue;
+        if ((ifa->ifa_flags & (IFF_UP | IFF_RUNNING)) !=
+            (IFF_UP | IFF_RUNNING)) continue;
+        /* Only the wireless prefix is driver-derived on FreeBSD; every other
+         * running non-loopback interface counts as wired, so the many
+         * Ethernet drivers (igb, igc, ix, bge, ...) are covered without an
+         * allowlist. */
+        if (strncmp(ifa->ifa_name, "wlan", 4) == 0) wifi = 1;
+        else                                        eth  = 1;
     }
     freeifaddrs(ifaddr);
 
@@ -428,7 +413,8 @@ static int get_volume(void) {
  * ═══════════════════════════════════════════════════════════════════════════ */
 
 static int get_backlight(void) {
-    FILE *fp = popen("backlight | grep brightness | awk '{print $2}'", "r");
+    FILE *fp = popen(
+        "backlight 2>/dev/null | grep brightness | awk '{print $2}'", "r");
     if (!fp) return -1;
     int level = -1;
     fscanf(fp, "%d", &level);
@@ -455,7 +441,6 @@ int main(void) {
      * rendering branch below is skipped for the lifetime of the process.
      * No GPU blocks will appear on machines without a dedicated NVIDIA GPU.
      * ─────────────────────────────────────────────────────────────────── */
-    probe_gpu_name("vgapci1", s.gpu.name, sizeof(s.gpu.name));
     update_nvidia_info(&s.gpu);
     const int nvidia_present = s.gpu.available;
 
@@ -468,19 +453,22 @@ int main(void) {
         usleep(200000);
 
         /* ── Fast path: cheap sensors polled every tick ── */
-        s.volume    = get_volume();
-        s.backlight = get_backlight();
         get_bat_info(&s.bat_life, s.bat_state);
 
         /* ── Slow path: heavier calls throttled to ~1 s ── */
         if (ticks % 5 == 0) {
+            /* get_volume and get_backlight each fork a shell pipeline;
+             * sampling them every 200ms tick costs roughly 50 process
+             * creations per second, so they belong on the throttled path. */
+            s.volume     = get_volume();
+            s.backlight  = get_backlight();
             read_pywal_colors();
             s.cpu_usage  = get_cpu_usage();
             s.cpu_temp   = get_cpu_temp();
             s.mem_usage  = get_mem_usage();
             s.home_usage = get_home_usage();
             get_net_status(s.net_status);
-            get_mpris_info(s.mpris);
+            get_mpris_info(s.mpris, sizeof(s.mpris));
             if (nvidia_present) update_nvidia_info(&s.gpu);
         }
 
@@ -513,9 +501,10 @@ int main(void) {
                s.mem_usage, pywal_colors[3]);
 
         /* CPU temperature -- omitted when no sensor is readable */
-        if (s.cpu_temp >= 0)
-        printf("{\"full_text\":\"  %d°C \",\"color\":\"%s\"},",
-               s.cpu_temp, pywal_colors[4]);
+        if (s.cpu_temp >= 0) {
+            printf("{\"full_text\":\"  %d°C \",\"color\":\"%s\"},",
+                   s.cpu_temp, pywal_colors[4]);
+        }
 
         /* GPU blocks — emitted only on systems with a detected NVIDIA GPU */
         if (nvidia_present && s.gpu.available) {
@@ -539,19 +528,22 @@ int main(void) {
                s.net_status, pywal_colors[6]);
 
         /* Battery -- omitted when no battery is present */
-        if (s.bat_life >= 0)
-        printf("{\"full_text\":\" 󰁹 %d%% \",\"color\":\"%s\"},",
-               s.bat_life, pywal_colors[8]);
+        if (s.bat_life >= 0) {
+            printf("{\"full_text\":\" 󰁹 %d%% \",\"color\":\"%s\"},",
+                   s.bat_life, pywal_colors[8]);
+        }
 
         /* Volume -- omitted when no sink is readable */
-        if (s.volume >= 0)
-        printf("{\"full_text\":\" 󰖀 %d%% \",\"color\":\"%s\"},",
-               s.volume, pywal_colors[9]);
+        if (s.volume >= 0) {
+            printf("{\"full_text\":\" 󰖀 %d%% \",\"color\":\"%s\"},",
+                   s.volume, pywal_colors[9]);
+        }
 
         /* Backlight -- omitted when no backlight tool is available */
-        if (s.backlight >= 0)
-        printf("{\"full_text\":\" 󰃠 %d%% \",\"color\":\"%s\"},",
-               s.backlight, pywal_colors[10]);
+        if (s.backlight >= 0) {
+            printf("{\"full_text\":\" 󰃠 %d%% \",\"color\":\"%s\"},",
+                   s.backlight, pywal_colors[10]);
+        }
 
         /* Clock (no trailing comma — last block in the array) */
         printf("{\"full_text\":\"  %s \","

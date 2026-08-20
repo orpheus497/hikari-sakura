@@ -107,7 +107,7 @@ CFLAGS += -DNDEBUG
 # topbar.c deliberately requires __BSD_VISIBLE to stay set (u_int, IFF_UP,
 # usleep at 200809L) -- see the comment atop src/topbar.c -- so it must not
 # inherit -D_POSIX_C_SOURCE the way the compositor's own CFLAGS does.
-TOPBAR_CFLAGS = ${CFLAGS} -std=gnu11 -Wall
+TOPBAR_CFLAGS := ${CFLAGS} -std=gnu11 -Wall
 
 .ifdef WITH_POSIX_C_SOURCE
 CFLAGS += -D_POSIX_C_SOURCE=200809L

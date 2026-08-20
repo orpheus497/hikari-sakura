@@ -5,7 +5,7 @@
 ## Current Status
 
 - **Phase:** Phase 40 complete (agent-side; build/runtime verification pending user) — swept the `view->output` NULL-nullability window (Phase 38's root-cause class) into `queue_resize`, `hikari_view_move`, `hikari_view_move_absolute`, and the `MOVE(pos)` macro in `src/view.c`.
-- **Branch:** wlroots-0.20
+- **Branch:** wlroots-0.17.1 (PR source ref; the dependency itself is wlroots 0.20 — see Makefile:148-149)
 - **Overall progress:** **Windows now open — user-confirmed as the most functional state to date.** This is the first runtime-verified milestone since the wlroots 0.20 migration began; prior phases were static-analysis fixes that never got far enough to validate.
 - **Target OS:** FreeBSD 15.1-RELEASE (ZFS root)
 - **Current step:** User to build (`sudo make clean && sudo make install`, root-owned `.o` artifacts block agent-side compilation) and stress-test the Phase 40 fix: multiple windows, multiple workspaces, many Firefox tabs, and interactive resize of Firefox. If crashes persist, capture a debug/ASan backtrace (`NDEBUG` unset) rather than continuing static investigation — the obvious lifecycle-wiring bugs (view-list balance, sheet/workspace array bounds, layer-shell teardown, process spawn, output damage) have all been read in full and are sound.

@@ -46,7 +46,7 @@ struct hikari_output {
 
   struct wlr_scene_node *background;
 
-  /* [COMMENT] Class purpose: This output's native top bar. Reserves space out
+  /* This output's native top bar. Reserves space out
   of usable_area so tiled views never sit underneath it. */
   struct hikari_bar bar;
 };

@@ -126,17 +126,18 @@ start_unlocker(void)
     // established stdin/stdout.
     if (dup2(locker_pipe[0][0], STDIN_FILENO) == -1 ||
         dup2(locker_pipe[1][1], STDOUT_FILENO) == -1) {
-      fprintf(stderr, "error: could not redirect hikari-unlocker pipes\n");
+      static const char msg[] =
+          "error: could not redirect hikari-unlocker pipes\n";
+      write(STDERR_FILENO, msg, sizeof(msg) - 1);
       _exit(EXIT_FAILURE);
     }
 
-    if (locker_pipe[0][0] != STDIN_FILENO) {
-      close(locker_pipe[0][0]);
-    }
-
-    if (locker_pipe[1][1] != STDOUT_FILENO) {
-      close(locker_pipe[1][1]);
-    }
+    // [COMMENT] Action purpose: Close every inherited descriptor above stderr
+    // -- the Wayland listening socket, DRM/GBM descriptors, and the seatd
+    // connection -- before exec, matching the same hardening already applied
+    // to the topbar helper. Only stdin/stdout/stderr are meant to reach the
+    // authentication helper. This also closes the original pipe ends.
+    closefrom(STDERR_FILENO + 1);
 
     // [COMMENT] Action purpose: Execute the helper directly at its absolute
     // install path. Avoiding the /bin/sh -c indirection removes both the PATH
@@ -145,11 +146,15 @@ start_unlocker(void)
     execl(HIKARI_UNLOCKER_PATH, "hikari-unlocker", NULL);
     // [COMMENT] Action purpose: Reached only when execl fails. The child must
     // not report success: emit a diagnostic (stderr survives the stdin/stdout
-    // rewiring) and exit non-zero so the failure is diagnosable. _exit skips
-    // inherited atexit handlers and stdio flushing in the forked compositor
-    // address space; the parent observes the pipe hangup as a terminal locker
+    // rewiring) via write(), which is async-signal-safe unlike fprintf, and
+    // exit non-zero so the failure is diagnosable. _exit skips inherited
+    // atexit handlers and stdio flushing in the forked compositor address
+    // space; the parent observes the pipe hangup as a terminal locker
     // failure and reaps the child.
-    fprintf(stderr, "error: could not execute hikari-unlocker\n");
+    {
+      static const char msg[] = "error: could not execute hikari-unlocker\n";
+      write(STDERR_FILENO, msg, sizeof(msg) - 1);
+    }
     _exit(EXIT_FAILURE);
   // [COMMENT] Action purpose: In the parent process, close the child-side pipe
   // endpoints that are no longer needed to avoid descriptor leaks.
@@ -347,10 +352,19 @@ submit_password(void)
 {
   struct hikari_lock_mode *mode = get_mode();
 
-  // [COMMENT] Action purpose: If the unlocker child is not running (failed start
-  // or died), attempt to restart it before denying. This handles the case where
-  // the unlocker crashed between lock_mode_enter and the first password submit.
-  if (locker_pid <= 0) {
+  // [COMMENT] Action purpose: If the unlocker IPC is not usable (failed start,
+  // died, or its pipes were closed by a terminal result), restart it before
+  // denying. locker_pid alone is not sufficient: locker_result_handler closes
+  // both pipe fds on every terminal result while reap_locker_deferred may
+  // still be waiting on the child to exit, so locker_pid can be positive with
+  // no usable descriptors — gating on it here would silently accept no further
+  // password attempts ever again.
+  if (locker_pipe[0][1] == -1 || locker_pipe[1][0] == -1) {
+    // [COMMENT] Action purpose: Collect the previous child before
+    // start_unlocker overwrites locker_pid, otherwise the old PID is leaked.
+    if (locker_pid > 0) {
+      reap_locker_deferred(mode);
+    }
     if (!start_unlocker()) {
       hikari_lock_indicator_set_deny(mode->lock_indicator);
       return;
@@ -557,21 +571,12 @@ cancel(void)
     close(locker_pipe[1][0]);
     locker_pipe[1][0] = -1;
   }
-  // [COMMENT] Action purpose: Non-blocking reap attempt. The child will exit shortly
-  // after stdin receives EOF (pipe write-end closed above). If it hasn't exited yet
-  // (WNOHANG returns 0), retain locker_pid and defer the final blocking waitpid to
-  // hikari_lock_mode_fini so cancel() never blocks the compositor event loop.
-  if (locker_pid > 0) {
-    int status;
-    pid_t result;
-    do {
-      result = waitpid(locker_pid, &status, WNOHANG);
-    } while (result == -1 && errno == EINTR);
-    if (result > 0 || (result == -1 && errno == ECHILD)) {
-      locker_pid = -1;
-    }
-    // result == 0: child still running; locker_pid retained for fini reap
-  }
+  // [COMMENT] Action purpose: Reap the child without blocking. It exits shortly
+  // after stdin receives EOF (the password pipe write-end was closed above). If
+  // it has not exited yet, reap_locker_deferred arms the retry timer so it is
+  // collected later instead of surviving until hikari_lock_mode_fini's single
+  // non-blocking attempt, which does not retry.
+  reap_locker_deferred(mode);
 
   if (mode->disable_outputs != NULL) {
     wl_event_source_remove(mode->disable_outputs);

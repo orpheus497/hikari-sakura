@@ -36,6 +36,11 @@ protocol emits one array per tick; anything beyond this is a malformed or
 hostile stream and is discarded rather than grown without limit. */
 #define HIKARI_BAR_MAX_LINE (64 * 1024)
 
+/* [COMMENT] Action purpose: Upper bound on a single block's requested width.
+Any wider request cannot be displayed and would overflow the int accumulator
+used for right-aligned layout. */
+#define HIKARI_BAR_MAX_BLOCK_WIDTH 8192
+
 /* [COMMENT] Action purpose: The bar uses the shared
 hikari_server_create_argb8888_buffer(), which is CPU-backed rather than
 allocator-backed. That distinction matters here: allocating through
@@ -160,7 +165,23 @@ json_int_field(const char *obj, const char *end, const char *key, int fallback)
     return fallback;
   }
 
-  return atoi(p + 1);
+  // [COMMENT] Action purpose: strtol reports both malformed input and range
+  // errors, unlike atoi. The result is clamped because it is consumed as a
+  // pixel advance and an unbounded value would overflow the int accumulator
+  // in hikari_bar_refresh.
+  errno = 0;
+  char *endptr = NULL;
+  long value = strtol(p + 1, &endptr, 10);
+  if (endptr == p + 1 || errno == ERANGE) {
+    return fallback;
+  }
+  if (value < 0) {
+    return 0;
+  }
+  if (value > HIKARI_BAR_MAX_BLOCK_WIDTH) {
+    return HIKARI_BAR_MAX_BLOCK_WIDTH;
+  }
+  return (int)value;
 }
 
 /* [COMMENT] Function purpose: Find the closing '}' matching the '{' at `obj`,
@@ -417,7 +438,14 @@ hikari_topbar_source_init(struct hikari_topbar_source *source)
   if (child == 0) {
     close(fds[0]);
     if (fds[1] != STDOUT_FILENO) {
-      dup2(fds[1], STDOUT_FILENO);
+      // [COMMENT] Action purpose: An unchecked dup2 would leave the helper
+      // writing to the wrong descriptor, producing a permanently empty bar
+      // with no diagnostic.
+      if (dup2(fds[1], STDOUT_FILENO) == -1) {
+        static const char err[] = "error: could not redirect topbar stdout\n";
+        write(STDERR_FILENO, err, sizeof(err) - 1);
+        _exit(EXIT_FAILURE);
+      }
       close(fds[1]);
     }
     setsid();
@@ -649,11 +677,13 @@ hikari_bar_refresh(struct hikari_bar *bar)
       left_x += advance;
     }
 
-    /* [COMMENT] Action purpose: Stop drawing once the run would overflow the
-    output width. Cairo would clip anyway, but bailing avoids laying out text
-    that cannot be seen. */
+    /* [COMMENT] Action purpose: Skip a block whose run starts outside the
+    output width, without stopping the loop. Left- and right-aligned blocks
+    are laid out from independent origins in the same pass, so one
+    overflowing left-aligned block (e.g. behind a wide spacer) must not
+    suppress the right-aligned blocks that still fit. */
     if (x > width) {
-      break;
+      continue;
     }
 
     /* [COMMENT] Action purpose: Centre the text vertically. The division is

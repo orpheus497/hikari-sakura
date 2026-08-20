@@ -10,6 +10,8 @@
 - **Root cause found:** `queue_resize` (`src/view.c:684-692`, reached via `hikari_view_resize`/`hikari_view_resize_absolute`) dereferenced `view->output->usable_area` without guarding the `view->output == NULL` window between `hikari_view_init` and `hikari_view_configure` — the exact bug class Phase 38 fixed in `hikari_view_refresh_geometry`. Added the guard.
 - **Swept sibling call sites:** `hikari_view_move`, `hikari_view_move_absolute`, and the `MOVE(pos)` macro (`src/view.c`) dereference the same `view->output->usable_area` on the same precondition via user-triggered move keybindings; added matching guards to all three.
 - Audited remaining `view->output->` dereferences (`view.c`, `xdg_view.c`) and confirmed the rest are either already guarded (Phase 38's `refresh_geometry` fix) or only reachable from within `queue_resize` (now guarded) — no further unguarded sites found.
+**Decisions Logged:**
+- Guard `queue_resize`, `hikari_view_move`, `hikari_view_move_absolute`, and the `MOVE(pos)` macro against a NULL `view->output`, matching the guard style already used in `hikari_view_refresh_geometry`. See `.devdocs/DECISIONS_LOG.md` Phase 40 for the full rationale, including the correction that `hikari_view_init` seeds `view->output` from `workspace->output`, so the guarded window is narrower than "every window creation."
 **Modified Files:**
 - `src/view.c`
 
