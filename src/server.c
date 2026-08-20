@@ -19,20 +19,29 @@
 #include <wlr/render/allocator.h>
 #include <wlr/render/wlr_renderer.h>
 #include <wlr/types/wlr_compositor.h>
+#include <wlr/types/wlr_content_type_v1.h>
 #include <wlr/types/wlr_cursor.h>
 #include <wlr/types/wlr_data_control_v1.h>
 #include <wlr/types/wlr_data_device.h>
+#include <wlr/types/wlr_fractional_scale_v1.h>
+#include <wlr/types/wlr_idle_inhibit_v1.h>
+#include <wlr/types/wlr_idle_notify_v1.h>
 #include <wlr/types/wlr_input_device.h>
 #include <wlr/types/wlr_keyboard.h>
 #include <wlr/types/wlr_linux_dmabuf_v1.h>
 #include <wlr/types/wlr_output_layout.h>
+#include <wlr/types/wlr_presentation_time.h>
 #include <wlr/types/wlr_primary_selection.h>
 #include <wlr/types/wlr_primary_selection_v1.h>
 #include <wlr/types/wlr_scene.h>
 #include <wlr/types/wlr_seat.h>
 #include <wlr/types/wlr_server_decoration.h>
 #include <wlr/types/wlr_shm.h>
+#include <wlr/types/wlr_single_pixel_buffer_v1.h>
 #include <wlr/types/wlr_subcompositor.h>
+#include <wlr/types/wlr_tearing_control_v1.h>
+#include <wlr/types/wlr_viewporter.h>
+#include <wlr/types/wlr_xdg_activation_v1.h>
 #include <wlr/types/wlr_xdg_output_v1.h>
 #include <wlr/types/wlr_xdg_shell.h>
 #include <wlr/util/log.h>
@@ -784,6 +793,109 @@ setup_xdg_shell(struct hikari_server *server)
   wl_signal_add(&server->xdg_shell->events.new_toplevel, &server->new_toplevel);
 }
 
+// [COMMENT] Function purpose: Resolve an activation request's target
+// wlr_surface back to the hikari_xdg_view that owns it, using the same
+// xdg_surface->data (scene_tree) -> scene_tree->node.data (view) lookup
+// server_decoration_handler already relies on.
+static void
+request_activate_handler(struct wl_listener *listener, void *data)
+{
+  struct wlr_xdg_activation_v1_request_activate_event *event = data;
+
+  struct wlr_xdg_surface *xdg_surface =
+      wlr_xdg_surface_try_from_wlr_surface(event->surface);
+
+  if (xdg_surface == NULL) {
+    return;
+  }
+
+  struct wlr_scene_tree *scene_tree = xdg_surface->data;
+  if (scene_tree == NULL) {
+    return;
+  }
+
+  struct hikari_xdg_view *xdg_view = scene_tree->node.data;
+  if (xdg_view == NULL) {
+    return;
+  }
+
+  struct hikari_view *view = (struct hikari_view *)xdg_view;
+
+  if (hikari_view_is_mapped(view) && !hikari_view_is_hidden(view)) {
+    hikari_workspace_focus_view(view->sheet->workspace, view);
+  }
+}
+
+// [COMMENT] Function purpose: Register xdg-activation-v1 so clients (browsers
+// opening a new window/tab, launchers) can request focus for a surface via
+// xdg_activation_token_v1 instead of the compositor guessing.
+static void
+setup_xdg_activation(struct hikari_server *server)
+{
+  server->xdg_activation = wlr_xdg_activation_v1_create(server->display);
+
+  server->request_activate.notify = request_activate_handler;
+  wl_signal_add(
+      &server->xdg_activation->events.request_activate,
+      &server->request_activate);
+}
+
+// [COMMENT] Function purpose: Per-inhibitor bookkeeping for
+// zwp_idle_inhibit_manager_v1. Media players and browsers playing video hold
+// one of these for the lifetime of playback to keep the session from idling;
+// wlr_idle_notifier_v1_set_inhibited must stay true for as long as any
+// inhibitor is alive, hence the refcount on hikari_server.
+struct hikari_idle_inhibitor {
+  struct wl_listener destroy;
+};
+
+static void
+idle_inhibitor_destroy_handler(struct wl_listener *listener, void *data)
+{
+  struct hikari_idle_inhibitor *inhibitor =
+      wl_container_of(listener, inhibitor, destroy);
+
+  wl_list_remove(&inhibitor->destroy.link);
+
+  if (--hikari_server.idle_inhibitor_count == 0) {
+    wlr_idle_notifier_v1_set_inhibited(hikari_server.idle_notifier, false);
+  }
+
+  hikari_free(inhibitor);
+}
+
+static void
+new_idle_inhibitor_handler(struct wl_listener *listener, void *data)
+{
+  struct wlr_idle_inhibitor_v1 *wlr_inhibitor = data;
+
+  struct hikari_idle_inhibitor *inhibitor =
+      hikari_malloc(sizeof(struct hikari_idle_inhibitor));
+
+  inhibitor->destroy.notify = idle_inhibitor_destroy_handler;
+  wl_signal_add(&wlr_inhibitor->events.destroy, &inhibitor->destroy);
+
+  if (++hikari_server.idle_inhibitor_count == 1) {
+    wlr_idle_notifier_v1_set_inhibited(hikari_server.idle_notifier, true);
+  }
+}
+
+// [COMMENT] Function purpose: Register idle-inhibit-v1 (client-requested
+// "don't blank while I'm playing video") and idle-notify-v1 (the manager
+// that actually tracks/reports idle state), and wire the refcount that
+// bridges them.
+static void
+setup_idle_inhibit(struct hikari_server *server)
+{
+  server->idle_inhibit_manager = wlr_idle_inhibit_v1_create(server->display);
+  server->idle_notifier = wlr_idle_notifier_v1_create(server->display);
+  server->idle_inhibitor_count = 0;
+
+  server->new_idle_inhibitor.notify = new_idle_inhibitor_handler;
+  wl_signal_add(&server->idle_inhibit_manager->events.new_inhibitor,
+      &server->new_idle_inhibitor);
+}
+
 #ifdef HAVE_LAYERSHELL
 static void
 new_layer_shell_surface_handler(struct wl_listener *listener, void *data)
@@ -1161,6 +1273,22 @@ server_init(struct hikari_server *server, char *config_path)
   if (linux_dmabuf != NULL) {
     wlr_scene_set_linux_dmabuf_v1(server->scene, linux_dmabuf);
   }
+
+  /* [COMMENT] Action purpose: Register the remaining protocols GPU-heavy and
+  media clients (browsers, video players) actively probe for. wlroots'
+  scene-graph helpers (wlr_scene_surface_create, invoked internally for every
+  mapped surface) pick up viewporter and presentation automatically once
+  these globals exist -- no wlr_scene_set_* call is needed for them, unlike
+  linux-dmabuf-v1 above. Absence of these was not fatal to spec-compliant
+  clients, but left this compositor never actually exercised against the
+  request patterns heavy GPU/video/browser clients send. */
+  wlr_viewporter_create(server->display);
+  wlr_presentation_create(server->display, server->backend, 2);
+  wlr_single_pixel_buffer_manager_v1_create(server->display);
+  wlr_content_type_manager_v1_create(server->display, 1);
+  wlr_tearing_control_manager_v1_create(server->display, 1);
+  wlr_fractional_scale_manager_v1_create(server->display, 1);
+
   setup_cursor(server);
 #ifdef HAVE_VIRTUAL_INPUT
   setup_virtual_keyboard(server);
@@ -1169,6 +1297,8 @@ server_init(struct hikari_server *server, char *config_path)
   setup_decorations(server);
   setup_selection(server);
   setup_xdg_shell(server);
+  setup_xdg_activation(server);
+  setup_idle_inhibit(server);
 #ifdef HAVE_LAYERSHELL
   setup_layer_shell(server);
 #endif

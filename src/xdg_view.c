@@ -500,11 +500,27 @@ request_fullscreen_handler(struct wl_listener *listener, void *data)
   struct hikari_xdg_view *xdg_view =
       wl_container_of(listener, xdg_view, request_fullscreen);
 
+  struct hikari_view *view = (struct hikari_view *)xdg_view;
+
   // [COMMENT] Action purpose: Guard against calling configure before the surface
 // is initialized (initial_commit not yet handled). See tinywl request_fullscreen.
   if (xdg_view->surface->initialized) {
+    bool fullscreen = xdg_view->xdg_toplevel->requested.fullscreen;
+
     // [COMMENT] Action purpose: Apply the client's requested fullscreen state via wlroots API.
-    wlr_xdg_toplevel_set_fullscreen(xdg_view->xdg_toplevel, xdg_view->xdg_toplevel->requested.fullscreen);
+    wlr_xdg_toplevel_set_fullscreen(xdg_view->xdg_toplevel, fullscreen);
+
+    // [COMMENT] Action purpose: Acking the protocol request alone leaves the
+    // view at its old geometry -- the client renders assuming it now fills
+    // the output while hikari never resized it. Drive hikari's own
+    // full-maximize state to match, using the same toggle the normal
+    // fullscreen keybinding uses, guarded so this is a no-op when the view is
+    // already in the requested state or a resize is already in flight.
+    if (hikari_view_is_mapped(view) && !hikari_view_is_hidden(view) &&
+        !hikari_view_is_dirty(view) &&
+        fullscreen != hikari_view_is_fully_maximized(view)) {
+      hikari_view_toggle_full_maximize(view);
+    }
   }
 }
 

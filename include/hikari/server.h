@@ -113,6 +113,14 @@ struct hikari_server {
   struct wlr_xdg_shell *xdg_shell;
   struct wlr_layer_shell_v1 *layer_shell;
 
+  struct wlr_xdg_activation_v1 *xdg_activation;
+  struct wl_listener request_activate;
+
+  struct wlr_idle_inhibit_manager_v1 *idle_inhibit_manager;
+  struct wlr_idle_notifier_v1 *idle_notifier;
+  struct wl_listener new_idle_inhibitor;
+  int idle_inhibitor_count;
+
   struct wlr_output_layout *output_layout;
   struct wlr_seat *seat;
 
