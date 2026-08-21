@@ -841,6 +841,9 @@ MOVE(top_middle)
 MOVE(top_right)
 #undef MOVE
 
+// Function purpose: Track a subsurface newly attached to a mapped view's
+// surface so it participates in hikari's granular damage tracking and
+// teardown loop.
 static void
 new_subsurface_handler(struct wl_listener *listener, void *data)
 {
@@ -863,6 +866,10 @@ new_subsurface_handler(struct wl_listener *listener, void *data)
   hikari_view_subsurface_init(view_subsurface, view, wlr_subsurface);
 }
 
+// Function purpose: Map a view for the first time -- adopt its surface,
+// track its existing subsurfaces, resolve its group/mark from view config,
+// link it into its sheet/group/output, and make it visible (or forced-hidden
+// under lock mode).
 void
 hikari_view_map(struct hikari_view *view, struct wlr_surface *surface)
 {
@@ -946,6 +953,10 @@ hikari_view_map(struct hikari_view *view, struct wlr_surface *surface)
   }
 }
 
+// Function purpose: Tear down a view on unmap -- finalise every child
+// (subsurface or popup) via its own fini pointer, detach from group/tile/
+// mark, and unlink from the sheet/output lists, leaving the view struct
+// itself intact for a possible remap.
 void
 hikari_view_unmap(struct hikari_view *view)
 {
@@ -1794,6 +1805,10 @@ commit_child_handler(struct wl_listener *listener, void *data)
   }
 }
 
+// Function purpose: Allocate and initialise a hikari_view_subsurface for a
+// subsurface discovered under an already-tracked child (a subsurface's own
+// subsurface, or a popup's subsurface) -- the shared entry point used by
+// new_subsurface_child_handler and hikari_view_child_init's initial walk.
 static void
 view_subsurface_create(
     struct wlr_subsurface *wlr_subsurface, struct hikari_view *parent)
@@ -1822,6 +1837,10 @@ new_subsurface_child_handler(struct wl_listener *listener, void *data)
   view_subsurface_create(wlr_subsurface, view_child->parent);
 }
 
+// Function purpose: Shared initialisation for every hikari_view_child kind
+// (subsurface or popup) -- wire up its commit/new_subsurface listeners, link
+// it into the parent view's children list, and recursively track any
+// subsurfaces it already has.
 void
 hikari_view_child_init(struct hikari_view_child *view_child,
     struct hikari_view *parent,

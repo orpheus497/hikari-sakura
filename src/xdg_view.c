@@ -378,6 +378,8 @@ xdg_popup_destroy(struct hikari_xdg_popup *popup)
   hikari_free(popup);
 }
 
+// Function purpose: React to a popup closing on its own (the common case)
+// by tearing down its tracking struct via the shared xdg_popup_destroy path.
 static void
 destroy_popup_handler(struct wl_listener *listener, void *data)
 {
@@ -495,6 +497,9 @@ popup_unconstrain(struct hikari_xdg_popup *popup)
   wlr_xdg_popup_unconstrain_from_box(wlr_popup, &output_toplevel_sx_box);
 }
 
+// Function purpose: Allocate and initialise a hikari_xdg_popup for a newly
+// requested popup (from either a toplevel or another popup), registering
+// its lifecycle listeners and unconstraining it to the parent view's output.
 static void
 xdg_popup_create(struct wlr_xdg_popup *wlr_popup, struct hikari_view *parent)
 {

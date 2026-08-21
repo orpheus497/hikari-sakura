@@ -30,7 +30,7 @@ hikari_malloc(size_t size)
   return ptr;
 }
 
-// [COMMENT] Function purpose: Allocate zeroed storage for `number` elements of
+// Function purpose: Allocate zeroed storage for `number` elements of
 // `size` bytes; never returns NULL. Aborts with a diagnostic on failure, matching
 // hikari_malloc.
 void *

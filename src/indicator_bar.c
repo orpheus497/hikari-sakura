@@ -19,6 +19,9 @@
 #include <hikari/server.h>
 #include <hikari/view.h>
 
+// Function purpose: Initialise an indicator bar's rendering state (no scene
+// node yet -- that is created lazily by the first hikari_indicator_bar_update
+// call) and set its background color.
 void
 hikari_indicator_bar_init(struct hikari_indicator_bar *indicator_bar,
     struct hikari_indicator *indicator,
@@ -43,6 +46,8 @@ hikari_indicator_bar_set_color(
   indicator_bar->color[3] = color[3];
 }
 
+// Function purpose: Destroy the indicator bar's scene node (if any) and
+// release its cached render state.
 void
 hikari_indicator_bar_fini(struct hikari_indicator_bar *indicator_bar)
 {
@@ -76,7 +81,7 @@ hikari_indicator_bar_position(struct hikari_indicator_bar *indicator_bar,
       output->geometry.y + view_geometry->y + indicator_bar->offset);
 }
 
-// [COMMENT] Function purpose: Replace the existing scene buffer (if any) and
+// Function purpose: Replace the existing scene buffer (if any) and
 // create a new one with rendered text content.
 void
 hikari_indicator_bar_update(struct hikari_indicator_bar *indicator_bar,

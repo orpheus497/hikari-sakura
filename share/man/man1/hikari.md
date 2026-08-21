@@ -9,7 +9,7 @@ SYNTAX
 DESCRIPTION
 ===========
 
-**Hikari Sakura** is a FreeBSD-focused revamp and modernization of the original Hikari (abandoned 2 years ago by antaz). It is explicitly designed as a comprehensive, focused Wayland desktop environment for FreeBSD.
+**Hikari Sakura** is a FreeBSD-focused revamp and modernization of the original Hikari (originally by antaz, since abandoned upstream). It is explicitly designed as a comprehensive, focused Wayland desktop environment for FreeBSD.
 
 It is a stacking Wayland compositor with additional tiling capabilities,
 it is heavily inspired by the Calm Window manager (cwm(1)). Its core concepts
@@ -160,9 +160,13 @@ The default configuration is going to use **$TERMINAL** as your standard
 terminal application.
 
 Structural changes like UI themes, custom actions, and new bindings can be
-hot-reloaded using the **reload** action. Environment-level hardware configurations
-(like `xkb` layouts or XWayland initialization) are pulled from the session
-environment and require a full restart of the compositor to apply.
+hot-reloaded using the **reload** action. `xkb` settings configured natively in
+the *keyboards* section of the config file are reapplied to already-connected
+keyboards on every reload, same as any other config value. Settings that come
+from the session environment instead of the config file -- `xkb` environment
+variables used as a fallback for keyboards with no native configuration, and
+XWayland initialization -- are only read once at startup and require a full
+restart of the compositor to apply.
 
 On startup **hikari** attempts to execute _~/.config/hikari/autostart_ to
 autostart applications.
@@ -1153,7 +1157,9 @@ the gesture requires.
 
 A gesture that matches a configured binding triggers that action instead of
 being forwarded to the focused client; any gesture without a matching binding
-is delivered to the client unchanged.
+is delivered to the client. Update events are buffered until the gesture ends
+(in case it turns out to match a binding); a gesture with more than 128 update
+events has the excess silently dropped from what is delivered to the client.
 
 ```
 inputs {

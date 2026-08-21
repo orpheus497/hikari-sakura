@@ -186,11 +186,14 @@ load_keymap(struct hikari_keyboard_config *keyboard_config)
   return keymap;
 }
 
+// Function purpose: Apply a resolved keyboard_config's keymap and repeat
+// settings to a connected keyboard. Called both at first attach and on every
+// config reload that re-resolves an already-connected keyboard's config.
 void
 hikari_keyboard_configure(struct hikari_keyboard *keyboard,
     struct hikari_keyboard_config *keyboard_config)
 {
-  // [COMMENT] Action purpose: Release the previous keymap reference before
+  // Action purpose: Release the previous keymap reference before
   // overwriting the pointer. hikari_keyboard_configure can run more than once
   // per device (e.g. a config reload re-resolving an already-connected
   // keyboard's config), and load_keymap() always returns a fresh ref via

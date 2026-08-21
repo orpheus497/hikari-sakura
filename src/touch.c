@@ -1,8 +1,14 @@
+// Script function and purpose: Lifecycle wrapper for a physical touchscreen
+// (WLR_INPUT_DEVICE_TOUCH) input device -- tracks it on the server's touch
+// list and tears it down cleanly when the underlying device is unplugged.
+
 #include <hikari/touch.h>
 
 #include <hikari/memory.h>
 #include <hikari/server.h>
 
+// Function purpose: React to the device disappearing (unplug) by finalising
+// and freeing its hikari_touch wrapper.
 static void
 destroy_handler(struct wl_listener *listener, void *data)
 {
@@ -12,6 +18,10 @@ destroy_handler(struct wl_listener *listener, void *data)
   hikari_free(touch);
 }
 
+// Function purpose: Track a newly attached touch device on
+// server->touches and listen for its destroy signal. Output confinement
+// (wlr_cursor_map_input_to_output) is handled separately by the caller
+// (add_touch() in server.c), not here.
 void
 hikari_touch_init(
     struct hikari_touch *touch, struct wlr_input_device *device)
@@ -24,6 +34,8 @@ hikari_touch_init(
   wl_signal_add(&device->events.destroy, &touch->destroy);
 }
 
+// Function purpose: Remove the touch device's listener and unlink it from
+// server->touches.
 void
 hikari_touch_fini(struct hikari_touch *touch)
 {

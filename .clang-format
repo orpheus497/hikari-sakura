@@ -40,8 +40,7 @@ SpacesInParentheses: false
 SpacesInSquareBrackets: false
 
 # Function Return Types
-AlwaysBreakAfterDefinitionReturnType: TopLevel
-AlwaysBreakAfterReturnType: TopLevel
+BreakAfterReturnType: TopLevel
 PenaltyReturnTypeOnItsOwnLine: 200
 
 # Includes and Macros

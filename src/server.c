@@ -164,14 +164,8 @@ find_output_by_name(struct hikari_server *server, const char *name)
 }
 
 static void
-add_touch(struct hikari_server *server, struct wlr_input_device *device)
+map_touch_to_output(struct hikari_server *server, struct wlr_input_device *device)
 {
-  struct hikari_touch *touch = hikari_malloc(sizeof(struct hikari_touch));
-
-  hikari_touch_init(touch, device);
-
-  wlr_cursor_attach_input_device(server->cursor.wlr_cursor, device);
-
   struct wlr_touch *wlr_touch = wlr_touch_from_input_device(device);
   struct wlr_output *mapped_output = NULL;
 
@@ -185,6 +179,18 @@ add_touch(struct hikari_server *server, struct wlr_input_device *device)
   }
 
   wlr_cursor_map_input_to_output(server->cursor.wlr_cursor, device, mapped_output);
+}
+
+static void
+add_touch(struct hikari_server *server, struct wlr_input_device *device)
+{
+  struct hikari_touch *touch = hikari_malloc(sizeof(struct hikari_touch));
+
+  hikari_touch_init(touch, device);
+
+  wlr_cursor_attach_input_device(server->cursor.wlr_cursor, device);
+
+  map_touch_to_output(server, device);
 }
 
 static void
@@ -313,6 +319,16 @@ new_output_handler(struct wl_listener *listener, void *data)
 
   hikari_output_init(output, wlr_output);
   hikari_cursor_reset_image(&server->cursor);
+
+  // Action purpose: A touch device named after an output that had not yet
+  // connected when it was attached is left unmapped by add_touch() (its
+  // find_output_by_name() lookup fails). Retry every tracked touch device's
+  // mapping now that a new output is available, so it gets confined once its
+  // named output actually appears.
+  struct hikari_touch *touch;
+  wl_list_for_each (touch, &server->touches, server_touches) {
+    map_touch_to_output(server, touch->device);
+  }
 }
 
 static bool
@@ -1353,6 +1369,15 @@ server_init(struct hikari_server *server, char *config_path)
   setup_decorations(server);
   server->pointer_gestures =
       wlr_pointer_gestures_v1_create(server->display);
+  // Action purpose: Guard against pointer-gestures manager allocation
+  // failure. replay_swipe/replay_pinch/replay_hold (src/cursor.c) call
+  // wlr_pointer_gestures_v1_send_* through server->pointer_gestures
+  // unconditionally, so continuing with it unset would segfault the first
+  // time an unmatched gesture needs replaying.
+  if (server->pointer_gestures == NULL) {
+    wl_display_destroy(server->display);
+    exit(EXIT_FAILURE);
+  }
   setup_selection(server);
   setup_xdg_shell(server);
   setup_xdg_activation(server);
@@ -1365,7 +1390,6 @@ server_init(struct hikari_server *server, char *config_path)
   wl_list_init(&server->keyboards);
   wl_list_init(&server->switches);
   wl_list_init(&server->touches);
-  wl_list_init(&server->outputs);
   wl_list_init(&server->groups);
   wl_list_init(&server->visible_groups);
   wl_list_init(&server->visible_views);

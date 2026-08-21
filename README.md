@@ -4,7 +4,7 @@
 
 ## Description
 
-*Hikari Sakura* is a FreeBSD-focused revamp and modernization of the original Hikari taken from https://github.com/antaz/hikari (which was abandoned 2 years ago). It is very different from the original and is focused on being a comprehensive desktop environment specifically built for FreeBSD as the first properly focused designed Wayland desktop environment for FreeBSD.
+*Hikari Sakura* is a FreeBSD-focused revamp and modernization of the original Hikari taken from https://github.com/antaz/hikari (which has since been abandoned upstream). It is very different from the original and is focused on being a comprehensive desktop environment specifically built for FreeBSD as the first properly focused designed Wayland desktop environment for FreeBSD.
 
 It is a stacking Wayland compositor with additional tiling capabilities,
 it is heavily inspired by the Calm Window manager (cwm(1)). Its core concepts
@@ -85,7 +85,7 @@ mkdir -p -m 0700 "$XDG_RUNTIME_DIR"
 
 ### Setting up PAM
 
-Setting up PAM is needed to give `hikari` the ability to unlock the screen when
+Setting up PAM is needed to give `hikari sakura` the ability to unlock the screen when
 using the screen locker. Copy `etc/pam.d/hikari-unlocker.FreeBSD` from the
 source tree to `/usr/local/etc/pam.d/hikari-unlocker`.
 
@@ -101,7 +101,7 @@ export XKB_DEFAULT_LAYOUT="de(nodeadkeys),de"
 
 ## Configuration & Customization
 
-`hikari` is configured using `libucl` syntax. The configuration file is expected to be located at `$XDG_CONFIG_HOME/hikari/hikari.conf`. If it does not exist, `hikari` will fall back to the default config installed at `${ETC_PREFIX}/etc/hikari/hikari.conf`.
+`hikari sakura` is configured using `libucl` syntax. The configuration file is expected to be located at `$XDG_CONFIG_HOME/hikari/hikari.conf`. If it does not exist, `hikari` will fall back to the default config installed at `${ETC_PREFIX}/etc/hikari/hikari.conf`.
 
 The configuration file allows you to define:
 - **ui**: Colors, border sizes, fonts, and gaps.
@@ -113,17 +113,17 @@ The configuration file allows you to define:
 **Capabilities & Limitations:**
 - You can use environment variables (e.g., `$TERMINAL`) in the configuration file; they will be substituted when the configuration is loaded.
 - Structural changes like UI themes, custom actions, and new bindings can be hot-reloaded using the `reload` action (default: `L+S+r`).
-- `hikari` does not support conditional statements or complex logic within the config file itself.
+- `hikari sakura` does not support conditional statements or complex logic within the config file itself.
 - Some environment-level initializations (like XWayland) require a full restart of the compositor to apply.
-- `hikari` does not provide a built-in status bar. You can use external layer-shell components like `waybar` or the included `hikari-topbar` for system telemetry.
+- `hikari sakura` does provide a built-in status bar. You can also use external layer-shell components like `waybar` or the included `hikari-topbar` for system telemetry.
 
 ## Laptop Optimization
 
-When using `hikari` on a laptop, especially on FreeBSD, you may want to map your multimedia keys and handle the lid switch.
+When using `hikari sakura` on a laptop, especially on FreeBSD, you may want to map your multimedia keys and handle the lid switch.
 
 ### Multimedia Keys (Volume & Brightness)
 
-`hikari` natively understands `XF86` keysyms via `xkbcommon`. You can define custom actions that invoke FreeBSD's native `mixer(8)` and `backlight(8)` utilities, and bind them to your media keys in `hikari.conf`.
+`hikari sakura` natively understands `XF86` keysyms via `xkbcommon`. You can define custom actions that invoke FreeBSD's native `mixer(8)` and `backlight(8)` utilities, and bind them to your media keys in `hikari.conf`.
 
 ```ucl
 actions {
@@ -148,7 +148,7 @@ bindings {
 
 ### Lid Switch Handling
 
-`hikari` can natively parse switch events (like lid switches) through the `inputs { switches { ... } }` block in `hikari.conf`. You can bind these events to any `hikari` action. For example, to lock the screen when the lid closes:
+`hikari sakura` can natively parse switch events (like lid switches) through the `inputs { switches { ... } }` block in `hikari.conf`. You can bind these events to any `hikari` action. For example, to lock the screen when the lid closes:
 
 ```ucl
 inputs {
@@ -158,16 +158,16 @@ inputs {
 }
 ```
 
-However, `hikari` itself does not manage suspend/resume states. On FreeBSD, suspend is typically handled by `devd(8)` or `acpi(4)`. 
+However, `hikari sakura` itself does not manage suspend/resume states. On FreeBSD, suspend is typically handled by `devd(8)` or `acpi(4)`. 
 Ensure `hw.acpi.lid_switch_state` is set appropriately via `sysctl` or `/etc/sysctl.conf` to trigger a suspend (e.g., state `S3`) when the lid is closed.
 
 ## Touchscreen & Trackpad Gestures
 
-`hikari` natively supports touchscreens and multi-finger trackpad gestures.
+`hikari sakura` natively supports touchscreens and multi-finger trackpad gestures.
 
 Touchscreens are attached to the same output layout as the mouse cursor, and touch input is forwarded to clients via the standard Wayland touch protocol. The first touch point of a new touch sequence also drives `hikari`'s own focus, raise, move, and resize behavior — the same as a left mouse click — so windows can be managed by tapping and dragging directly on a touchscreen. Additional simultaneous touch points are left for the client to interpret (e.g. pinch-to-zoom in a PDF viewer).
 
-Trackpad swipe, pinch, and hold gestures (via `wlr_pointer_gestures_v1`) can be bound to `hikari` actions in the `inputs { gestures { ... } }` block, using keys of the form `swipe-<direction>-<fingers>`, `pinch-<direction>-<fingers>`, or `hold-<fingers>`. A gesture that matches a binding triggers the action instead of being forwarded to the client; unmatched gestures pass through unchanged.
+Trackpad swipe, pinch, and hold gestures (via `wlr_pointer_gestures_v1`) can be bound to `hikari` actions in the `inputs { gestures { ... } }` block, using keys of the form `swipe-<direction>-<fingers>`, `pinch-<direction>-<fingers>`, or `hold-<fingers>`. A gesture that matches a binding triggers the action instead of being forwarded to the client; unmatched gestures are forwarded to the client. Update events are buffered until the gesture ends (in case it turns out to match a binding); a gesture with more than 128 update events has the excess silently dropped from what is forwarded.
 
 ```ucl
 inputs {
@@ -182,10 +182,7 @@ inputs {
 
 ## Building
 
-`hikari` currently only works on FreeBSD. This will likely change in
-the future when more systems adopt Wayland. When building directly from the
-repository, breaking changes might be encountered. These are documented in the
-`UPDATING` file which should be consulted before updating to a newer build.
+`hikari sakura` currently only works on FreeBSD. This will unlikely change. When building directly from the repository, breaking changes might be encountered. These are documented in the `UPDATING` file which should be consulted before updating to a newer build.
 
 ### Dependencies
 
@@ -356,17 +353,6 @@ initialises. Enable it explicitly when you need it:
 ```sh
 make DEBUG=YES ASAN=YES
 ```
-
-## Community
-
-The Hikari Sakura community gears to be inclusive and welcoming to everyone, this is
-why we chose to adhere to the [Geekfeminism Code of
-Conduct](https://hikari.acmelabs.space/coc.html).
-
-If you care to be a part of our community, please join our Matrix chat at
-`#hikari:acmelabs.space` and/or subscribe to our mailing list by sending a mail
-to `hikari+subscribe@acmelabs.space`.
-
 ## Contributing
 
 Please make sure you use `clang-format` with the accompanying `.clang-format`

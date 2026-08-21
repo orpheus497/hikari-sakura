@@ -1,4 +1,4 @@
-// [COMMENT] Script function and purpose: Native top bar for hikari. Renders a
+// Script function and purpose: Native top bar for hikari. Renders a
 // swaybar-style status bar directly into the compositor's scene graph, fed by
 // the separate hikari-topbar helper process over a non-blocking pipe.
 
@@ -71,32 +71,32 @@ struct hikari_topbar_source {
   int nr_blocks;
 };
 
-// [COMMENT] Function purpose: Spawn the hikari-topbar helper and register its
+// Function purpose: Spawn the hikari-topbar helper and register its
 // pipe with the compositor event loop. Safe to call when the helper is absent;
 // the bar simply stays empty.
 void
 hikari_topbar_source_init(struct hikari_topbar_source *source);
 
-// [COMMENT] Function purpose: Tear down the helper process, event source, and
+// Function purpose: Tear down the helper process, event source, and
 // buffers. Reaps the child non-blockingly.
 void
 hikari_topbar_source_fini(struct hikari_topbar_source *source);
 
-// [COMMENT] Function purpose: Attach a bar to an output and create its scene
+// Function purpose: Attach a bar to an output and create its scene
 // buffer node. Called once per output during output initialisation.
 void
 hikari_bar_init(struct hikari_bar *bar, struct hikari_output *output);
 
-// [COMMENT] Function purpose: Destroy the bar's scene node and clear state.
+// Function purpose: Destroy the bar's scene node and clear state.
 void
 hikari_bar_fini(struct hikari_bar *bar);
 
-// [COMMENT] Function purpose: Re-render this output's bar from the current
+// Function purpose: Re-render this output's bar from the current
 // block set and reposition it at the top of the output.
 void
 hikari_bar_refresh(struct hikari_bar *bar);
 
-// [COMMENT] Function purpose: Subtract the bar's height from an output-local
+// Function purpose: Subtract the bar's height from an output-local
 // usable area. Called from output geometry setup and from the layer-shell
 // arrangement pass so both agree on the space the bar occupies.
 void

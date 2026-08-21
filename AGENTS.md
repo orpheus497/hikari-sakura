@@ -27,7 +27,7 @@ Maintain the following files to manage state and continuity:
 
 ## CODE DOCUMENTATION STANDARDS
 
-Documentation precedes code. All files must be reviewed and updated to meet this standard. Use the following exact prefixes directly above the relevant code blocks, using the native comment syntax of the language (e.g., `//`, `#`, or `##`), to ensure immediate legibility. For shell scripts, place the comment directly beneath the shebang:
+Documentation precedes code and all files must meet this standard; DO NOT retroactively add commenting unless explicitly requested by the user. Use the following exact prefixes directly above the relevant code blocks, using the native comment syntax of the language (e.g., `//`, `#`, or `##`), to ensure immediate legibility. For shell scripts, place the comment directly beneath the shebang:
 
 * `Script function and purpose:` [What this script does] - Top of every script/source.
 * `Function purpose:` [Why this function exists and how it is used] - Before standalone functions.

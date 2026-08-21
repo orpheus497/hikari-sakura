@@ -1,3 +1,7 @@
+// Script function and purpose: Declarations for hikari's touchscreen device
+// wrapper -- tracks a physical WLR_INPUT_DEVICE_TOUCH input device for its
+// lifetime and attaches it to the compositor's cursor/output layout.
+
 #if !defined(HIKARI_TOUCH_H)
 #define HIKARI_TOUCH_H
 

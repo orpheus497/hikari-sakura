@@ -1,3 +1,8 @@
+// Script function and purpose: Declarations for parsed gesture-binding
+// configuration entries -- the typed (type, direction, fingers, action)
+// tuple produced from an `inputs { gestures { "<key>" = <action> } }` config
+// entry, plus the key-string parser used to build it.
+
 #if !defined(HIKARI_GESTURE_CONFIG_H)
 #define HIKARI_GESTURE_CONFIG_H
 

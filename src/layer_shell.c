@@ -324,6 +324,10 @@ popup_unconstrain(struct hikari_layer_popup *layer_popup)
   wlr_xdg_popup_unconstrain_from_box(layer_popup->popup, &box);
 }
 
+// Function purpose: Wire up the listeners shared by every layer-shell popup
+// (parented directly to a layer surface or nested under another popup) and
+// unconstrain it to the owning output. Shared by init_layer_popup and
+// init_popup_popup so both parent kinds set up identically.
 static void
 init_popup(
     struct hikari_layer_popup *layer_popup, struct wlr_xdg_popup *wlr_popup)
@@ -744,6 +748,9 @@ commit_popup_handler(struct wl_listener *listener, void *data)
   damage_popup(layer_popup, false);
 }
 
+// Function purpose: Handle a popup nested under another already-open
+// layer-shell popup (e.g. a submenu), tracking it the same way as a
+// top-level layer popup.
 static void
 new_popup_popup_handler(struct wl_listener *listener, void *data)
 {
@@ -770,6 +777,9 @@ new_popup_popup_handler(struct wl_listener *listener, void *data)
   init_popup_popup(layer_popup_popup, layer_popup, wlr_popup);
 }
 
+// Function purpose: Handle a new popup requested directly by a layer
+// surface (e.g. a panel's context menu), allocating and initialising its
+// tracking struct.
 static void
 new_popup_handler(struct wl_listener *listener, void *data)
 {

@@ -354,7 +354,7 @@ Read and cross-reference the content against the codebase.
 - **`src/cursor.c`**: Pointer coordinate mapping, plus touch and gesture dispatch.
   - `cursor_button_handler()` / `cursor_motion_handler()`: Updates `wlr_cursor_move()` absolute coordinates, then delegates to `hikari_server.mode->button_handler()` or `cursor_handler()`.
   - `cursor_touch_down/motion_handler()`: Converts wlroots' normalized 0..1 touch coordinates to layout pixels via `wlr_cursor_absolute_to_layout_coords()` before hit-testing (`wlr_touch` reports device-relative coordinates, not layout coordinates — the codebase's own hit-testing helper, `hikari_server_node_at()`, only ever accepts layout coordinates elsewhere). Forwards to the focused surface via `wlr_seat_touch_notify_*`. The first touch point of a fresh multi-touch sequence (`cursor->primary_touch_id`) additionally synthesizes `BTN_LEFT` press/move/release calls into `hikari_server.mode->button_handler()`/`cursor_move()`, reusing the mouse-driven modal state machine verbatim for tap-to-focus/drag-to-move/resize; further simultaneous touch points stay pure client-forwarded input.
-  - `cursor_swipe/pinch/hold_*_handler()`: Accumulates each gesture stream (`struct hikari_gesture_state`, buffering up to `HIKARI_GESTURE_MAX_UPDATES` update events) between `_begin` and `_end`. At `_end`, classifies the gesture's direction (dominant swipe axis, or pinch scale vs. 1.0) and looks it up against `hikari_configuration->gesture_binding_configs`. A match fires the bound `hikari_action` and the gesture is never sent to the client; a non-match replays the buffered `_begin`/`_update`/`_end` sequence verbatim via `wlr_pointer_gestures_v1_send_*`.
+  - `cursor_swipe/pinch/hold_*_handler()`: Accumulates each gesture stream (`struct hikari_gesture_state`, buffering up to `HIKARI_GESTURE_MAX_UPDATES` update events) between `_begin` and `_end`. At `_end`, classifies the gesture's direction (dominant swipe axis, or pinch scale vs. 1.0) and looks it up against `hikari_configuration->gesture_binding_configs`. A match fires the bound `hikari_action` and the gesture is never sent to the client; a non-match replays the buffered `_begin`/`_update`/`_end` sequence via `wlr_pointer_gestures_v1_send_*`. Update events beyond the `HIKARI_GESTURE_MAX_UPDATES` (128) cap are silently dropped from the buffer rather than replayed, so an unmatched gesture longer than that is forwarded to the client as a truncated (not strictly verbatim) update stream.
 - **`src/switch.c`**: Lid switches and tablet modes.
   - `switch_toggle_handler()`: Executes `hikari_action` macros based on hardware switch state changes.
 
@@ -819,7 +819,7 @@ Hikari dynamically re-routes input based on the active `hikari_server.mode`.
   - Stored on `hikari_configuration->gesture_binding_configs`; looked up directly from `src/cursor.c` at gesture-`_end` time (no separate compiled/copied table — gesture bindings are few enough that a linear `wl_list` scan is unnecessary to optimize, unlike the 256-bucket modifier-mask arrays keyboard/mouse bindings use).
 - `bool hikari_gesture_binding_config_key_parse(...)`: Parses a binding key string (`"swipe-left-3"`, `"pinch-in-4"`, `"hold-3"`) into the three typed fields above.
 
-### 12.13 `include/hikari/cursor.h` & `src/cursor.c` (Virtual Cursor & Axis Dispatch)
+### 12.15 `include/hikari/cursor.h` & `src/cursor.c` (Virtual Cursor & Axis Dispatch)
 
 **Data Structures:**
 - `struct hikari_cursor`: The unified virtual cursor aggregating all physical pointers.
@@ -838,7 +838,7 @@ Hikari dynamically re-routes input based on the active `hikari_server.mode`.
 - `static void request_set_cursor_handler(...)`:
   - Allows Wayland clients to set custom cursor images (e.g., resizing arrows, text I-beams) using `wlr_cursor_set_surface()`. Guards against inactive clients hijacking the cursor image.
 
-### 12.14 `include/hikari/indicator.h` & `src/indicator.c` (Status HUD & Focus Frames)
+### 12.16 `include/hikari/indicator.h` & `src/indicator.c` (Status HUD & Focus Frames)
 
 **Data Structures:**
 - `struct hikari_indicator`: The central HUD showing window metadata during mode switching (super-key held).
@@ -852,7 +852,7 @@ Hikari dynamically re-routes input based on the active `hikari_server.mode`.
   - Synchronises the absolute coordinates of the 4 text bars with the `geometry` of the currently focused view's border so they float underneath/above it.
   - Calls `hikari_indicator_frame_show(&view->indicator_frame)` to activate the bounding border color.
 
-### 12.15 `include/hikari/mode.h` & `src/normal_mode.c` (Input Routing Polymorphism)
+### 12.17 `include/hikari/mode.h` & `src/normal_mode.c` (Input Routing Polymorphism)
 
 **Architecture (`include/hikari/mode.h`):**
 - `struct hikari_mode`: A VTable defining state-dependent input routing.
@@ -867,7 +867,7 @@ Hikari dynamically re-routes input based on the active `hikari_server.mode`.
   - When the cursor is pressed down on a client surface, mouse motion is delegated to `wlr_seat_pointer_notify_motion()` so the client can drag content (e.g., selecting text).
   - When up, `wlr_seat_pointer_notify_motion()` routes the absolute coordinates across the compositor surface.
 
-### 12.16 `include/hikari/action.h` & `src/action.c` (Command & Binding Execution)
+### 12.18 `include/hikari/action.h` & `src/action.c` (Command & Binding Execution)
 
 **Data Structures:**
 - `struct hikari_event_action`: A typed function pointer wrapper (`void (*action)(void *)`) mapping a parsed configuration string to a concrete C function.
@@ -878,7 +878,7 @@ Hikari dynamically re-routes input based on the active `hikari_server.mode`.
   - Translates string values from `hikari.conf` (e.g., `"view-move-up"`, `"workspace-switch-to-sheet-1"`, `"view-toggle-floating"`) to their corresponding `server.c` implementations (`hikari_server_move_view_up`, etc.).
   - Relies heavily on C macros (`PARSE_MOVE_BINDING`, `PARSE_WORKSPACE_BINDING`) to generate the massive string-matching sequence efficiently.
 
-### 12.17 `include/hikari/configuration.h` & `src/configuration.c` (State Parsing)
+### 12.19 `include/hikari/configuration.h` & `src/configuration.c` (State Parsing)
 
 **Data Structures:**
 - `struct hikari_configuration`: The central, singleton store for user settings.
@@ -892,7 +892,7 @@ Hikari dynamically re-routes input based on the active `hikari_server.mode`.
   - Resolves X11 `WM_CLASS` or Wayland `app_id` against the configured application regex/rules (e.g., forcing floating geometry for `pavucontrol`).
 - Bootstraps the keyboard and mouse bindings, translating them via `action.c`, so `normal_mode.c` can traverse the `struct hikari_binding_group bindings[256]` O(1) array at runtime during key events.
 
-### 12.18 `include/hikari/border.h` & `src/border.c` (Window Decoration Rendering)
+### 12.20 `include/hikari/border.h` & `src/border.c` (Window Decoration Rendering)
 
 **Data Structures:**
 - `struct hikari_border`: Represents the coloured bounding box around a window.
@@ -908,7 +908,7 @@ Hikari dynamically re-routes input based on the active `hikari_server.mode`.
   - **Coordinate space:** the rects are positioned **parent-relative**. `wlr_scene_node_set_position` is relative to the parent node, and the view's `scene_tree` has already been positioned at the view's layout-absolute origin by `hikari_view_refresh_geometry`. Passing absolute coordinates here applies the view origin twice. `border->geometry` itself remains **absolute**, because hit-testing and damage tracking consume it in layout coordinates. The same rule applies to `hikari_indicator_frame_refresh_geometry`.
   - Toggles the rect color between `hikari_configuration->border_active` and `border_inactive`.
 
-### 12.19 Tiling Engine (`src/layout.c`, `src/split.c`, `src/tile.c`)
+### 12.21 Tiling Engine (`src/layout.c`, `src/split.c`, `src/tile.c`)
 
 **`src/layout.c` (Tiling Context):**
 - `hikari_layout_init()` / `hikari_layout_fini()`: Initializes the tiling state for a `hikari_sheet`, wrapping a mathematical `hikari_split` tree.
@@ -924,7 +924,7 @@ Hikari dynamically re-routes input based on the active `hikari_server.mode`.
 - `hikari_tile_init()`: Wraps a `hikari_view`.
 - `hikari_tile_apply()`: Given a computed `wlr_box` from `split.c`, it forces the view to conform by mutating its geometry and calling `hikari_view_damage_whole()`.
 
-### 12.20 Interactive Geometry Mutators (`src/move_mode.c`, `src/resize_mode.c`)
+### 12.22 Interactive Geometry Mutators (`src/move_mode.c`, `src/resize_mode.c`)
 
 **`src/move_mode.c`:**
 - `struct hikari_move_mode`: Implements the `hikari_mode` VTable for interactive dragging.
@@ -935,7 +935,7 @@ Hikari dynamically re-routes input based on the active `hikari_server.mode`.
 - `struct hikari_resize_mode`: Implements the `hikari_mode` VTable for interactive resizing.
 - `cursor_move()`: Calculates the mouse delta. Depending on which quadrant/edge of the window was grabbed, mutates the `wlr_box` dimensions. Emits `hikari_view_resize()` (which triggers a `wlr_xdg_toplevel_set_size` configure request) and waits for the client serial.
 
-### 12.21 Modal Prompt State Machines (`src/*_assign_mode.c`)
+### 12.23 Modal Prompt State Machines (`src/*_assign_mode.c`)
 
 These files implement interactive keystroke buffers where the user presses a modifier, types a sequence (e.g. `g` then `t` then `e` `r` `m` `Enter` to assign a group), and completes an action.
 
@@ -945,7 +945,7 @@ These files implement interactive keystroke buffers where the user presses a mod
 - **`src/mark_select_mode.c`**: Prompts for `a-z`. Jumps focus to the registered view.
 - **`src/layout_select_mode.c`**: Prompts for a layout string identifier (`g` for grid, `f` for full) and triggers `hikari_layout_apply()`.
 
-### 12.22 Process Execution (`src/command.c`, `src/exec.c`)
+### 12.24 Process Execution (`src/command.c`, `src/exec.c`)
 
 **`src/command.c` (Subprocess Spawning):**
 - `hikari_command_execute()`: Safely executes an external shell command (e.g. `alacritty` or `waybar`).
@@ -960,7 +960,7 @@ These files implement interactive keystroke buffers where the user presses a mod
 - `hikari_exec_init()`: Parses `autostart` rules from `hikari.conf`.
 - `hikari_exec_apply()`: Iterates over the `hikari_configuration->execs` array during compositor startup and calls `hikari_command_execute()` for each.
 
-### 12.23 Screen Locker (`src/lock_mode.c`, `src/lock_indicator.c`)
+### 12.25 Screen Locker (`src/lock_mode.c`, `src/lock_indicator.c`)
 
 **`src/lock_mode.c` (Security Boundary):**
 - `struct hikari_lock_mode`: Implements the `hikari_mode` VTable. Suppresses all normal keybindings.
@@ -971,13 +971,13 @@ These files implement interactive keystroke buffers where the user presses a mod
 - `hikari_lock_indicator_init()`: Creates a `wlr_scene_buffer` overlay.
 - `hikari_lock_indicator_damage()`: Re-draws the visual state (`HIKARI_LOCK_INDICATOR_TYPING`, `VERIFYING`, `DENIED`) as concentric circles using CPU-bound `cairo` arcs.
 
-### 12.24 Server-Side Decorations (`src/decoration.c`)
+### 12.26 Server-Side Decorations (`src/decoration.c`)
 
 **`src/decoration.c`:**
 - `new_decoration_handler()`: Responds to `wlr_xdg_decoration_manager_v1`. If a client requests decorations, Hikari forces `WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE` to ensure the compositor (via `border.c`) controls the window framing.
 - Wires up `destroy` listeners to clean up the `hikari_view_decoration` struct when the client disconnects.
 
-### 12.25 Drawing Utilities (`include/hikari/color.h`, `src/font.c`)
+### 12.27 Drawing Utilities (`include/hikari/color.h`, `src/font.c`)
 
 **`include/hikari/color.h`:**
 - `hikari_color_convert()`: Parses hex color strings (e.g., `#FF0000FF`) into 4-element `float[4]` arrays normalized between 0.0 and 1.0 for use by `cairo` and `wlr_scene_rect`.

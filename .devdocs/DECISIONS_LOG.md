@@ -1,26 +1,9 @@
-## [2026-08-21 09:40] Phase 51: Documentation Rebranding (Hikari Sakura)
-
-*(Timestamp source: session context date; IDE-only tooling directive continues.)*
-
-### Context
-User requested to rebrand the user-facing documentation (readme and support docs) from "Hikari" to "Hikari Sakura" and emphasize that it is a FreeBSD-focused revamp and modernization of the original abandoned project (https://github.com/antaz/hikari), explicitly designed as a comprehensive Wayland desktop environment for FreeBSD.
-
-### Decisions
-- **User-Facing Documentation**: Modified `README.md`, `share/man/man1/hikari.md`, and `CoC.md` to reflect the "Hikari Sakura" name and FreeBSD focus.
-- **System Integration**: Updated `share/wayland-sessions/hikari.desktop` (`Name` and `DesktopNames`) and `start-hikari.sh` (`XDG_CURRENT_DESKTOP` and comments) to use "Hikari Sakura".
-- **Preserved Internals**: User instructed to "keep the config files", so `etc/hikari/hikari.conf` and all binary names (`hikari`, `start-hikari`) were left untouched. This prevents breaking scripts, paths, or `wlr_xwayland` usages.
-
-### Impact
-The project is now accurately described in user documentation and Wayland display managers as "Hikari Sakura" (a FreeBSD-focused DE), separating it conceptually and functionally from the original abandoned upstream, while remaining 100% compatible with existing config paths and build systems.
-
----
-
-## [2026-08-21 10:07] Phase 52: Post-Install Config Load Failure — Investigation (no code changes; report + remediation plan, per Ask-first gate)
+## [2026-08-21 10:07] Phase 52: Post-Install Config Load Failure — Investigation, Root Cause, and Fix (updated in place as the investigation progressed; see "RESOLVED" below for the applied code change)
 
 **Context:** After Phase 50's changes, the user ran `make`/`sudo make install` successfully (binary built and installed clean), but the compositor fails to start against their own deployed config file ("a deployed config I had modified slightly for my system"). This entry is investigation-only — read-only analysis via the Read tool, per the user's explicit correction to stop using Bash/git/shell exploration and use IDE-native tooling only (AGENTS.md COMMAND LAWS). No product code was touched this pass.
 
 **Config resolution mechanism (`main.c`, unmodified by any session this history — confirmed by absence from every git-status snapshot observed):**
-- `get_config_path()`: if `-c <path>` is passed, uses exactly that path (`check_path`: must be a regular file and `R_OK`-readable) with **no fallback** if it fails. Otherwise tries `get_user_config_path()` = `$XDG_CONFIG_HOME/hikari.conf` or `$HOME/.config/hikari/hikari.conf` first, then falls back to `get_default_config_path()` = `${HIKARI_ETC_PREFIX}/etc/hikari/hikari.conf` (compiled-in; `HIKARI_ETC_PREFIX` = `ETC_PREFIX` Makefile var, default `/usr/local`, confirmed unchanged in the current Makefile).
+- `get_config_path()`: if `-c <path>` is passed, uses exactly that path (`check_path`: must be a regular file and `R_OK`-readable) with **no fallback** if it fails. Otherwise tries `get_user_config_path()` = `$XDG_CONFIG_HOME/hikari/hikari.conf` or `$HOME/.config/hikari/hikari.conf` first, then falls back to `get_default_config_path()` = `${HIKARI_ETC_PREFIX}/etc/hikari/hikari.conf` (compiled-in; `HIKARI_ETC_PREFIX` = `ETC_PREFIX` Makefile var, default `/usr/local`, confirmed unchanged in the current Makefile).
 - If **neither** resolves to a readable regular file, `main()` prints exactly `"could not load configuration"` (main.c:270) and exits — a file-resolution failure, distinct from a parse failure.
 - If a file **is** found and read, `hikari_configuration_load()` (`src/configuration.c`) parses it with libucl; any structural/semantic problem prints a **different**, more specific message prefixed `"configuration error: ..."` (multiple call sites, one per section parser) — this is the parse-failure class.
 - These two message classes are the fastest way to bisect the user's report and are not yet known — the user's phrasing ("fails to load the config file") is consistent with either.
@@ -57,6 +40,23 @@ The project is now accurately described in user documentation and Wayland displa
 **Superseded analysis below (kept for the record — the file-resolution hypothesis was ruled out once the user's `ls -la` output was correctly interpreted, and `main.c:270`'s message was a red herring; the real message was `server.c:1236`'s, not found until the config's actual content was read):**
 
 **Update:** user confirmed the message is `main.c:270`'s `"could not load configuration"` (fires before any file content is ever read — structurally cannot be a syntax error, since `get_config_path()` only does `stat()`/`S_ISREG`/`access(R_OK)`, never opens the file). Config lives at `~/.config/hikari/hikari.conf`. User tried three launch paths — `start-hikari.sh`, the raw `hikari` binary, and an SDDM session entry — all fail identically. This rules out Branch D (stale binary shadowed by `start-hikari.sh`'s lookup order): a raw-binary invocation goes through neither that script nor SDDM's session machinery, so a common failure across all three narrows this to either (a) the file itself has a real existence/type/permission problem at that exact path, or (b) `XDG_CONFIG_HOME` is set to something other than `$HOME/.config` in the invoking environment — `get_default_path()` (`main.c` ~26-46) branches on `XDG_CONFIG_HOME` *before* falling back to `$HOME`, and when set, appends only `/hikari/` (not `/.config/hikari/`), so a nonstandard value would consistently miss a file placed at the conventional `~/.config/hikari/hikari.conf` regardless of which of the three launch methods is used. Asked the user to run `id -un; echo HOME=$HOME; echo XDG_CONFIG_HOME=$XDG_CONFIG_HOME` and `ls -la ~/.config/hikari/hikari.conf` on their machine (no shell access to their FreeBSD deployment from this session) to distinguish the two. Still no code changes made.
+
+---
+
+## [2026-08-21 09:40] Phase 51: Documentation Rebranding (Hikari Sakura)
+
+*(Timestamp source: session context date; IDE-only tooling directive continues.)*
+
+### Context
+User requested to rebrand the user-facing documentation (readme and support docs) from "Hikari" to "Hikari Sakura" and emphasize that it is a FreeBSD-focused revamp and modernization of the original abandoned project (https://github.com/antaz/hikari), explicitly designed as a comprehensive Wayland desktop environment for FreeBSD.
+
+### Decisions
+- **User-Facing Documentation**: Modified `README.md`, `share/man/man1/hikari.md`, and `CoC.md` to reflect the "Hikari Sakura" name and FreeBSD focus.
+- **System Integration**: Updated `share/wayland-sessions/hikari.desktop` (`Name` and `DesktopNames`) and `start-hikari.sh` (`XDG_CURRENT_DESKTOP` and comments) to use "Hikari Sakura".
+- **Preserved Internals**: User instructed to "keep the config files", so `etc/hikari/hikari.conf` and all binary names (`hikari`, `start-hikari`) were left untouched. This prevents breaking scripts, paths, or `wlr_xwayland` usages.
+
+### Impact
+The project is now accurately described in user documentation and Wayland display managers as "Hikari Sakura" (a FreeBSD-focused DE), separating it conceptually and functionally from the original abandoned upstream, while remaining 100% compatible with existing config paths and build systems.
 
 ---
 
@@ -226,10 +226,10 @@ All 9 findings from Phases 42/44 are now resolved: 7 implemented with code chang
 
 User answered the two open questions from Phase 45 directly: Finding 4 → "specific hot paths (subsurface/popup creation, buffer allocation) get a graceful-degradation option instead" of the fail-fast abort; Finding 3 → "scope it down first (e.g. just the crash-relevant paths)". This phase implements both, deliberately narrow.
 
-### Finding 4: `hikari_try_malloc` — opt-in graceful degradation for 6 hot-path call sites
+### Finding 4: `hikari_try_malloc` — opt-in graceful degradation for 9 hot-path call sites
 
 * **`include/hikari/memory.h` / `src/memory.c`:** added `hikari_try_malloc(size_t)` alongside the existing fail-fast `hikari_malloc`/`hikari_calloc`. Unlike them, it returns NULL on failure (after logging a warning) instead of aborting; callers are documented as required to check and degrade. The fail-fast wrappers are unchanged in behavior and remain the default everywhere else — this is additive, not a policy reversal.
-* **Applied at exactly 6 call sites, matching the user's "subsurface/popup creation, buffer allocation" scope:**
+* **Applied at exactly 9 call sites, matching the user's "subsurface/popup creation, buffer allocation" scope:**
   * `src/view.c`: `new_subsurface_handler`, both loops in `hikari_view_map` (existing subsurfaces at map time), and the shared `view_subsurface_create` (nested subsurfaces) — 4 sites total. On failure, the loop/handler simply skips that one subsurface; wlr_scene still renders it automatically (subsurface scene attachment is wlroots' own responsibility), so the only loss is hikari's granular damage-tracking for that subsurface, not its visibility.
   * `src/xdg_view.c`: `xdg_popup_create`. On failure, returns without creating the tracking struct; wlroots' scene helper (`wlr_scene_xdg_surface_create`, called once for the toplevel) already manages popup scene attachment automatically, so the popup still renders — it just loses hikari's unconstrain-from-box positioning and damage tracking for that one popup.
   * `src/layer_shell.c`: `new_popup_handler`, `new_popup_popup_handler` — same reasoning as the xdg popup case, for layer-shell popups.

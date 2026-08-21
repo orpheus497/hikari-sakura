@@ -103,6 +103,11 @@ render_image_to_surface(cairo_surface_t *output,
   cairo_destroy(cairo);
 }
 
+// Function purpose: (Re)load an output's wallpaper from a PNG file and
+// paint it into a scene buffer at the output's current geometry, falling
+// back to a solid-color scene rect if the image or buffer cannot be
+// prepared. Called on output init and whenever a config reload resolves a
+// new background for the output.
 void
 hikari_output_load_background(struct hikari_output *output,
     const char *path,

@@ -327,12 +327,14 @@ terminate_and_reap_topbar_child(pid_t *pid)
   int status;
   pid_t result;
   int attempts = 0;
+  bool killed = false;
 
   for (;;) {
     result = waitpid(*pid, &status, WNOHANG);
 
     if (result == *pid || (result == -1 && errno == ECHILD)) {
-      break;
+      *pid = -1;
+      return;
     }
 
     if (result == -1 && errno == EINTR) {
@@ -340,14 +342,23 @@ terminate_and_reap_topbar_child(pid_t *pid)
     }
 
     // [COMMENT] Action purpose: Not yet reaped -- back off briefly instead of
-    // busy-looping, and give up after a bounded number of attempts (~1s
-    // total) rather than risking an unbounded startup hang if the child is
-    // somehow stuck. The OS reparents it to init on exit either way, so
-    // giving up here does not leak it permanently.
-    if (++attempts >= 1000) {
+    // busy-looping. After the same ~1s bounded wait SIGTERM was given,
+    // escalate to SIGKILL once rather than giving up while the child (and
+    // its reference) is still alive: an ignored/blocked SIGTERM would
+    // otherwise leave *pid cleared while the process keeps running, and
+    // SIGKILL cannot be caught or blocked, so this reap attempt still
+    // completes within a bounded time even for a wedged child.
+    if (!killed && ++attempts >= 1000) {
+      kill(*pid, SIGKILL);
+      killed = true;
+      attempts = 0;
+      continue;
+    }
+
+    if (killed && ++attempts >= 1000) {
       fprintf(stderr,
           "error: could not reap topbar helper (pid %d) during startup "
-          "cleanup\n",
+          "cleanup, even after SIGKILL\n",
           (int)*pid);
       break;
     }

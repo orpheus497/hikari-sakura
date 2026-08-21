@@ -192,8 +192,13 @@ cursor_touch_down_handler(struct wl_listener *listener, void *data)
       cursor->wlr_cursor, &event->touch->base, event->x, event->y, &lx, &ly);
 
   hikari_server_node_at(lx, ly, &surface, &workspace, &sx, &sy);
-  wlr_seat_touch_notify_down(
-      hikari_server.seat, surface, event->time_msec, event->touch_id, sx, sy);
+  // Action purpose: Only notify a touch-down when the hit test actually
+  // found a surface -- there is nothing meaningful to deliver a down event
+  // to otherwise (e.g. a touch that starts on bare wallpaper).
+  if (surface != NULL) {
+    wlr_seat_touch_notify_down(
+        hikari_server.seat, surface, event->time_msec, event->touch_id, sx, sy);
+  }
 
   // [COMMENT] Action purpose: the first finger of a fresh multi-touch
   // sequence also drives hikari's own focus/raise/move/resize bookkeeping,
@@ -305,6 +310,8 @@ find_gesture_binding(enum hikari_gesture_type type,
   return NULL;
 }
 
+// Function purpose: Invoke the action bound to a matched gesture, mirroring
+// how a matched key/mouse binding is dispatched.
 static void
 fire_gesture_binding(struct hikari_gesture_binding_config *binding_config)
 {
@@ -315,6 +322,8 @@ fire_gesture_binding(struct hikari_gesture_binding_config *binding_config)
   }
 }
 
+// Function purpose: Classify a completed swipe's accumulated displacement
+// into one of the four cardinal directions by comparing the dominant axis.
 static enum hikari_gesture_direction
 classify_swipe_direction(double dx, double dy)
 {
@@ -325,6 +334,19 @@ classify_swipe_direction(double dx, double dy)
   }
 }
 
+// Action purpose: Minimum accumulated displacement (in the same units as
+// wlr_pointer_swipe_update_event's dx/dy) before a swipe is classified and
+// matched against a binding. Without this, an incidental few-pixel wobble
+// from a 3+ finger tap or hold would classify as a directional swipe and
+// could fire a bound action the user never intended to trigger.
+#define HIKARI_GESTURE_SWIPE_MIN_DISTANCE 20.0
+
+// Action purpose: Minimum |scale - 1.0| before a pinch is classified and
+// matched against a binding, for the same reason as the swipe threshold
+// above -- negligible scale drift during an otherwise-stationary gesture
+// should not be treated as a deliberate pinch-in/out.
+#define HIKARI_GESTURE_PINCH_MIN_SCALE_DELTA 0.1
+
 // [COMMENT] Action purpose: wlroots reports pinch scale relative to 1.0 at
 // gesture start; >= 1.0 means fingers spread apart (pinch-out), < 1.0 means
 // fingers moved together (pinch-in).
@@ -334,6 +356,9 @@ classify_pinch_direction(double scale)
   return scale >= 1.0 ? HIKARI_GESTURE_DIRECTION_OUT : HIKARI_GESTURE_DIRECTION_IN;
 }
 
+// Function purpose: Start accumulating a new gesture stream (swipe, pinch,
+// or hold), resetting the running totals and update buffer from any prior
+// gesture.
 static void
 gesture_begin(struct hikari_gesture_state *state,
     enum hikari_gesture_type type,
@@ -350,6 +375,10 @@ gesture_begin(struct hikari_gesture_state *state,
   state->nupdates = 0;
 }
 
+// Function purpose: Append one wlroots update event to the in-progress
+// gesture's replay buffer, so it can be forwarded to the client verbatim if
+// the gesture turns out not to match a binding. Silently drops updates
+// beyond HIKARI_GESTURE_MAX_UPDATES rather than growing without bound.
 static void
 gesture_buffer_update(struct hikari_gesture_state *state,
     uint32_t time_msec,
@@ -464,7 +493,10 @@ cursor_swipe_end_handler(struct wl_listener *listener, void *data)
   }
   state->active = false;
 
-  if (!event->cancelled) {
+  double distance =
+      hypot(state->total_dx, state->total_dy);
+
+  if (!event->cancelled && distance >= HIKARI_GESTURE_SWIPE_MIN_DISTANCE) {
     enum hikari_gesture_direction direction =
         classify_swipe_direction(state->total_dx, state->total_dy);
 
@@ -518,7 +550,8 @@ cursor_pinch_end_handler(struct wl_listener *listener, void *data)
   }
   state->active = false;
 
-  if (!event->cancelled) {
+  if (!event->cancelled &&
+      fabs(state->last_scale - 1.0) >= HIKARI_GESTURE_PINCH_MIN_SCALE_DELTA) {
     enum hikari_gesture_direction direction =
         classify_pinch_direction(state->last_scale);
 
@@ -592,6 +625,9 @@ hikari_cursor_init(
   wlr_xcursor_manager_load(cursor->cursor_mgr, 2);
 
   cursor->wlr_cursor = wlr_cursor;
+
+  cursor->has_primary_touch = false;
+  cursor->gesture_state.active = false;
 
   wl_list_init(&cursor->surface_destroy.link);
   hikari_binding_group_init(cursor->bindings);
@@ -703,6 +739,13 @@ hikari_cursor_deactivate(struct hikari_cursor *cursor)
   wl_list_remove(&cursor->pinch_end.link);
   wl_list_remove(&cursor->hold_begin.link);
   wl_list_remove(&cursor->hold_end.link);
+
+  // Action purpose: Clear any in-progress gesture or primary-touch drag.
+  // Deactivation happens mid-session (e.g. entering lock mode); without
+  // this, a gesture or drag left "active" here would resume against stale
+  // state (or never reset) once the cursor is reactivated.
+  cursor->has_primary_touch = false;
+  cursor->gesture_state.active = false;
 
   hikari_cursor_set_image(cursor, NULL);
 }

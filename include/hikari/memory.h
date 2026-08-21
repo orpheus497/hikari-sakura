@@ -20,10 +20,10 @@ hikari_malloc(size_t size);
 void *
 hikari_calloc(size_t number, size_t size);
 
-/* Returns NULL on allocation failure instead of aborting, logging a warning
-first. Callers MUST check the return value and degrade gracefully (e.g. skip
-creating the optional tracking object, or fall back to a simpler render path)
-rather than assuming success. */
+/* Returns NULL on allocation failure instead of aborting, logging an
+error-level diagnostic first. Callers MUST check the return value and degrade
+gracefully (e.g. skip creating the optional tracking object, or fall back to
+a simpler render path) rather than assuming success. */
 void *
 hikari_try_malloc(size_t size);
 

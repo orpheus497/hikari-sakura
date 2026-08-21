@@ -404,7 +404,7 @@ locker_result_handler(int fd, uint32_t mask, void *data)
   return 0;
 }
 
-// [COMMENT] Function purpose: Send the password to hikari-unlocker and register
+// Function purpose: Send the password to hikari-unlocker and register
 // a non-blocking event source for the authentication result.
 static void
 submit_password(void)
@@ -431,6 +431,7 @@ submit_password(void)
         // this attempt instead; reap_locker_deferred's retry timer frees a
         // slot (or reaps locker_pid directly) without blocking, and the next
         // attempt will park/restart normally.
+        clear_buffer();
         reap_locker_deferred(mode);
         hikari_lock_indicator_set_deny(mode->lock_indicator);
         return;
