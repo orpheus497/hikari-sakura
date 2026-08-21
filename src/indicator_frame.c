@@ -162,10 +162,17 @@ hikari_indicator_frame_show(
     return;
   }
 
-  wlr_scene_rect_set_color(indicator_frame->top, color);
-  wlr_scene_rect_set_color(indicator_frame->bottom, color);
-  wlr_scene_rect_set_color(indicator_frame->left, color);
-  wlr_scene_rect_set_color(indicator_frame->right, color);
+  /* [COMMENT] Action purpose: wlr_scene_rect_set_color() requires PREMULTIPLIED
+  colour, while configuration colours are stored straight (Cairo's convention).
+  The two only agree at alpha 1.0, so an indicator configured as "#RRGGBBAA"
+  would otherwise render too bright over the view beneath it. */
+  float premultiplied[4];
+  hikari_color_premultiply(premultiplied, color);
+
+  wlr_scene_rect_set_color(indicator_frame->top, premultiplied);
+  wlr_scene_rect_set_color(indicator_frame->bottom, premultiplied);
+  wlr_scene_rect_set_color(indicator_frame->left, premultiplied);
+  wlr_scene_rect_set_color(indicator_frame->right, premultiplied);
 
   wlr_scene_node_set_enabled(&indicator_frame->top->node, true);
   wlr_scene_node_set_enabled(&indicator_frame->bottom->node, true);

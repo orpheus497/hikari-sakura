@@ -17,6 +17,7 @@
 #include <wlr/interfaces/wlr_buffer.h>
 #include <wlr/types/wlr_scene.h>
 
+#include <hikari/color.h>
 #include <hikari/memory.h>
 
 #include <hikari/server.h>
@@ -233,12 +234,13 @@ hikari_output_load_background(struct hikari_output *output,
           output->wlr_output->name);
     }
 
-    float color[4] = {
-      hikari_configuration->clear[0],
-      hikari_configuration->clear[1],
-      hikari_configuration->clear[2],
-      hikari_configuration->clear[3]
-    };
+    /* [COMMENT] Action purpose: wlr_scene_rect_create() requires PREMULTIPLIED
+    colour, while configuration colours are stored straight (Cairo's
+    convention). The two only agree at alpha 1.0, so a `clear` configured as
+    "#RRGGBBAA" would otherwise render too bright. */
+    float color[4];
+    hikari_color_premultiply(color, hikari_configuration->clear);
+
     struct wlr_scene_rect *rect = wlr_scene_rect_create(
         &hikari_server.scene->tree, output_width, output_height, color);
     if (rect != NULL) {
@@ -275,9 +277,11 @@ hikari_output_damage_whole(struct hikari_output *output)
 {
   assert(output != NULL);
 
-  if (output->scene_output != NULL) {
-    wlr_output_schedule_frame(output->wlr_output);
-  }
+  /* [COMMENT] Action purpose: Delegate so the enabled-output guard applies
+  here too. This checked only scene_output, so it scheduled frames on disabled
+  outputs -- lock_mode's disable_outputs() calls it immediately after
+  hikari_output_disable(). */
+  hikari_output_schedule_frame(output);
 }
 
 // [COMMENT] Function purpose: Disable specified output and remove its listeners.

@@ -482,6 +482,25 @@ submit_password(void)
       WL_EVENT_READABLE | WL_EVENT_HANGUP,
       locker_result_handler,
       mode);
+
+  /* [COMMENT] Action purpose: Without the event source nothing will ever read
+  the unlocker's reply, so the attempt would hang the lock screen forever with
+  no feedback while leaking both pipe fds and leaving the child unreaped. Tear
+  the attempt down the same way locker_result_handler's terminal path does and
+  deny it, so the user can simply type the password again. */
+  if (mode->locker_event_source == NULL) {
+    fprintf(stderr,
+        "lock_mode: failed to register locker result pipe with event loop\n");
+
+    reap_locker_deferred(mode);
+
+    close(locker_pipe[1][0]);
+    close(locker_pipe[0][1]);
+    locker_pipe[1][0] = -1;
+    locker_pipe[0][1] = -1;
+
+    hikari_lock_indicator_set_deny(mode->lock_indicator);
+  }
 }
 
 static void

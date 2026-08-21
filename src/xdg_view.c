@@ -183,7 +183,20 @@ surface_at(
 
   struct wlr_box *geometry = hikari_view_geometry(&xdg_view->view);
 
-  return wlr_xdg_surface_surface_at(xdg_view->surface, ox - geometry->x, oy - geometry->y, sx, sy);
+  /* Action purpose: view->geometry tracks the xdg WINDOW geometry, but
+  wlr_xdg_surface_surface_at() takes wl_surface-local coordinates. The two
+  differ by xdg_surface->geometry.x/y -- the client-side decoration margin,
+  non-zero for most GTK/CSD clients -- so omitting it made every hit test land
+  that far up and to the left of the real pointer. Rendering was already
+  correct: wlr_scene_xdg_surface_create() offsets the surface tree by
+  -geometry.x/y, which is the same correction with the opposite sign. */
+  struct wlr_box *window = &xdg_view->surface->geometry;
+
+  return wlr_xdg_surface_surface_at(xdg_view->surface,
+      ox - geometry->x + window->x,
+      oy - geometry->y + window->y,
+      sx,
+      sy);
 }
 
 static void

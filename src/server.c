@@ -442,6 +442,13 @@ node_at(double lx,
 {
   assert(hikari_server.workspace != NULL);
 
+  /* [COMMENT] Action purpose: Set the "nothing hit" result before any early
+  return can skip it. All five callers pass uninitialised locals, so the miss
+  paths previously left them indeterminate. */
+  *surface = NULL;
+  *sx = 0;
+  *sy = 0;
+
   struct wlr_output *wlr_output =
       wlr_output_layout_output_at(hikari_server.output_layout, lx, ly);
 

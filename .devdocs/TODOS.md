@@ -4,6 +4,14 @@
 
 ## Active List
 
+### Phase 64: Cursor offset FIXED; review-finding triage; XWayland content gap found
+
+- [x] **Cursor offset ROOT CAUSE + FIX.** `surface_at()` in `src/xdg_view.c` passed **window-geometry-local** coords to `wlr_xdg_surface_surface_at()`, which takes **wl_surface-local** ones. The two differ by `xdg_surface->geometry.x/y` — the CSD margin, non-zero for most GTK clients — so every hit test landed that far up-and-left of the real pointer. Rendering was already correct because `wlr_scene_xdg_surface_create()` applies the same correction with the opposite sign. Fixed by adding `+ window->x/y`.
+- [x] Confirmed the same offset in the damage path is **harmless**: `hikari_output_add_damage()` and `hikari_output_add_effective_surface_damage()` discard the rect and only schedule a frame (the scene graph does real damage tracking). No change made.
+- [x] Review triage: **7 findings implemented** (premultiplied alpha at 12 scene-rect sites, `node_at` out-param init, keycode `strtol` underflow, locker `add_fd` NULL, colour int range, `damage_whole` enabled guard, layer-popup geometry init). **5 verified invalid and skipped** with reasons. `AGENTS.md` left untouched per user decision.
+- [ ] **NEW — P0, XWayland views render no content.** `src/xwayland_view.c` creates a `scene_tree` and attaches **only** border + indicator_frame to it; there is no `wlr_scene_subsurface_tree_create()` for `xwayland_surface->surface` anywhere in the file (its own comment at :526 says "for the XWayland view's border and indicator frame nodes"). Managed X11 windows therefore draw a border and nothing inside it. Needs approval before fixing.
+- [ ] **Correction to Phase 62's reasoning:** it attributed Firefox surviving the popup abort to "Firefox is XWayland and never creates xdg_popups". If XWayland content does not render at all, the Firefox seen working was native Wayland, and it survived only because no menu had been opened. The Phase 62 *fix* stands — it was proven by core dump — but that explanation was wrong.
+
 ### Phase 63: Popups never had a scene node + shutdown NULL deref (see DECISIONS_LOG Phase 63)
 
 - [x] **Session survived 11 minutes with no runtime crash — a first.** VT switching, Firefox and pavucontrol all held. It then segfaulted on exit (exit 139).

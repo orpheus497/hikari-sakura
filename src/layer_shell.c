@@ -335,6 +335,11 @@ init_popup(
 {
   layer_popup->popup = wlr_popup;
 
+  /* [COMMENT] Action purpose: Zero the cached geometry before anything can read
+  it. hikari_try_malloc does not zero, and damage_popup() reads this field to
+  damage the popup's previous position before writing its new one. */
+  layer_popup->geometry = (struct wlr_box){ 0 };
+
   /* [COMMENT] Action purpose: Give the popup its own scene tree, parented to
   the owning layer surface's tree (or to the parent popup's tree when nested).
 

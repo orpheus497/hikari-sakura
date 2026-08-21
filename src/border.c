@@ -118,12 +118,19 @@ hikari_border_refresh_geometry(
   wlr_scene_node_set_enabled(&border->left->node, true);
   wlr_scene_node_set_enabled(&border->right->node, true);
 
-  float *color = border->state == HIKARI_BORDER_ACTIVE 
-    ? hikari_configuration->border_active 
+  float *color = border->state == HIKARI_BORDER_ACTIVE
+    ? hikari_configuration->border_active
     : hikari_configuration->border_inactive;
-    
-  wlr_scene_rect_set_color(border->top, color);
-  wlr_scene_rect_set_color(border->bottom, color);
-  wlr_scene_rect_set_color(border->left, color);
-  wlr_scene_rect_set_color(border->right, color);
+
+  /* [COMMENT] Action purpose: wlr_scene_rect_set_color() requires PREMULTIPLIED
+  colour, while configuration colours are stored straight (Cairo's convention).
+  The two only agree at alpha 1.0, so a border configured as "#RRGGBBAA" would
+  otherwise render too bright over whatever is behind it. */
+  float premultiplied[4];
+  hikari_color_premultiply(premultiplied, color);
+
+  wlr_scene_rect_set_color(border->top, premultiplied);
+  wlr_scene_rect_set_color(border->bottom, premultiplied);
+  wlr_scene_rect_set_color(border->left, premultiplied);
+  wlr_scene_rect_set_color(border->right, premultiplied);
 }

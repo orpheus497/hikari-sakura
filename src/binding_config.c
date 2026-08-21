@@ -62,8 +62,16 @@ hikari_binding_config_key_parse(
 
   if (*remaining == '-') {
     errno = 0;
-    const long value = strtol(remaining + 1, NULL, 10);
-    if (errno != 0 || value < 0 || value > UINT32_MAX) {
+    char *end;
+    const long value = strtol(remaining + 1, &end, 10);
+
+    /* [COMMENT] Action purpose: Reject an empty parse, trailing characters, and
+    anything below the X11 keycode offset. Without the end pointer "12abc" and
+    "abc" (which strtol reports as 0 with errno untouched) were both accepted,
+    and any value under 8 made the subtraction below wrap: keycode 0 became
+    4294967288. */
+    if (errno != 0 || end == remaining + 1 || *end != '\0' || value < 8 ||
+        value > UINT32_MAX) {
       fprintf(stderr,
           "configuration error: failed to parse keycode \"%s\"\n",
           remaining + 1);

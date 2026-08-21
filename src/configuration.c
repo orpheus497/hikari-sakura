@@ -563,6 +563,16 @@ parse_color(const ucl_object_t *obj, const char *key, float dst[static 4])
     return false;
   }
 
+  /* [COMMENT] Action purpose: Reject out-of-range values instead of silently
+  truncating them in the cast below -- -1 would otherwise become white, and
+  0x1FF0000 would become 0xFF0000. */
+  if (color < 0 || color > 0xFFFFFF) {
+    fprintf(stderr,
+        "configuration error: \"%s\" must be between 0x000000 and 0xFFFFFF\n",
+        key);
+    return false;
+  }
+
   hikari_color_convert(dst, (uint32_t)color);
 
   return true;
