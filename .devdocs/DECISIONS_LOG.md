@@ -1,3 +1,42 @@
+## [2026-08-21 15:35] Phase 63: Popups have never had a scene node; plus a shutdown NULL deref
+
+**Status:** TWO DEFECTS FIXED. Session ran 11 minutes with no runtime crash (a first), then segfaulted on exit. User reported: *"right click menus and submenus in many apps did not come up."*
+
+### Defect 1 — xdg popups were never given a scene node, so they have never rendered
+
+`xdg_popup_create()` carried this comment:
+
+> *"wlroots' scene helper (wlr_scene_xdg_surface_create, called once for the toplevel) already manages popup scene nodes automatically"*
+
+**That is false.** `wlr_scene_xdg_surface_create()` (`types/scene/xdg_shell.c`) builds a tree for exactly one xdg_surface: it calls `wlr_scene_subsurface_tree_create()`, which walks that surface's **subsurfaces**. Nothing in the file walks **popups** — the only popup-aware code is `scene_xdg_surface_update_position()` at line 40, which positions the tree only when *that* xdg_surface is itself a popup, i.e. when the helper was called **on the popup**. tinywl calls `wlr_scene_xdg_surface_create(parent_tree, xdg_popup->base)` per popup for exactly this reason.
+
+Consequence: **every xdg popup in hikari had no scene node whatsoever and never rendered** — right-click menus, submenus, combo-box dropdowns, all invisible. This was invisible as a bug because until Phase 62 *creating* a popup aborted the compositor first. Fixing the abort exposed it.
+
+`src/layer_shell.c` had the identical gap: `wlr_scene_layer_surface_v1_create()` covers the layer surface and its subsurfaces only, so layer-shell popups (panel context menus, waybar sub-menus) never rendered either. This retroactively explains the long-standing "Layer-client spot check (waybar with sub-menus)" backlog item.
+
+**Fix:** added a `scene_tree` field to both `struct hikari_xdg_popup` and `struct hikari_layer_popup`, created via `wlr_scene_xdg_surface_create()` parented to the parent surface's tree. Parenting is what makes positioning correct — wlroots positions the popup tree at `popup->current.geometry`, which xdg-shell defines relative to the parent's **window geometry**, and hikari's per-view `scene_tree` origin is exactly that (its `surface_tree` child is offset by `-geometry.x/y`). For xdg popups the parent tree is resolved via `wlr_xdg_surface_try_from_wlr_surface(wlr_popup->parent)->data`, and each popup publishes its own tree on `base->data` so nested submenus can find it. For layer popups it is resolved from the existing `hikari_layer_node` parent union. wlroots owns the returned tree (it destroys it from its own xdg_surface destroy listener), so hikari must never destroy it — `xdg_popup_destroy()`/`fini_popup()` are deliberately unchanged.
+
+`init_popup()` in `layer_shell.c` now returns `bool`; both callers free the tracking struct on failure. No listener is registered before the failure point, so a plain `hikari_free` is complete cleanup.
+
+### Defect 2 — shutdown NULL dereference in `hikari_workspace_focus_view`
+
+Third core dump (`hikari.4177.1001.core`, 15:27:36, signal 11):
+
+```
+main -> hikari_server_stop -> wlr_output_finish -> destroy_handler
+     -> hikari_output_fini -> hikari_workspace_focus_view   <- SIGSEGV
+```
+
+`hikari_workspace_focus_view()` opened with an unguarded `hikari_server.workspace->focus_view`. `hikari_output_fini()` sets `hikari_server.workspace = NULL` when it tears down the **noop** output; at shutdown wlroots destroys outputs in backend order, so a real output can be finalised *after* that, and `hikari_output_fini()` then calls straight into this function with a NULL current workspace.
+
+**Fix:** `focus_view` is now `current_workspace != NULL ? current_workspace->focus_view : NULL`. There is genuinely no outgoing focus to clear in that state, and `current_workspace` is used nowhere else in the function, so the rest proceeds correctly. Consistent with the approved always-on safe-bail policy.
+
+### Note on the cursor-offset report (investigated, not yet fixed)
+
+Reading the input path: `node_at()` passes output-local coordinates to each view's `surface_at()`, and `xdg_view.c`'s `surface_at()` forwards `(ox - view_geometry.x, oy - view_geometry.y)` to `wlr_xdg_surface_surface_at()`. That wlroots function is documented (`wlr_xdg_shell.h:526`) as taking **surface-local** coordinates, but hikari passes **window-geometry-local** ones. The two differ by `xdg_surface->geometry.x/y` — the CSD shadow margin — which is non-zero for essentially every GTK client. Rendering is unaffected (the scene graph applies the offset itself), so the pointer draws correctly while hit-testing lands offset by the shadow width. Not yet fixed; needs confirming against a client with known shadow margins before changing, since the same reasoning must be checked for `xwayland_view.c` and `layer_shell.c`'s `surface_at`.
+
+---
+
 ## [2026-08-21 15:05] Phase 62: SECOND ROOT CAUSE — popup unconstrained before initialisation, proven by core dump
 
 **Status:** SIGABRT ROOT-CAUSED AND FIXED. Second core dump captured (`hikari.52741.1001.core`, 15:01:11, signal 6). This is the *other* crash signature, and it is a completely separate defect from Phase 61's NULL dereference.

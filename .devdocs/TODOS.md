@@ -4,6 +4,19 @@
 
 ## Active List
 
+### Phase 63: Popups never had a scene node + shutdown NULL deref (see DECISIONS_LOG Phase 63)
+
+- [x] **Session survived 11 minutes with no runtime crash — a first.** VT switching, Firefox and pavucontrol all held. It then segfaulted on exit (exit 139).
+- [x] **ROOT CAUSE of "right click menus and submenus did not come up":** `xdg_popup_create()` never created a scene node for the popup. Its comment claimed `wlr_scene_xdg_surface_create()` "already manages popup scene nodes automatically" — **false**. That helper calls `wlr_scene_subsurface_tree_create()`, which walks **subsurfaces**, not **popups**; nothing in `types/scene/xdg_shell.c` traverses popups. tinywl calls the helper once per popup for exactly this reason. **Every xdg popup in hikari has therefore never rendered.**
+- [x] Masked until now because until Phase 62 *creating* a popup aborted the compositor first. Fixing the abort exposed it.
+- [x] **Same gap in `src/layer_shell.c`** — `wlr_scene_layer_surface_v1_create()` covers the layer surface and its subsurfaces only, so layer-shell popups never rendered either. **This retroactively explains the long-standing "Layer-client spot check (waybar with sub-menus)" backlog item.**
+- [x] **FIXED:** `scene_tree` field added to `struct hikari_xdg_popup` and `struct hikari_layer_popup`, created via `wlr_scene_xdg_surface_create()` parented to the parent surface's tree. xdg popups publish their tree on `base->data` so nested submenus resolve their parent. wlroots owns the tree lifetime, so the destroy paths are deliberately unchanged.
+- [x] `init_popup()` in `layer_shell.c` now returns `bool`; both callers free the tracking struct on failure (no listener is registered before that point).
+- [x] **Third core dump** (`hikari.4177.1001.core`, 15:27:36, signal 11) — **shutdown-only crash**. `hikari_workspace_focus_view()` dereferenced `hikari_server.workspace` unguarded; `hikari_output_fini()` sets it to NULL while tearing down the noop output, and at shutdown a real output can be finalised after that. **FIXED** with the approved safe-bail pattern.
+- [x] All seven modified files pass `cc -fsyntax-only -Wall`.
+- [ ] **P0 — USER-RUN, NEXT ACTION:** `sudo make clean && sudo make install`, then right-click menus, submenus, combo-box dropdowns, and quit cleanly to confirm exit status 0.
+- [ ] **Cursor offset — INVESTIGATED, not yet fixed.** `xdg_view.c`'s `surface_at()` passes window-geometry-local coordinates to `wlr_xdg_surface_surface_at()`, which is documented (`wlr_xdg_shell.h:526`) as taking **surface-local** ones. They differ by `xdg_surface->geometry.x/y`, the CSD shadow margin — non-zero for essentially every GTK client. Rendering is unaffected (the scene graph applies the offset itself), so the pointer draws correctly but hit-tests offset by the shadow width. Must also check `xwayland_view.c` and `layer_shell.c` `surface_at` before changing.
+
 ### Phase 62: SECOND ROOT CAUSE — popup unconstrained before initialisation (see DECISIONS_LOG Phase 62)
 
 - [x] **Second core dump captured** (`hikari.52741.1001.core`, 15:01:11, **signal 6 / SIGABRT**) after the user built and installed the Phase 61 fix. VT switching now survives and Firefox is fine; **pavucontrol crashed immediately**.

@@ -61,6 +61,14 @@ struct hikari_layer_popup {
 
   struct wlr_xdg_popup *popup;
 
+  /* [COMMENT] Scene tree for this popup, created by
+  wlr_scene_xdg_surface_create() and parented to the owning layer surface's
+  tree (or to the parent popup's tree when nested). wlroots owns its lifetime,
+  so hikari must never destroy it. Without this the popup has no scene node at
+  all and never renders -- wlr_scene_layer_surface_v1_create() covers only the
+  layer surface itself and its subsurfaces, not its popups. */
+  struct wlr_scene_tree *scene_tree;
+
   struct wl_listener commit;
   struct wl_listener destroy;
   struct wl_listener map;

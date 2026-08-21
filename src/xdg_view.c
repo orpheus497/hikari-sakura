@@ -15,6 +15,7 @@
 #include <wlr/types/wlr_xdg_shell.h>
 #include <wlr/types/wlr_scene.h>
 #include <wlr/util/edges.h>
+#include <wlr/util/log.h>
 
 #include <hikari/configuration.h>
 #include <hikari/geometry.h>
@@ -522,18 +523,18 @@ popup_unconstrain(struct hikari_xdg_popup *popup)
 }
 
 // Function purpose: Allocate and initialise a hikari_xdg_popup for a newly
-// requested popup (from either a toplevel or another popup), registering
-// its lifecycle listeners and unconstraining it to the parent view's output.
+// requested popup (from either a toplevel or another popup) -- create its
+// scene tree, register its lifecycle listeners, and link it into the parent
+// view's children. Unconstraining happens later, on the popup's initial
+// commit, for the reason documented in popup_commit_handler.
 static void
 xdg_popup_create(struct wlr_xdg_popup *wlr_popup, struct hikari_view *parent)
 {
-  // [COMMENT] Action purpose: Graceful-degradation allocation. wlroots' scene
-  // helper (wlr_scene_xdg_surface_create, called once for the toplevel)
-  // already manages popup scene nodes automatically -- this struct is purely
-  // hikari's own tracking (unconstrain-from-box positioning, damage, nested
-  // popups). Skipping it under memory pressure means the popup may render
-  // unconstrained/without granular damage tracking, not that it fails to
-  // render. See DECISIONS_LOG Finding 4.
+  /* [COMMENT] Action purpose: Graceful-degradation allocation -- this struct
+  carries hikari's own popup tracking (unconstrain-from-box positioning,
+  damage, nested popups) and the scene tree created below. Under memory
+  pressure the popup is skipped entirely rather than the compositor aborting.
+  See DECISIONS_LOG Finding 4. */
   struct hikari_xdg_popup *popup =
       hikari_try_malloc(sizeof(struct hikari_xdg_popup));
 
@@ -547,6 +548,60 @@ xdg_popup_create(struct wlr_xdg_popup *wlr_popup, struct hikari_view *parent)
 
   popup->view_child.parent = parent;
   popup->popup = wlr_popup;
+
+  /* [COMMENT] Action purpose: Give the popup its own scene tree, parented to
+  whichever tree its parent surface owns.
+
+  This is REQUIRED and was previously missing. wlr_scene_xdg_surface_create()
+  builds a tree for exactly one xdg_surface: it calls
+  wlr_scene_subsurface_tree_create(), which walks that surface's SUBSURFACES,
+  not its POPUPS (see wlroots types/scene/xdg_shell.c -- there is no popup
+  traversal in it). The comment that used to sit below, claiming the helper
+  "already manages popup scene nodes automatically" because it was called once
+  for the toplevel, was simply wrong. The consequence was that every xdg popup
+  in hikari had no scene node whatsoever and never rendered -- right-click
+  menus, submenus and combo-box dropdowns were all invisible. That went
+  unnoticed only because creating a popup used to abort the compositor first
+  (see DECISIONS_LOG Phase 62).
+
+  Parenting to the parent's tree is what makes positioning correct: wlroots
+  positions the popup tree at popup->current.geometry, which xdg-shell defines
+  relative to the parent's window geometry, and hikari's per-view scene_tree
+  origin is exactly that window-geometry origin.
+
+  wlroots owns the returned tree and destroys it from its own xdg_surface
+  destroy listener, so hikari must not destroy it in xdg_popup_destroy(). */
+  struct wlr_xdg_surface *parent_xdg_surface =
+      wlr_xdg_surface_try_from_wlr_surface(wlr_popup->parent);
+
+  struct wlr_scene_tree *parent_tree =
+      parent_xdg_surface != NULL ? parent_xdg_surface->data : NULL;
+
+  if (parent_tree == NULL) {
+    /* [COMMENT] Action purpose: Without a parent tree the popup cannot be
+    placed in the scene graph at all. Bail before any listener is registered so
+    the wrapper can simply be freed. Degrades to "popup does not render",
+    matching the graceful-degradation policy for popups above. */
+    wlr_log(WLR_ERROR,
+        "xdg_popup_create: parent surface has no scene tree, popup will not "
+        "be shown");
+    hikari_free(popup);
+    return;
+  }
+
+  popup->scene_tree =
+      wlr_scene_xdg_surface_create(parent_tree, wlr_popup->base);
+
+  if (popup->scene_tree == NULL) {
+    wlr_log(WLR_ERROR, "xdg_popup_create: could not create popup scene tree");
+    hikari_free(popup);
+    return;
+  }
+
+  /* [COMMENT] Action purpose: Publish this popup's tree on its own xdg_surface
+  so a nested popup (a submenu) can find it as ITS parent tree via the lookup
+  above. Toplevels do the same in hikari_xdg_view_init. */
+  wlr_popup->base->data = popup->scene_tree;
 
   wlr_popup->base->surface->data = parent;
 

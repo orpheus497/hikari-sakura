@@ -402,8 +402,22 @@ hikari_workspace_focus_view(
 
   struct wlr_seat *seat = hikari_server.seat;
 
+  /* [COMMENT] Action purpose: Tolerate a NULL current workspace instead of
+  faulting. hikari_output_fini() sets hikari_server.workspace to NULL while
+  tearing down the noop output, and at shutdown wlroots destroys outputs in
+  backend order -- so a real output can be finalised AFTER that has happened,
+  and hikari_output_fini() then calls straight into this function. That was an
+  unconditional NULL dereference killing the compositor with SIGSEGV on exit;
+  confirmed from a core dump whose backtrace is
+  hikari_server_stop -> wlr_output_finish -> destroy_handler ->
+  hikari_output_fini -> hikari_workspace_focus_view. See DECISIONS_LOG Phase 63.
+
+  There is simply no outgoing focus to clear in that state, so NULL is the
+  correct value for focus_view and the rest of the function proceeds normally.
+  current_workspace is not used anywhere else. */
   struct hikari_workspace *current_workspace = hikari_server.workspace;
-  struct hikari_view *focus_view = current_workspace->focus_view;
+  struct hikari_view *focus_view =
+      current_workspace != NULL ? current_workspace->focus_view : NULL;
 
   if (focus_view != NULL) {
     if (hikari_server_is_indicating()) {

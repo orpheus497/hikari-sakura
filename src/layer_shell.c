@@ -50,12 +50,12 @@ focus(struct hikari_node *node);
 static void
 arrange_layers(struct hikari_output *output);
 
-static void
+static bool
 init_layer_popup(struct hikari_layer_popup *layer_popup,
     struct hikari_layer *parent,
     struct wlr_xdg_popup *popup);
 
-static void
+static bool
 init_popup_popup(struct hikari_layer_popup *layer_popup,
     struct hikari_layer_popup *parent,
     struct wlr_xdg_popup *popup);
@@ -329,11 +329,52 @@ popup_unconstrain(struct hikari_layer_popup *layer_popup)
 // Shared by init_layer_popup and init_popup_popup so both parent kinds set up
 // identically. Unconstraining is driven by commit_popup_handler on the popup's
 // initial commit, not from here.
-static void
+static bool
 init_popup(
     struct hikari_layer_popup *layer_popup, struct wlr_xdg_popup *wlr_popup)
 {
   layer_popup->popup = wlr_popup;
+
+  /* [COMMENT] Action purpose: Give the popup its own scene tree, parented to
+  the owning layer surface's tree (or to the parent popup's tree when nested).
+
+  This is REQUIRED and was previously missing, exactly as in xdg_view.c's
+  popup path. wlr_scene_layer_surface_v1_create() covers the layer surface and
+  its SUBSURFACES only; nothing in wlroots walks an xdg_surface's POPUPS (see
+  types/scene/xdg_shell.c). Without this every layer-shell popup -- a panel's
+  context menu, a bar's dropdown, waybar sub-menus -- had no scene node and
+  never rendered. layer_popup->parent is already populated by the callers
+  below, so it is safe to resolve here. */
+  struct wlr_scene_tree *parent_tree = NULL;
+
+  switch (layer_popup->parent.type) {
+    case HIKARI_LAYER_NODE_TYPE_LAYER: {
+      struct hikari_layer *parent_layer = layer_popup->parent.node.layer;
+      if (parent_layer->scene_layer_surface != NULL) {
+        parent_tree = parent_layer->scene_layer_surface->tree;
+      }
+      break;
+    }
+
+    case HIKARI_LAYER_NODE_TYPE_POPUP:
+      parent_tree = layer_popup->parent.node.popup->scene_tree;
+      break;
+  }
+
+  if (parent_tree == NULL) {
+    wlr_log(WLR_ERROR,
+        "init_popup: layer popup parent has no scene tree, popup will not be "
+        "shown");
+    return false;
+  }
+
+  layer_popup->scene_tree =
+      wlr_scene_xdg_surface_create(parent_tree, wlr_popup->base);
+
+  if (layer_popup->scene_tree == NULL) {
+    wlr_log(WLR_ERROR, "init_popup: could not create layer popup scene tree");
+    return false;
+  }
 
   layer_popup->commit.notify = commit_popup_handler;
   wl_signal_add(&wlr_popup->base->surface->events.commit, &layer_popup->commit);
@@ -354,6 +395,8 @@ init_popup(
   It is deferred to commit_popup_handler's initial_commit branch, because the
   popup surface is not yet initialized at new_popup time and wlroots asserts on
   that. See the full explanation there. */
+
+  return true;
 }
 
 static struct hikari_layer *
@@ -787,7 +830,12 @@ new_popup_popup_handler(struct wl_listener *listener, void *data)
     return;
   }
 
-  init_popup_popup(layer_popup_popup, layer_popup, wlr_popup);
+  /* [COMMENT] Action purpose: Free the tracking struct when scene-tree setup
+  fails; init_popup registers no listeners before that point, so a plain free
+  is the complete cleanup. */
+  if (!init_popup_popup(layer_popup_popup, layer_popup, wlr_popup)) {
+    hikari_free(layer_popup_popup);
+  }
 }
 
 // Function purpose: Handle a new popup requested directly by a layer
@@ -813,7 +861,12 @@ new_popup_handler(struct wl_listener *listener, void *data)
 
   struct wlr_xdg_popup *wlr_popup = data;
 
-  init_layer_popup(layer_popup, layer, wlr_popup);
+  /* [COMMENT] Action purpose: Free the tracking struct when scene-tree setup
+  fails; init_popup registers no listeners before that point, so a plain free
+  is the complete cleanup. */
+  if (!init_layer_popup(layer_popup, layer, wlr_popup)) {
+    hikari_free(layer_popup);
+  }
 }
 
 static void
@@ -876,7 +929,7 @@ surface_at(
   return surface;
 }
 
-static void
+static bool
 init_layer_popup(struct hikari_layer_popup *layer_popup,
     struct hikari_layer *parent,
     struct wlr_xdg_popup *wlr_popup)
@@ -884,10 +937,10 @@ init_layer_popup(struct hikari_layer_popup *layer_popup,
   layer_popup->parent.type = HIKARI_LAYER_NODE_TYPE_LAYER;
   layer_popup->parent.node.layer = parent;
 
-  init_popup(layer_popup, wlr_popup);
+  return init_popup(layer_popup, wlr_popup);
 }
 
-static void
+static bool
 init_popup_popup(struct hikari_layer_popup *layer_popup,
     struct hikari_layer_popup *parent,
     struct wlr_xdg_popup *wlr_popup)
@@ -895,7 +948,7 @@ init_popup_popup(struct hikari_layer_popup *layer_popup,
   layer_popup->parent.type = HIKARI_LAYER_NODE_TYPE_POPUP;
   layer_popup->parent.node.popup = parent;
 
-  init_popup(layer_popup, wlr_popup);
+  return init_popup(layer_popup, wlr_popup);
 }
 
 static void
