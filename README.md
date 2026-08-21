@@ -180,7 +180,7 @@ inputs {
 
 ## Building
 
-`hikari sakura` currently only works on FreeBSD. This is unlikely to change. When building directly from the repository, breaking changes might be encountered due to the project being in it's `first` stages it is currently considered `unstable`. 
+`hikari sakura` currently only works on FreeBSD. This is unlikely to change. When building directly from the repository, breaking changes might be encountered due to the project being in its `first` stages; it is currently considered `unstable`. 
 
 ### Dependencies
 

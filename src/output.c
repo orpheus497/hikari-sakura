@@ -65,7 +65,7 @@ static const struct wlr_buffer_impl bg_buffer_impl = {
   .end_data_ptr_access = bg_buffer_end_data_ptr_access,
 };
 
-static inline void
+static inline bool
 render_image_to_surface(cairo_surface_t *output,
     cairo_surface_t *image,
     enum hikari_background_fit fit)
@@ -73,7 +73,7 @@ render_image_to_surface(cairo_surface_t *output,
   cairo_t *cairo = cairo_create(output);
   if (cairo_surface_status(image) != CAIRO_STATUS_SUCCESS) {
     cairo_destroy(cairo);
-    return;
+    return false;
   }
 
   double output_width = cairo_image_surface_get_width(output);
@@ -85,6 +85,13 @@ render_image_to_surface(cairo_surface_t *output,
   cairo_fill(cairo);
 
   if (fit == HIKARI_BACKGROUND_STRETCH) {
+    // [COMMENT] Action purpose: A zero-dimension source image would divide
+    // by zero here, poisoning the cairo context's matrix; bail out instead
+    // of feeding cairo_scale an infinite/NaN factor.
+    if (width <= 0 || height <= 0) {
+      cairo_destroy(cairo);
+      return false;
+    }
     cairo_scale(cairo, output_width / width, output_height / height);
     cairo_set_source_surface(cairo, image, 0, 0);
   } else if (fit == HIKARI_BACKGROUND_CENTER) {
@@ -100,7 +107,11 @@ render_image_to_surface(cairo_surface_t *output,
   }
 
   cairo_paint(cairo);
+
+  cairo_status_t status = cairo_status(cairo);
   cairo_destroy(cairo);
+
+  return status == CAIRO_STATUS_SUCCESS;
 }
 
 // Function purpose: (Re)load an output's wallpaper from a PNG file and
@@ -151,7 +162,16 @@ hikari_output_load_background(struct hikari_output *output,
     goto done;
   }
 
-  render_image_to_surface(output_surface, image, background_fit);
+  bool rendered = render_image_to_surface(output_surface, image, background_fit);
+  if (!rendered || cairo_surface_status(output_surface) != CAIRO_STATUS_SUCCESS) {
+    fprintf(stderr,
+        "error: could not render background \"%s\" for output \"%s\"\n",
+        path,
+        output->wlr_output->name);
+    cairo_surface_destroy(image);
+    cairo_surface_destroy(output_surface);
+    goto done;
+  }
 
   unsigned char *data = cairo_image_surface_get_data(output_surface);
   int stride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, output_width);
