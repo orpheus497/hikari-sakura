@@ -520,35 +520,51 @@ int main(void) {
                    "\"color\":\"%s\",\"align\":\"left\"},",
                    pywal_colors[8]);
 
-        /* Spacer (pushes right-side items toward the edge) */
-        printf("{\"full_text\":\"\",\"separator\":false,\"min_width\":400},");
-
+        /* ── Status group: right-aligned ────────────────────────────────
+         *
+         * The fixed-width spacer that used to sit here ({"min_width":400}) is
+         * gone. It carried no "align" field, so it -- and every block after it
+         * -- fell into the LEFT run, and this group only *looked* centred
+         * because 400px of padding happened to land it near the middle at
+         * 1920px wide. It drifted with the output width and with whichever
+         * left-hand blocks were present. The bar now has a real centre run
+         * (hikari_bar_refresh, src/bar.c) which the clock uses instead.
+         *
+         * These are emitted in the order they should read left-to-right on
+         * screen: hikari_bar_refresh() lays the right run out from its computed
+         * origin and advances rightward in emission order, so this sequence is
+         * the displayed sequence, not its reverse. */
 
         /* Network */
-        printf("{\"full_text\":\"  %s \",\"color\":\"%s\"},",
+        printf("{\"full_text\":\"  %s \",\"color\":\"%s\","
+               "\"align\":\"right\"},",
                s.net_status, pywal_colors[6]);
-
-        /* Volume -- omitted when no sink is readable */
-        if (s.volume >= 0) {
-            printf("{\"full_text\":\" 󰖀 %d%% \",\"color\":\"%s\"},",
-                   s.volume, pywal_colors[9]);
-        }
 
         /* Backlight -- omitted when no backlight tool is available */
         if (s.backlight >= 0) {
-            printf("{\"full_text\":\" 󰃠 %d%% \",\"color\":\"%s\"},",
+            printf("{\"full_text\":\" 󰃠 %d%% \",\"color\":\"%s\","
+                   "\"align\":\"right\"},",
                    s.backlight, pywal_colors[10]);
+        }
+
+        /* Volume -- omitted when no sink is readable */
+        if (s.volume >= 0) {
+            printf("{\"full_text\":\" 󰖀 %d%% \",\"color\":\"%s\","
+                   "\"align\":\"right\"},",
+                   s.volume, pywal_colors[9]);
         }
 
         /* Battery -- omitted when no battery is present */
         if (s.bat_life >= 0) {
-            printf("{\"full_text\":\" 󰁹 %d%% \",\"color\":\"%s\"},",
+            printf("{\"full_text\":\" 󰁹 %d%% \",\"color\":\"%s\","
+                   "\"align\":\"right\"},",
                    s.bat_life, pywal_colors[8]);
         }
 
-        /* Clock (no trailing comma — last block in the array) */
+        /* Clock and date -- centre run, emitted last so it carries the
+         * array's closing block with no trailing comma. */
         printf("{\"full_text\":\"  %s \","
-               "\"color\":\"%s\",\"align\":\"right\"}",
+               "\"color\":\"%s\",\"align\":\"center\"}",
                s.full_time_str, pywal_colors[7]);
 
         printf("],\n");

@@ -45,6 +45,19 @@ void
 hikari_indicator_position(
     struct hikari_indicator *indicator, struct hikari_view *view);
 
+/* ##Function purpose: Show the whole indicator overlay (four bars plus the
+view's frame) and position it. Visibility is owned here, not by
+hikari_indicator_position(). */
+void
+hikari_indicator_show(
+    struct hikari_indicator *indicator, struct hikari_view *view);
+
+/* ##Function purpose: Hide the whole indicator overlay. A NULL view still
+hides the four bars, which are global to the server. */
+void
+hikari_indicator_hide(
+    struct hikari_indicator *indicator, struct hikari_view *view);
+
 #define UPDATE(name)                                                           \
   static inline void hikari_indicator_update_##name(                           \
       struct hikari_indicator *indicator,                                      \

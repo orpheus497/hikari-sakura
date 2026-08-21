@@ -1,3 +1,134 @@
+## [2026-08-21] Phase 60: Execution — Top Bar Centre Lane and Alpha-Capable Colours (Issue 1 of Phase 58, Parts A + B option 3)
+
+*(Timestamp: date from session context; time-of-day omitted, IDE-tooling-only directive. No build run.)*
+
+**Context:** User approved Part A (layout) and Part B with **option 3** (general alpha support across the colour system), and specified the target layout: system monitors left (unchanged), clock/date centred, and — left to right — network, brightness, volume, battery on the right.
+
+### Part B — how alpha is expressed, and why not as an integer
+
+Colours are parsed with `ucl_object_toint_safe()`, i.e. as UCL **integers**. That rules out the obvious 8-vs-6-digit magnitude test: `0x0080FFCC` (RRGGBBAA, red = 0) is numerically smaller than `0xFFFFFF`, so a magnitude heuristic would silently misread it as the 6-digit colour `0x80FFCC` and make it opaque. Any colour whose red channel is zero would be corrupted.
+
+**Resolution:** integers keep their existing meaning (`0xRRGGBB`, always opaque), and alpha is expressed with a **quoted string** — `"#RRGGBB"` or `"#RRGGBBAA"`. The digit count is then explicit and the two forms cannot collide. Every existing config keeps its exact appearance, which matters because option 3 touches the colour path used by borders, indicator bars, indicator frames and the output background.
+
+* **`include/hikari/color.h`:** kept `hikari_color_convert()` (RGB, opaque) and added `hikari_color_convert_rgba()` for the 8-digit form.
+* **`src/configuration.c`:** added a shared `parse_color(obj, key, dst)` accepting integer or string, with hex-digit and length validation and a specific diagnostic per failure. Replaced **nine** near-identical `ucl_object_toint_safe` + `hikari_color_convert` blocks with calls to it — a large duplication removal on top of the feature.
+* **Consumer audit (all already alpha-correct, no changes needed):** `indicator_bar.c:133-134` passes `background[3]` to `cairo_set_source_rgba` and `:137-142` does the same for the border stroke; `border.c` and `indicator_frame.c` use `wlr_scene_rect_set_color()`, which takes float RGBA and blends natively. So enabling alpha in the parser makes those work without touching them.
+* **`src/bar.c` › `parse_hex_color()`:** extended to accept `#rrggbbaa` as well as `#rrggbb`, so swaybar-protocol block colours from the helper can carry alpha too.
+
+### Part B — the bar's own colour (an addition beyond option 3)
+
+Option 3 alone would *not* have delivered the requested result. The bar painted itself from `hikari_configuration->clear` — the **output background** colour — so making the bar translucent would also have faded the desktop behind every window. A dedicated colour was therefore added:
+
+* **`include/hikari/configuration.h`:** new `float bar[4]`.
+* **`src/configuration.c`:** new `bar` colourscheme key; default `hikari_color_convert_rgba(configuration->bar, 0x282C34E6)` — the existing slate at ~90% opacity.
+* **`src/bar.c`:** paints from `hikari_configuration->bar` and passes `bg[3]` instead of the hardcoded `1.0`. Also switches to `CAIRO_OPERATOR_SOURCE` for that one `cairo_paint()`: the surface starts fully transparent, and blending a translucent colour onto transparent black with the default `OVER` operator would not produce the intended alpha in the destination buffer. Restored to `OVER` immediately afterwards so text still composites normally.
+
+### Part A — the centre lane
+
+* **`include/hikari/bar.h`:** replaced `bool align_right` with `enum hikari_bar_align { LEFT, CENTER, RIGHT }`.
+* **`src/bar.c` › `parse_line()`:** maps the JSON `align` string three ways; unrecognised or absent still falls back to left (swaybar default). Previously it tested only for `"right"`, which is exactly why `"center"` was inexpressible.
+* **`src/bar.c` › `hikari_bar_refresh()`:** the measure pre-pass now totals the centre run as well as the right run, and a third origin `center_x = (width - center_width) / 2` sits alongside `left_x`/`right_x`. The layout loop dispatches on the enum, each run advancing its own cursor. The centre run is anchored to the true output midpoint, so it no longer depends on how wide the left run happens to be.
+* **`src/bar.c` › `build_cache_key()`:** serialises `(int)block->align` so a pure alignment change still invalidates the repaint cache.
+* **`src/topbar.c`:** deleted the 400px spacer; clock/date → `"align":"center"` and moved to last (so it carries the array's closing block with no trailing comma); network, backlight, volume, battery → `"align":"right"`, emitted in that order because the right run lays out in emission order flowing rightward. Brightness and volume were additionally swapped to match the requested reading order.
+
+### Tooling note worth recording
+
+Two format strings in `src/topbar.c` (the network and clock `full_text` values) embed Nerd Font private-use glyphs that do not round-trip through the editing tool — an `Edit` whose `old_string` included them failed to match, while the backlight/volume/battery glyphs matched fine. Worked around by anchoring those two matches *after* the glyph (starting the match at `%s \",\"color\"...`), leaving the glyph bytes untouched. Anyone editing those lines later should expect the same and use the same technique rather than retyping the icons.
+
+### Documentation
+
+`etc/hikari/hikari.conf` and `share/man/man1/hikari.md` both document the new `bar` key and the string colour form, including the explicit warning that alpha cannot be written as an integer and why.
+
+### Verification
+
+Not compiled and not run. Each edit re-read after applying; the IDE surfaced five stale `align_right` references mid-refactor (cache key ×2, measure pass, layout loop) which were fixed, and reports no diagnostics now. **Expected after the user's build:** system monitors unchanged on the left, clock/date centred, network/brightness/volume/battery right-aligned in that order, and the bar ~90% opaque.
+
+---
+
+## [2026-08-21] Phase 59: Execution — Indicator Overlay Gated on the Logo Key (Issue 2 of Phase 58)
+
+*(Timestamp: date from session context; time-of-day omitted, IDE-tooling-only directive. No build was run — that remains the user's step.)*
+
+**Context:** User approved starting with the easier of the two Phase 58 issues. This implements the indicator gating; the top-bar work (Phase 58 Issue 1) remains planned only, and its plan is restated in `PLANS.md` item -7.
+
+### The fix, in one sentence
+
+Visibility of the indicator overlay is now owned by exactly two functions driven by the Logo key, instead of being an unconditional side effect of a geometry function.
+
+### Changes
+
+* **`include/hikari/indicator_bar.h`:** added `bool visible` to `struct hikari_indicator_bar` (plus `<stdbool.h>`), and declared `hikari_indicator_bar_show()` / `hikari_indicator_bar_hide()`.
+* **`src/indicator_bar.c`:**
+  * `hikari_indicator_bar_init()` starts a bar hidden (`visible = false`).
+  * New `hikari_indicator_bar_show()` / `_hide()` record the intent and apply it to the scene node when one exists.
+  * `hikari_indicator_bar_update()` now re-applies `visible` to the node it just created. **This is the non-obvious half of the fix:** that function destroys and recreates the scene buffer on every content change and `wlr_scene_buffer_create()` returns an *enabled* node, so without this a window retitling itself — or any keystroke during mark/group/sheet assignment — would flash a hidden indicator back on. The flag is deliberately held outside the node so it survives the recreate.
+* **`src/indicator.c`:**
+  * `hikari_indicator_position()` is now **geometry only**. Its trailing unconditional `hikari_indicator_frame_show()` is removed — that single line is why every reposition (move, resize, tile, commit, focus change) forced the frame visible and nothing ever took it down.
+  * New `hikari_indicator_show(indicator, view)` positions, then enables all four bars and the view's frame. New `hikari_indicator_hide(indicator, view)` is the inverse. `show()` positions *before* enabling, so a recreated bar cannot appear at (0,0) first.
+  * `hikari_indicator_update()` now re-asserts the current Logo-key state (`hikari_server_is_indicating()`) rather than assuming it, so a content update can never by itself put the overlay on screen.
+* **`include/hikari/indicator.h`:** declared the two new functions.
+* **`src/normal_mode.c` › `modifiers_handler()`:** on `mod_changed`, dispatches `hikari_indicator_show()` when the Logo key is down and `hikari_indicator_hide()` when it is up. Previously both transitions called `hikari_indicator_damage()` — which is just `hikari_indicator_position()` — so releasing the key showed the overlay exactly as much as pressing it did.
+
+### Design notes
+
+* `show()` tolerates a NULL view (returns early — nothing to indicate); `hide()` tolerates one by hiding the four bars anyway, since the bars are global to the server while the frame belongs to the view. That NULL case is real: the Logo key can be released with no focused view.
+* The gate is re-asserted in `hikari_indicator_update()` as well as driven from `modifiers_handler()`, deliberately. `update()` fires on focus changes, which can happen *while* the key is held (window cycling), and the incoming view's frame must then be shown without waiting for another modifier event.
+* Stale `visible` after a `hikari_indicator_fini()` is self-correcting, because `update()` re-asserts the gate on every call.
+* `hikari_indicator_damage()` (the inline wrapper in `indicator.h`) is left as an alias of `hikari_indicator_position()` and is now genuinely damage/geometry only, matching its name for the first time.
+
+### Verification
+
+Not compiled and not run — IDE-tooling-only directive. Each edit was re-read after applying; the IDE reported no diagnostics for any of the five files. **Expected behaviour after the user's build:** the title/sheet/group/mark boxes and the coloured frame appear only while the Logo/Super key is held, and disappear on release.
+
+---
+
+## [2026-08-21] Phase 58: Top-Bar Layout/Opacity and Always-On Indicators — Investigation Only, No Code Changes
+
+*(Timestamp: date from session context; time-of-day omitted, IDE-tooling-only directive. Investigation performed with the Read tool only; no shell, no Grep/Glob available, so search was by direct file reads. User directive: "investigate analyse and report do not make any edits". Only this `.devdocs/` process documentation was written — no product code was modified.)*
+
+**Context:** Phase 57's fix is confirmed working by the user ("I can now close a terminal"). Two cosmetic defects reported, with screenshots: (1) clock/date occupies the right slot where WiFi/brightness/volume/battery belong, clock/date should be centred, and the bar should be translucent rather than solid slate; (2) the per-window corner indicator boxes are displayed permanently instead of only while the Logo/Super key is held.
+
+### Issue 1 — top bar. Three independent defects.
+
+**1a. The renderer has no centre lane.** `struct hikari_bar_block` (`include/hikari/bar.h:23-29`) carries only `bool align_right`. `hikari_bar_refresh()` (`src/bar.c:710-767`) computes exactly two origins — `left_x = HIKARI_BAR_PADDING` (`:722`) and `right_x = width - HIKARI_BAR_PADDING - right_width` (`:723`). **A centre position is not representable in the current data model.**
+
+**1b. The apparent "centre" group is an accident of a fixed-width spacer.** `src/topbar.c:524` emits `{"full_text":"","separator":false,"min_width":400}` with **no `align` field**, and `parse_line()` (`src/bar.c:252-254`) treats anything that is not exactly `"right"` as left-aligned. The network/volume/backlight/battery blocks (`src/topbar.c:528-547`) likewise carry no `align`, so they are simply the **left** lane continuing after a 400px gap. They only *appear* centred at this output width with this exact set of preceding left blocks; the position is not anchored to the bar centre and would drift on a different width or when the NVIDIA GPU blocks are suppressed.
+
+**1c. The clock is the only right-aligned block.** `src/topbar.c:550-552` emits it with `"align":"right"` — which is precisely the slot the user wants for WiFi/brightness/volume/battery.
+
+**Consequence for a fix (both files must change together):** add a genuine centre lane to `src/bar.c` (parse `"align":"center"`, measure that run in the same pre-pass that measures the right run, set `center_x = (width - center_width) / 2`); then in `src/topbar.c` mark the clock `"align":"center"`, mark network/volume/backlight/battery `"align":"right"`, and delete the 400px spacer (which becomes both unnecessary and actively harmful, since it would still pad the left lane). **Ordering caveat:** the right lane lays out in *emission order flowing rightward* from `right_x` (`src/bar.c:743-745`), so right-lane blocks must be emitted in the desired left-to-right visual order, not reversed.
+
+**1d. Opacity — three independent hardcodes, all of which must change.**
+* **`hikari_color_convert()` (`include/hikari/color.h:6-13`) sets `dst[3] = 1.0` unconditionally.** Configuration colours are parsed as 6-digit `0xRRGGBB` with no alpha channel, so **no configured colour anywhere in hikari can currently be translucent.** This is the deepest blocker.
+* **`src/bar.c:702-704` discards the alpha even if it existed:** `cairo_set_source_rgba(cairo, bg[0], bg[1], bg[2], 1.0)` — literal `1.0`, not `bg[3]`.
+* **The bar has no colour of its own.** It reuses `hikari_configuration->clear`, whose default is `0x282C34` (`src/configuration.c:1878`) — exactly the dark slate observed. `clear` is semantically the *output background* colour; a dedicated bar background colour (with alpha) does not exist in `struct hikari_configuration` (`include/hikari/configuration.h:18-47`).
+
+**Verified achievable:** the rendering pipeline carries alpha end to end — the cairo surface is `CAIRO_FORMAT_ARGB32` (`src/bar.c:688`) and the wlr_buffer is `DRM_FORMAT_ARGB8888` (`src/server.c:2252`). Both use premultiplied alpha, so they agree with no conversion. Translucency will composite correctly once the three hardcodes above are addressed. Block text is drawn opaque (`src/bar.c:735-739`), which is the desired result over a translucent background.
+
+### Issue 2 — indicators never hide. Root cause: a render-loop gate that was lost in the wlr_scene port.
+
+The indicator bars are scene nodes **created enabled and never disabled**, and the indicator frame is **shown on every focus change**. Neither is gated on `hikari_server_is_indicating()`.
+
+Chain:
+1. `hikari_workspace_focus_view()` (`src/workspace.c:451`) calls `hikari_indicator_update()` **unconditionally** on every focus change.
+2. `hikari_indicator_update()` (`src/indicator.c:49-72`) refreshes all four bars, then calls `hikari_indicator_position()`.
+3. `hikari_indicator_position()` (`src/indicator.c:146-162`) ends with an **unconditional** `hikari_indicator_frame_show()`.
+4. `hikari_indicator_bar_update()` (`src/indicator_bar.c:164-165`) creates the node with `wlr_scene_buffer_create()`, which wlroots creates **enabled**. There is no `wlr_scene_node_set_enabled(..., false)` anywhere in `src/indicator_bar.c`, and `struct hikari_indicator_bar` exposes **no show/hide API at all** — only init/fini/position/update/set_color.
+
+So a focused view keeps its bars and frame visible indefinitely. The mark bar is absent in the screenshots only because empty text short-circuits node creation (`src/indicator_bar.c:113-115`), which is why three boxes appear rather than four.
+
+**The gate signal exists and is correct.** `update_mod_state()` (`src/keyboard.c:14-27`) tracks `WLR_MODIFIER_LOGO` — literally the Logo/Super key — into `mod_pressed`, and maintains `mod_released`/`mod_changed`; `hikari_server_is_indicating()` (`include/hikari/server.h:170-174`) returns `mod_pressed`. **Nothing consumes it to hide anything.** `modifiers_handler()` (`src/normal_mode.c:151-180`) reacts to `mod_changed` by calling `hikari_indicator_damage()` — which is `hikari_indicator_position()` — i.e. it **shows** the frame on release just as much as on press. There is no hide branch anywhere in that path. The only hide sites are the outgoing focus view (`src/workspace.c:416`), `hikari_view_hide()`, and `hikari_indicator_fini_for_view()`.
+
+**Architectural note:** upstream hikari drew indicators inside the render loop, gated on `is_indicating`, so no explicit hide was ever needed. Porting to `wlr_scene` converted that implicit per-frame gate into persistent scene nodes, and the equivalent explicit enable/disable was never added. This is the same shape of defect as Phase 55: `hikari_indicator_position()` is nominally a geometry function that also carries a visibility side effect, so callers cannot reposition without also showing.
+
+**Fix shape (not implemented, pending approval):** add show/hide to `hikari_indicator_bar` (enable/disable the scene node) plus a `hikari_indicator_show/hide` fanning out to all four; separate the `hikari_indicator_frame_show()` side effect out of `hikari_indicator_position()`; drive show/hide from `modifiers_handler()` on `mod_changed` (`mod_pressed` → show, else hide). **Subtlety that must be handled:** `hikari_indicator_bar_update()` destroys and recreates the scene buffer whenever content changes, and the recreated node defaults to enabled — so a title change while the mod key is up would flash the bar back on unless the bar records its intended visibility and re-applies it after every recreate.
+
+### Status
+
+Investigation only. No product code modified, per the user's directive. Fix shapes for both issues recorded above and in `TODOS.md`, awaiting approval.
+
+---
+
 ## [2026-08-21] Phase 57: ROOT CAUSE FOUND AND FIXED — wlroots asserts toplevel listeners are gone before hikari removes them
 
 *(Timestamp: date from session context. Live-system inspection was performed at the user's explicit request ("is there anything you can detect"), read-only; code edits remain IDE-tooling-only.)*

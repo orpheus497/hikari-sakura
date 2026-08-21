@@ -918,7 +918,20 @@ Colorschemes
 **hikari** uses color to indicate different states of views and their indicator
 bars. By specifying a *colorscheme* section the user can control these colors. A
 colorscheme is a number of properties that can be changed individually. Colors
-are specified using hexadecimal RGB values (e.g. 0xE6DB74).
+are specified using hexadecimal RGB values (e.g. 0xE6DB74), or as a quoted
+string in either *"#RRGGBB"* or *"#RRGGBBAA"* form. The string form is the only
+way to specify an alpha channel:
+
+```
+active = 0xFFFFFF      # integer, always fully opaque
+active = "#FFFFFF"     # identical, written explicitly
+active = "#FFFFFF80"   # 50% alpha
+```
+
+Alpha deliberately cannot be written as an integer. *0x0080FFCC* and *0x80FFCC*
+parse to values that cannot be told apart, so guessing 8-versus-6 digits would
+silently misread any color whose red channel is zero. The quoted form makes the
+digit count explicit, and every existing integer setting keeps its exact meaning.
 
 * **active**
 
@@ -927,6 +940,12 @@ are specified using hexadecimal RGB values (e.g. 0xE6DB74).
 * **background**
 
   Specifies the background color. This will be obscured by a wallpaper
+
+* **bar**
+
+  Background color of the native top bar. Independent of **background**, so the
+  bar can be tinted or made translucent without altering the desktop behind
+  every window. Defaults to *"#282C34E6"* (the desktop slate at ~90% opacity).
 
 * **conflict**
 
@@ -965,6 +984,7 @@ These are the default settings for the **hikari** colorscheme.
 ```
 colorscheme {
   background = 0x282C34
+  bar        = "#282C34E6"
   foreground = 0x000000
   selected   = 0xF5E094
   grouped    = 0xFDAF53

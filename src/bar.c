@@ -71,25 +71,33 @@ parse_hex_color(const char *text, float color[static 4])
     return false;
   }
 
-  if (strlen(text) != 7) {
+  /* [COMMENT] Action purpose: Accept both "#rrggbb" and "#rrggbbaa", matching
+  the alpha-capable colour form the compositor's own colourscheme now takes. A
+  block without an alpha component stays fully opaque. */
+  size_t len = strlen(text);
+  if (len != 7 && len != 9) {
     return false;
   }
 
-  for (int i = 1; i < 7; i++) {
+  for (size_t i = 1; i < len; i++) {
     if (!isxdigit((unsigned char)text[i])) {
       return false;
     }
   }
 
-  unsigned int r, g, b;
-  if (sscanf(text + 1, "%2x%2x%2x", &r, &g, &b) != 3) {
+  unsigned int r, g, b, a = 0xff;
+  if (len == 9) {
+    if (sscanf(text + 1, "%2x%2x%2x%2x", &r, &g, &b, &a) != 4) {
+      return false;
+    }
+  } else if (sscanf(text + 1, "%2x%2x%2x", &r, &g, &b) != 3) {
     return false;
   }
 
   color[0] = (float)r / 255.0f;
   color[1] = (float)g / 255.0f;
   color[2] = (float)b / 255.0f;
-  color[3] = 1.0f;
+  color[3] = (float)a / 255.0f;
 
   return true;
 }
@@ -249,8 +257,19 @@ parse_line(struct hikari_topbar_source *source, const char *line)
     block->has_color = parse_hex_color(color, block->color);
     hikari_free(color);
 
+    /* [COMMENT] Action purpose: Map the alignment string onto the three-way
+    lane. Anything unrecognised (including absent) falls back to left, matching
+    the swaybar default. This previously tested only for "right", so "center"
+    silently became left -- which is why the clock could be right-aligned but
+    nothing could ever be centred. */
     char *align = json_string_field(obj, end, "align");
-    block->align_right = align != NULL && strcmp(align, "right") == 0;
+    if (align != NULL && strcmp(align, "right") == 0) {
+      block->align = HIKARI_BAR_ALIGN_RIGHT;
+    } else if (align != NULL && strcmp(align, "center") == 0) {
+      block->align = HIKARI_BAR_ALIGN_CENTER;
+    } else {
+      block->align = HIKARI_BAR_ALIGN_LEFT;
+    }
     hikari_free(align);
 
     if (block->full_text != NULL) {
@@ -278,7 +297,7 @@ build_cache_key(struct hikari_topbar_source *source)
     const char *text = block->full_text != NULL ? block->full_text : "";
 
     int needed = snprintf(NULL, 0, "\x1f%s\x1f%d\x1f%d\x1f%.6f,%.6f,%.6f,%.6f",
-        text, block->min_width, block->align_right,
+        text, block->min_width, (int)block->align,
         block->color[0], block->color[1], block->color[2], block->color[3]);
     if (needed < 0) {
       continue;
@@ -294,7 +313,7 @@ build_cache_key(struct hikari_topbar_source *source)
 
     len += (size_t)snprintf(key + len, cap - len,
         "\x1f%s\x1f%d\x1f%d\x1f%.6f,%.6f,%.6f,%.6f",
-        text, block->min_width, block->align_right,
+        text, block->min_width, (int)block->align,
         block->color[0], block->color[1], block->color[2], block->color[3]);
   }
 
@@ -697,29 +716,58 @@ hikari_bar_refresh(struct hikari_bar *bar)
   PangoLayout *layout = pango_cairo_create_layout(cairo);
   pango_layout_set_font_description(layout, hikari_configuration->font.desc);
 
-  /* [COMMENT] Action purpose: Paint the bar background from the configured
-  clear colour so it matches the compositor's own palette. */
-  float *bg = hikari_configuration->clear;
-  cairo_set_source_rgba(cairo, bg[0], bg[1], bg[2], 1.0);
-  cairo_paint(cairo);
+  /* [COMMENT] Action purpose: Paint the bar background from its own configured
+  colour, honouring alpha. Two things changed here: the colour is no longer
+  borrowed from `clear` (the output background), so tinting or fading the bar no
+  longer alters the desktop behind every window; and the alpha component is
+  actually used instead of being overridden with a hardcoded 1.0, which is what
+  made the bar unconditionally opaque no matter what was configured.
 
-  /* [COMMENT] Action purpose: Two-pass layout. Right-aligned blocks are
-  measured first so they can be laid out from the right edge inward, while
-  left-aligned blocks flow from the left. This reproduces swaybar's behaviour
-  without needing the helper's spacer block to be pixel-accurate. */
+  cairo_paint() with alpha < 1 writes a premultiplied translucent surface, and
+  the buffer this ends up in is DRM_FORMAT_ARGB8888 (also premultiplied), so the
+  two agree and wlr_scene blends the bar over whatever is beneath it. See
+  DECISIONS_LOG Phase 60. */
+  float *bg = hikari_configuration->bar;
+  cairo_set_source_rgba(cairo, bg[0], bg[1], bg[2], bg[3]);
+
+  /* [COMMENT] Action purpose: CAIRO_OPERATOR_SOURCE replaces the destination
+  rather than blending onto it. The surface is freshly created and therefore
+  already transparent, but painting a translucent colour with the default OVER
+  operator would still be a no-op-ish blend against transparent black; SOURCE
+  makes the resulting buffer carry exactly the requested alpha. */
+  cairo_set_operator(cairo, CAIRO_OPERATOR_SOURCE);
+  cairo_paint(cairo);
+  cairo_set_operator(cairo, CAIRO_OPERATOR_OVER);
+
+  /* [COMMENT] Action purpose: Two-pass layout. The centred and right-aligned
+  runs are measured first so each can be given a starting origin that depends on
+  its own total width; the left run needs no measurement because it simply flows
+  from the left edge. The centre run is anchored to the true midpoint of the
+  output, which is what makes it stay centred regardless of how wide the left
+  run happens to be -- the previous fixed-width spacer could not do that. */
+  int center_width = 0;
   int right_width = 0;
   for (int i = 0; i < source->nr_blocks; i++) {
     struct hikari_bar_block *block = &source->blocks[i];
-    if (!block->align_right) {
+
+    if (block->align == HIKARI_BAR_ALIGN_LEFT) {
       continue;
     }
+
     pango_layout_set_text(layout, block->full_text, -1);
     int w, h;
     pango_layout_get_pixel_size(layout, &w, &h);
-    right_width += w > block->min_width ? w : block->min_width;
+    int advance = w > block->min_width ? w : block->min_width;
+
+    if (block->align == HIKARI_BAR_ALIGN_CENTER) {
+      center_width += advance;
+    } else {
+      right_width += advance;
+    }
   }
 
   int left_x = HIKARI_BAR_PADDING;
+  int center_x = (width - center_width) / 2;
   int right_x = width - HIKARI_BAR_PADDING - right_width;
 
   for (int i = 0; i < source->nr_blocks; i++) {
@@ -739,13 +787,26 @@ hikari_bar_refresh(struct hikari_bar *bar)
       cairo_set_source_rgba(cairo, fg[0], fg[1], fg[2], 1.0);
     }
 
+    /* [COMMENT] Action purpose: Each run advances its own cursor, so blocks
+    within a run keep their emission order left-to-right regardless of which
+    run they belong to. */
     int x;
-    if (block->align_right) {
-      x = right_x;
-      right_x += advance;
-    } else {
-      x = left_x;
-      left_x += advance;
+    switch (block->align) {
+      case HIKARI_BAR_ALIGN_CENTER:
+        x = center_x;
+        center_x += advance;
+        break;
+
+      case HIKARI_BAR_ALIGN_RIGHT:
+        x = right_x;
+        right_x += advance;
+        break;
+
+      case HIKARI_BAR_ALIGN_LEFT:
+      default:
+        x = left_x;
+        left_x += advance;
+        break;
     }
 
     /* [COMMENT] Action purpose: Skip a block whose run starts outside the

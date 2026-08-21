@@ -33,7 +33,36 @@ hikari_indicator_bar_init(struct hikari_indicator_bar *indicator_bar,
   indicator_bar->offset = offset;
   indicator_bar->cache_text = NULL;
 
+  /* [COMMENT] Action purpose: Indicators are only shown while the Logo key is
+  held, so a bar starts hidden. Without this the very first content update
+  would leave it enabled permanently. */
+  indicator_bar->visible = false;
+
   hikari_indicator_bar_set_color(indicator_bar, color);
+}
+
+// Function purpose: Record that this bar should be visible and apply that to
+// the scene node when one exists. The flag is authoritative and outlives the
+// node, which hikari_indicator_bar_update() destroys and recreates freely.
+void
+hikari_indicator_bar_show(struct hikari_indicator_bar *indicator_bar)
+{
+  indicator_bar->visible = true;
+
+  if (indicator_bar->scene_buffer != NULL) {
+    wlr_scene_node_set_enabled(&indicator_bar->scene_buffer->node, true);
+  }
+}
+
+// Function purpose: Inverse of hikari_indicator_bar_show.
+void
+hikari_indicator_bar_hide(struct hikari_indicator_bar *indicator_bar)
+{
+  indicator_bar->visible = false;
+
+  if (indicator_bar->scene_buffer != NULL) {
+    wlr_scene_node_set_enabled(&indicator_bar->scene_buffer->node, false);
+  }
 }
 
 void
@@ -164,6 +193,16 @@ hikari_indicator_bar_update(struct hikari_indicator_bar *indicator_bar,
     indicator_bar->scene_buffer =
         wlr_scene_buffer_create(&hikari_server.scene->tree, buffer);
     wlr_buffer_drop(buffer);
+
+    /* [COMMENT] Action purpose: Re-apply the recorded visibility to the newly
+    created node. wlr_scene_buffer_create() returns an ENABLED node, so without
+    this every content change (a window retitling itself, a mark/group/sheet
+    keystroke) would make a hidden indicator reappear until something else
+    hid it again. See DECISIONS_LOG Phase 59. */
+    if (indicator_bar->scene_buffer != NULL) {
+      wlr_scene_node_set_enabled(
+          &indicator_bar->scene_buffer->node, indicator_bar->visible);
+    }
 
     // [COMMENT] Action purpose: Record what was actually rendered so the next
     // call can short-circuit if nothing changed. Only done on success -- a

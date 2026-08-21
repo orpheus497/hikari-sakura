@@ -166,9 +166,23 @@ modifiers_handler(struct hikari_keyboard *keyboard)
   }
 
   if (hikari_server.keyboard_state.mod_changed) {
-    if (focus_view != NULL) {
-      hikari_group_damage(focus_view->group);
-      hikari_indicator_damage(&hikari_server.indicator, focus_view);
+    /* [COMMENT] Action purpose: The Logo key going down or up is what drives
+    the indicator overlay on and off. This previously called
+    hikari_indicator_damage() for both transitions -- and that is just
+    hikari_indicator_position(), which used to force the frame visible -- so
+    releasing the key showed the overlay exactly as much as pressing it did,
+    and nothing ever took it back down. See DECISIONS_LOG Phase 59. */
+    if (hikari_server_is_indicating()) {
+      if (focus_view != NULL) {
+        hikari_group_damage(focus_view->group);
+      }
+      hikari_indicator_show(&hikari_server.indicator, focus_view);
+    } else {
+      hikari_indicator_hide(&hikari_server.indicator, focus_view);
+
+      if (focus_view != NULL) {
+        hikari_group_damage(focus_view->group);
+      }
     }
 #ifndef NDEBUG
     dump_debug(&hikari_server);

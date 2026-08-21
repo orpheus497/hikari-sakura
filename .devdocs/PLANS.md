@@ -4,6 +4,26 @@
 
 ## Implementations to be Fully Implemented
 
+-7. **Phase 58 Issue 1 — Top bar: centre lane + real opacity (PLANNED, awaiting a decision on the config question; see DECISIONS_LOG Phase 58 for the analysis).** Issue 2 of Phase 58 is done (Phase 59). This is the remaining half.
+
+   **Part A — layout (clock/date to centre, WiFi/brightness/volume/battery to right).** Both files must change together; changing only `topbar.c` cannot work, because centre is not representable today.
+   1. `include/hikari/bar.h`: replace `bool align_right` on `struct hikari_bar_block` with a three-valued alignment (`enum hikari_bar_align { LEFT, CENTER, RIGHT }`), so the parser can express centre at all.
+   2. `src/bar.c` › `parse_line()` (`:252-254`): map the JSON `"align"` string to that enum — currently anything not exactly `"right"` silently becomes left, which is why the unaligned spacer and the WiFi group ended up in the left lane.
+   3. `src/bar.c` › `hikari_bar_refresh()`: extend the existing measure pre-pass (`:710-720`) to total the **centre** run as well as the right run, then add a third origin `center_x = (width - center_width) / 2` alongside `left_x`/`right_x` (`:722-723`), and dispatch on the enum in the layout loop (`:742-749`).
+   4. `src/topbar.c`: mark the clock `"align":"center"` (`:550-552`); mark network, backlight, volume and battery `"align":"right"` (`:528-547`); **delete the 400px spacer** (`:524`) — it becomes both unnecessary and harmful, since it would still pad the left lane.
+   5. **Ordering caveat:** the right lane lays out in emission order flowing rightward from `right_x` (`src/bar.c:743-745`), so those four blocks must be emitted in the desired left-to-right visual order, not reversed.
+
+   **Part B — opacity.** Three independent hardcodes, and the deepest one is global to the whole configuration system. **This is where a user decision is needed** (see below).
+   6. `include/hikari/color.h` › `hikari_color_convert()` sets `dst[3] = 1.0` unconditionally, and config colours are 6-digit `0xRRGGBB`. **No configured colour anywhere in hikari can currently be translucent.**
+   7. `src/bar.c:703` passes a literal `1.0` rather than `bg[3]`, discarding any alpha even if it existed.
+   8. The bar has no colour of its own — it reuses `hikari_configuration->clear` (default `0x282C34`, `src/configuration.c:1878`), which is semantically the *output background* colour and is the slate the user is seeing.
+   9. Confirmed achievable: `CAIRO_FORMAT_ARGB32` (`src/bar.c:688`) → `DRM_FORMAT_ARGB8888` (`src/server.c:2252`), both premultiplied, so they agree with no conversion. Block text is drawn opaque, which is the desired result over a translucent background.
+
+   **Decision required before implementing Part B — three options, in increasing scope:**
+   * **(i) Minimal:** hardcode a bar alpha constant in `src/bar.c` (e.g. `0.85`) and keep using `clear` for the RGB. One-line change, no config surface, not user-tunable, and the colour stays the slate.
+   * **(ii) Scoped (recommended):** add a dedicated `bar` colour + `bar_opacity` (0.0-1.0) to `struct hikari_configuration` and the UCL parser, used only by the top bar. Leaves `hikari_color_convert()` and every other colour untouched, so there is no risk to borders/indicators.
+   * **(iii) General:** extend `hikari_color_convert()` and the config parser to accept 8-digit `0xRRGGBBAA` everywhere. Most flexible and most invasive — it changes the alpha of *every* colour path in the compositor (borders, indicator bars, frames, output background), so it needs a careful audit of each consumer and is the only option that could regress unrelated visuals.
+
 -6. **Phase 55 REFACTOR: Single-Writer Visibility Transitions — the remediation (see DECISIONS_LOG Phase 55 for the root-cause analysis this derives from).**
 
    **The flaw being remediated:** the fact "this view is visible" is stored in six places (hidden flag; `workspace->views`; `hikari_server.visible_views`; `group->visible_views`; `group->visible_server_groups` linked into `hikari_server.visible_groups`; scene-node enabled bit). No single function owns the transition — entry is split across `increase_group_visiblity()` + `place_visibly_above()`, exit is the single `hide()`, and `hikari_view_lower()` re-implements the whole linkage a third time inline. Group lifetime depends on an unwritten, unasserted invariant tying #4 and #5 together, and `hikari_view_unmap()` contains a branch that violates it.

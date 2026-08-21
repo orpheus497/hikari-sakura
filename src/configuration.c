@@ -494,13 +494,86 @@ copy_in_config_string(const ucl_object_t *obj)
   }
 }
 
+/* [COMMENT] Function purpose: Parse one colourscheme value into normalised
+RGBA, accepting either form:
+
+  integer  0xRRGGBB      -- historical form, always fully opaque
+  string   "#RRGGBB"     -- same, written explicitly
+  string   "#RRGGBBAA"   -- carries alpha in the low byte
+
+Alpha deliberately cannot be expressed as an integer. UCL parses `0x0080FFCC`
+and `0x80FFCC` to values that a magnitude test cannot tell apart, so an
+8-vs-6-digit integer heuristic would silently misread any colour whose red
+channel is zero. The string form makes the digit count explicit, so the two
+never collide and every existing integer config keeps its exact meaning. See
+DECISIONS_LOG Phase 60. */
+static bool
+parse_color(const ucl_object_t *obj, const char *key, float dst[static 4])
+{
+  if (ucl_object_type(obj) == UCL_STRING) {
+    const char *str;
+
+    if (!ucl_object_tostring_safe(obj, &str) || str[0] != '#') {
+      fprintf(stderr,
+          "configuration error: expected \"#RRGGBB\" or \"#RRGGBBAA\" for "
+          "\"%s\"\n",
+          key);
+      return false;
+    }
+
+    size_t len = strlen(str + 1);
+
+    if (len != 6 && len != 8) {
+      fprintf(stderr,
+          "configuration error: \"%s\" must have 6 or 8 hex digits, got %zu\n",
+          key,
+          len);
+      return false;
+    }
+
+    for (size_t i = 1; i <= len; i++) {
+      if (!isxdigit((unsigned char)str[i])) {
+        fprintf(stderr,
+            "configuration error: invalid hex digit in \"%s\" value \"%s\"\n",
+            key,
+            str);
+        return false;
+      }
+    }
+
+    /* [COMMENT] Action purpose: strtoul over exactly 6 or 8 validated hex
+    digits cannot overflow uint32_t, so the value is used directly. */
+    unsigned long value = strtoul(str + 1, NULL, 16);
+
+    if (len == 8) {
+      hikari_color_convert_rgba(dst, (uint32_t)value);
+    } else {
+      hikari_color_convert(dst, (uint32_t)value);
+    }
+
+    return true;
+  }
+
+  int64_t color;
+  if (!ucl_object_toint_safe(obj, &color)) {
+    fprintf(stderr,
+        "configuration error: expected integer or \"#RRGGBB[AA]\" string for "
+        "\"%s\"\n",
+        key);
+    return false;
+  }
+
+  hikari_color_convert(dst, (uint32_t)color);
+
+  return true;
+}
+
 static bool
 parse_colorscheme(struct hikari_configuration *configuration,
     const ucl_object_t *colorscheme_obj)
 {
   bool success = false;
   const ucl_object_t *cur;
-  int64_t color;
 
   ucl_object_iter_t it = ucl_object_iterate_new(colorscheme_obj);
 
@@ -508,77 +581,49 @@ parse_colorscheme(struct hikari_configuration *configuration,
     const char *key = ucl_object_key(cur);
 
     if (!strcmp("selected", key)) {
-      if (!ucl_object_toint_safe(cur, &color)) {
-        fprintf(
-            stderr, "configuration error: expected integer for \"%s\"\n", key);
+      if (!parse_color(cur, key, configuration->indicator_selected)) {
         goto done;
       }
-
-      hikari_color_convert(configuration->indicator_selected, color);
     } else if (!strcmp("grouped", key)) {
-      if (!ucl_object_toint_safe(cur, &color)) {
-        fprintf(
-            stderr, "configuration error: expected integer for \"%s\"\n", key);
+      if (!parse_color(cur, key, configuration->indicator_grouped)) {
         goto done;
       }
-
-      hikari_color_convert(configuration->indicator_grouped, color);
     } else if (!strcmp("first", key)) {
-      if (!ucl_object_toint_safe(cur, &color)) {
-        fprintf(
-            stderr, "configuration error: expected integer for \"%s\"\n", key);
+      if (!parse_color(cur, key, configuration->indicator_first)) {
         goto done;
       }
-
-      hikari_color_convert(configuration->indicator_first, color);
     } else if (!strcmp("conflict", key)) {
-      if (!ucl_object_toint_safe(cur, &color)) {
-        fprintf(
-            stderr, "configuration error: expected integer for \"%s\"\n", key);
+      if (!parse_color(cur, key, configuration->indicator_conflict)) {
         goto done;
       }
-
-      hikari_color_convert(configuration->indicator_conflict, color);
     } else if (!strcmp("insert", key)) {
-      if (!ucl_object_toint_safe(cur, &color)) {
-        fprintf(
-            stderr, "configuration error: expected integer for \"%s\"\n", key);
+      if (!parse_color(cur, key, configuration->indicator_insert)) {
         goto done;
       }
-
-      hikari_color_convert(configuration->indicator_insert, color);
     } else if (!strcmp("active", key)) {
-      if (!ucl_object_toint_safe(cur, &color)) {
-        fprintf(
-            stderr, "configuration error: expected integer for \"%s\"\n", key);
+      if (!parse_color(cur, key, configuration->border_active)) {
         goto done;
       }
-
-      hikari_color_convert(configuration->border_active, color);
     } else if (!strcmp("inactive", key)) {
-      if (!ucl_object_toint_safe(cur, &color)) {
-        fprintf(
-            stderr, "configuration error: expected integer for \"%s\"\n", key);
+      if (!parse_color(cur, key, configuration->border_inactive)) {
         goto done;
       }
-
-      hikari_color_convert(configuration->border_inactive, color);
     } else if (!strcmp("foreground", key)) {
-      if (!ucl_object_toint_safe(cur, &color)) {
-        fprintf(
-            stderr, "configuration error: expected integer for \"%s\"\n", key);
+      if (!parse_color(cur, key, configuration->foreground)) {
         goto done;
       }
-
-      hikari_color_convert(configuration->foreground, color);
     } else if (!strcmp("background", key)) {
-      if (!ucl_object_toint_safe(cur, &color)) {
-        fprintf(
-            stderr, "configuration error: expected integer for \"%s\"\n", key);
+      if (!parse_color(cur, key, configuration->clear)) {
         goto done;
       }
-
-      hikari_color_convert(configuration->clear, color);
+    } else if (!strcmp("bar", key)) {
+      /* [COMMENT] Action purpose: The top bar's own background. It previously
+      borrowed "background" (the output clear colour), which meant it could not
+      be tinted or made translucent without also changing the desktop
+      background behind every window. See DECISIONS_LOG Phase 60. */
+      if (!parse_color(cur, key, configuration->bar)) {
+        goto done;
+      }
     } else {
       fprintf(stderr, "configuration error: unknown color key \"%s\"\n", key);
       goto done;
@@ -1884,6 +1929,12 @@ hikari_configuration_init(struct hikari_configuration *configuration)
   hikari_color_convert(configuration->indicator_insert, 0xE3C3FA);
   hikari_color_convert(configuration->border_active, 0xFFFFFF);
   hikari_color_convert(configuration->border_inactive, 0x465457);
+
+  /* [COMMENT] Action purpose: Default the top bar to the same slate as the
+  desktop background but slightly translucent (0xE6 ~ 90%), so the bar reads as
+  an overlay rather than a solid block while remaining legible. Overridable via
+  the "bar" colourscheme key. */
+  hikari_color_convert_rgba(configuration->bar, 0x282C34E6);
 
   hikari_font_init(&configuration->font, "monospace 10");
 

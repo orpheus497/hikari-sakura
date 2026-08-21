@@ -16,16 +16,27 @@
 
 struct hikari_output;
 
+/* [COMMENT] Class purpose: Which of the bar's three independent runs a block
+belongs to. This was previously a single `bool align_right`, which made a
+centred run impossible to express -- the helper faked one with a fixed-width
+spacer in the left run, so it drifted with the output width and with whichever
+blocks happened to precede it. See DECISIONS_LOG Phase 60. */
+enum hikari_bar_align {
+  HIKARI_BAR_ALIGN_LEFT,
+  HIKARI_BAR_ALIGN_CENTER,
+  HIKARI_BAR_ALIGN_RIGHT
+};
+
 /* [COMMENT] Class purpose: One rendered status block from the swaybar
-protocol. `full_text` is the display string; `color` is an optional #rrggbb
-override; `min_width` pads the block out to a fixed pixel width (the helper
-uses this to push right-aligned items toward the edge). */
+protocol. `full_text` is the display string; `color` is an optional
+#rrggbb/#rrggbbaa override; `min_width` pads the block out to a fixed pixel
+width; `align` selects which of the three runs it is laid out in. */
 struct hikari_bar_block {
   char *full_text;
   float color[4];
   bool has_color;
   int min_width;
-  bool align_right;
+  enum hikari_bar_align align;
 };
 
 #define HIKARI_BAR_MAX_BLOCKS 32
