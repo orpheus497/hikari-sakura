@@ -19,7 +19,18 @@ hikari_gesture_binding_config_key_parse(const char *str,
 {
   char buf[64];
 
-  if (strlen(str) >= sizeof(buf)) {
+  size_t len = strlen(str);
+  if (len >= sizeof(buf)) {
+    return false;
+  }
+
+  // Action purpose: strtok() silently collapses consecutive delimiter
+  // characters and ignores a delimiter at either end of the string, which
+  // would let malformed keys like "swipe--left-3" or "swipe-left-3-" parse
+  // as if they were well-formed. Reject those shapes up front, before
+  // tokenization ever begins.
+  if (len == 0 || str[0] == '-' || str[len - 1] == '-' ||
+      strstr(str, "--") != NULL) {
     return false;
   }
 
@@ -77,6 +88,21 @@ hikari_gesture_binding_config_key_parse(const char *str,
     }
     fingers_str = dir_str;
   } else {
+    return false;
+  }
+
+  // Action purpose: strtoul() skips leading whitespace and accepts a
+  // leading '+'/'-' sign, which would let malformed keys like "swipe-left-
+  // +3" or "swipe-left- 3" parse as finger count 3. Require fingers_str to
+  // be non-empty and consist solely of ASCII digits before ever calling
+  // strtoul(), so only a bare decimal count is accepted.
+  for (const char *c = fingers_str; *c != '\0'; c++) {
+    if (*c < '0' || *c > '9') {
+      return false;
+    }
+  }
+
+  if (*fingers_str == '\0') {
     return false;
   }
 

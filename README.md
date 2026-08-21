@@ -1,10 +1,8 @@
 # Hikari Sakura - FreeBSD Wayland Compositor
 
-![Screenshot](https://acmelabs.space/~raichoo/hikari.png)
-
 ## Description
 
-*Hikari Sakura* is a FreeBSD-focused revamp and modernization of the original Hikari taken from https://github.com/antaz/hikari (which has since been abandoned upstream). It is very different from the original and is focused on being a comprehensive desktop environment specifically built for FreeBSD as the first properly focused designed Wayland desktop environment for FreeBSD.
+*Hikari Sakura* is a FreeBSD-focused revamp and modernization of the original Hikari taken from https://github.com/antaz/hikari (which has since been abandoned upstream). It is very different from the original and is focused on being a comprehensive desktop environment specifically built for FreeBSD as the first purpose-built Wayland desktop environment for FreeBSD.
 
 It is a stacking Wayland compositor with additional tiling capabilities,
 it is heavily inspired by the Calm Window manager (cwm(1)). Its core concepts
@@ -167,7 +165,7 @@ Ensure `hw.acpi.lid_switch_state` is set appropriately via `sysctl` or `/etc/sys
 
 Touchscreens are attached to the same output layout as the mouse cursor, and touch input is forwarded to clients via the standard Wayland touch protocol. The first touch point of a new touch sequence also drives `hikari`'s own focus, raise, move, and resize behavior — the same as a left mouse click — so windows can be managed by tapping and dragging directly on a touchscreen. Additional simultaneous touch points are left for the client to interpret (e.g. pinch-to-zoom in a PDF viewer).
 
-Trackpad swipe, pinch, and hold gestures (via `wlr_pointer_gestures_v1`) can be bound to `hikari` actions in the `inputs { gestures { ... } }` block, using keys of the form `swipe-<direction>-<fingers>`, `pinch-<direction>-<fingers>`, or `hold-<fingers>`. A gesture that matches a binding triggers the action instead of being forwarded to the client; unmatched gestures are forwarded to the client. Update events are buffered until the gesture ends (in case it turns out to match a binding); a gesture with more than 128 update events has the excess silently dropped from what is forwarded.
+Trackpad swipe, pinch, and hold gestures (via `wlr_pointer_gestures_v1`) can be bound to `hikari` actions in the `inputs { gestures { ... } }` block, using keys of the form `swipe-<direction>-<fingers>`, `pinch-<direction>-<fingers>`, or `hold-<fingers>`, where `<fingers>` is an integer from 1 to 5. A gesture that matches a binding triggers the action instead of being forwarded to the client; unmatched gestures are forwarded to the client. Update events are buffered until the gesture ends (in case it turns out to match a binding); a gesture with more than 128 update events has the excess silently dropped from what is forwarded.
 
 ```ucl
 inputs {
@@ -182,7 +180,7 @@ inputs {
 
 ## Building
 
-`hikari sakura` currently only works on FreeBSD. This will unlikely change. When building directly from the repository, breaking changes might be encountered. These are documented in the `UPDATING` file which should be consulted before updating to a newer build.
+`hikari sakura` currently only works on FreeBSD. This is unlikely to change. When building directly from the repository, breaking changes might be encountered due to the project being in it's `first` stages it is currently considered `unstable`. 
 
 ### Dependencies
 

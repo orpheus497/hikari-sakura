@@ -740,11 +740,25 @@ hikari_cursor_deactivate(struct hikari_cursor *cursor)
   wl_list_remove(&cursor->hold_begin.link);
   wl_list_remove(&cursor->hold_end.link);
 
-  // Action purpose: Clear any in-progress gesture or primary-touch drag.
-  // Deactivation happens mid-session (e.g. entering lock mode); without
-  // this, a gesture or drag left "active" here would resume against stale
-  // state (or never reset) once the cursor is reactivated.
-  cursor->has_primary_touch = false;
+  // Action purpose: A held primary touch point is driving mode-level state
+  // (focus/raise, or an in-progress move/resize drag) via a synthetic
+  // BTN_LEFT press. Deactivation happens mid-session (e.g. entering lock
+  // mode, which overwrites hikari_server.mode right after this call) --
+  // release it through the still-active mode's button_handler now, or that
+  // mode is left believing a button is still held with no touch event ever
+  // able to release it.
+  if (cursor->has_primary_touch) {
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    uint32_t time_msec =
+        (uint32_t)(now.tv_sec * 1000LL + now.tv_nsec / 1000000LL);
+    release_primary_touch(cursor, time_msec);
+  }
+
+  // Action purpose: Clear any in-progress gesture. Deactivation happens
+  // mid-session (e.g. entering lock mode); without this, a gesture left
+  // "active" here would resume against stale state (or never reset) once
+  // the cursor is reactivated.
   cursor->gesture_state.active = false;
 
   hikari_cursor_set_image(cursor, NULL);

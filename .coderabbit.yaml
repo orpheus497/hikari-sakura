@@ -1,3 +1,4 @@
 # .coderabbit.yaml
-path_filters:
-  - "!.devdocs/**"
+reviews:
+  path_filters:
+    - "!.devdocs/**"
