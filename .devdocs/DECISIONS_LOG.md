@@ -1,5 +1,16 @@
-## [2026-08-21 16:34] Phase 65: Second review round; teardown ordering fixed; XWayland test inconclusive
+## [2026-08-21 16:55] Phase 66: License Update and Branding
 
+**Status:** IMPLEMENTED. 
+
+### License Update
+Replaced the `LICENSE` file with a proper 2-Clause BSD license for Hikari Sakura, using the copyright attribution `Copyright (c) 2026 Orpheus497`. Preserved the original upstream Hikari license from `raichoo` by appending it to the bottom of the file per the user's instructions.
+
+### Branding Sweep
+Updated `README.md` to consistently refer to the project as `Hikari Sakura` instead of `hikari` or `hikari sakura`. In line with the Phase 51 directive, all binary names (`hikari`, `hikari-unlocker`, `start-hikari`), command-line instructions, and configuration paths were deliberately excluded from this sweep to preserve correctness. No executable code was modified.
+
+---
+
+## [2026-08-21 16:34] Phase 65: Second review round; teardown ordering fixed; XWayland test inconclusive
 ### XWayland test result — corrects the Phase 64 expectation
 
 User ran `xterm` (did not open), `obs` (did not open), and a native client (opened). That looked like confirmation of Phase 64's "XWayland views render no content" finding. **It is not.**

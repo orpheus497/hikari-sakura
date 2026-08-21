@@ -1,8 +1,13 @@
 # Granular Task List
 
-*Last Updated:* 2026-08-21 15:05
+*Last Updated:* 2026-08-21 16:55
 
 ## Active List
+
+### Phase 66: License and Branding Update
+
+- [x] **Update `LICENSE`**: Created a full 2-Clause BSD license for Hikari Sakura (Copyright (c) 2026 Orpheus497) and appended the original upstream raichoo license.
+- [x] **Update `README.md`**: Swept prose to use "Hikari Sakura", explicitly ignoring binaries and paths per Phase 51.
 
 ### Phase 65: Review round 2 + teardown ordering (see DECISIONS_LOG Phase 65)
 

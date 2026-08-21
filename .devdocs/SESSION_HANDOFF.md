@@ -2,6 +2,20 @@
 
 *Note: Most recent entries are listed at the top.*
 
+## Session Date: 2026-08-21 16:55 — Phase 66: License and Branding Update
+
+**Timestamp:** 2026-08-21 16:55
+**Current Status:** License updated and branding swept in README.
+
+**Accomplishments:**
+* **Phase 66 — License & Branding:** Overwrote `LICENSE` with a full 2-Clause BSD license for Hikari Sakura, preserving the upstream attribution below it. Updated `README.md` prose to strictly use "Hikari Sakura" as the project name, carefully avoiding modification of binary names or paths.
+
+**Modified files:** `LICENSE`, `README.md`.
+
+**Next steps:**
+1. **User build/verify:** Same as prior phases, `sudo make clean && sudo make install` is needed to verify the Phase 61-65 crash fixes.
+2. Review remaining Phase 65 actions.
+
 ## Session Date: 2026-08-21 16:10 — Phases 61-64: Crash Root-Cause Campaign (three separate defects, all proven by core dump)
 
 **Timestamp:** 2026-08-21 16:10

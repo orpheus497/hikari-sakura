@@ -14,7 +14,7 @@ The workspace is the set of views that are currently visible.
 
 A sheet is a collection of views, each view can only be a member of a single
 sheet. Switching between sheets will replace the current content of the
-workspace with all the views that are a member of the selected sheet. _hikari_
+workspace with all the views that are a member of the selected sheet. _Hikari Sakura_
 has 9 general purpose sheets that correspond to the numbers **1** to **9** and a
 special purpose sheet **0**. Views that are a member of sheet **0** will
 always be visible but stacked below the views of the selected sheet.
@@ -85,7 +85,7 @@ mkdir -p -m 0700 "$XDG_RUNTIME_DIR"
 
 ### Setting up PAM
 
-Setting up PAM is needed to give `hikari sakura` the ability to unlock the screen when
+Setting up PAM is needed to give Hikari Sakura the ability to unlock the screen when
 using the screen locker. Copy `etc/pam.d/hikari-unlocker.FreeBSD` from the
 source tree to `/usr/local/etc/pam.d/hikari-unlocker`.
 
@@ -93,7 +93,7 @@ source tree to `/usr/local/etc/pam.d/hikari-unlocker`.
 
 `hikari` natively configures its keyboards via the `inputs { keyboards { ... } }` block in `hikari.conf`. You can directly specify your `xkb` layout, options, repeat rates, and delays there.
 
-If a keyboard is not explicitly configured in `hikari.conf`, `hikari` will fall back to using `xkb` environment variables. To select a layout this way, set `XKB_DEFAULT_LAYOUT` before starting `hikari`.
+If a keyboard is not explicitly configured in `hikari.conf`, Hikari Sakura will fall back to using `xkb` environment variables. To select a layout this way, set `XKB_DEFAULT_LAYOUT` before starting Hikari Sakura.
 
 ```sh
 export XKB_DEFAULT_LAYOUT="de(nodeadkeys),de"
@@ -101,7 +101,7 @@ export XKB_DEFAULT_LAYOUT="de(nodeadkeys),de"
 
 ## Configuration & Customization
 
-`hikari sakura` is configured using `libucl` syntax. The configuration file is expected to be located at `$XDG_CONFIG_HOME/hikari/hikari.conf`. If it does not exist, `hikari` will fall back to the default config installed at `${ETC_PREFIX}/etc/hikari/hikari.conf`.
+Hikari Sakura is configured using `libucl` syntax. The configuration file is expected to be located at `$XDG_CONFIG_HOME/hikari/hikari.conf`. If it does not exist, Hikari Sakura will fall back to the default config installed at `${ETC_PREFIX}/etc/hikari/hikari.conf`.
 
 The configuration file allows you to define:
 - **ui**: Colors, border sizes, fonts, and gaps.
@@ -113,17 +113,17 @@ The configuration file allows you to define:
 **Capabilities & Limitations:**
 - You can use environment variables (e.g., `$TERMINAL`) in the configuration file; they will be substituted when the configuration is loaded.
 - Structural changes like UI themes, custom actions, and new bindings can be hot-reloaded using the `reload` action (default: `L+S+r`).
-- `hikari sakura` does not support conditional statements or complex logic within the config file itself.
+- Hikari Sakura does not support conditional statements or complex logic within the config file itself.
 - Some environment-level initializations (like XWayland) require a full restart of the compositor to apply.
-- `hikari sakura` does provide a built-in status bar. You can also use external layer-shell components like `waybar` or the included `hikari-topbar` for system telemetry.
+- Hikari Sakura does provide a built-in status bar. You can also use external layer-shell components like `waybar` or the included `hikari-topbar` for system telemetry.
 
 ## Laptop Optimization
 
-When using `hikari sakura` on a laptop, especially on FreeBSD, you may want to map your multimedia keys and handle the lid switch.
+When using Hikari Sakura on a laptop, especially on FreeBSD, you may want to map your multimedia keys and handle the lid switch.
 
 ### Multimedia Keys (Volume & Brightness)
 
-`hikari sakura` natively understands `XF86` keysyms via `xkbcommon`. You can define custom actions that invoke FreeBSD's native `mixer(8)` and `backlight(8)` utilities, and bind them to your media keys in `hikari.conf`.
+Hikari Sakura natively understands `XF86` keysyms via `xkbcommon`. You can define custom actions that invoke FreeBSD's native `mixer(8)` and `backlight(8)` utilities, and bind them to your media keys in `hikari.conf`.
 
 ```ucl
 actions {
@@ -148,7 +148,7 @@ bindings {
 
 ### Lid Switch Handling
 
-`hikari sakura` can natively parse switch events (like lid switches) through the `inputs { switches { ... } }` block in `hikari.conf`. You can bind these events to any `hikari` action. For example, to lock the screen when the lid closes:
+Hikari Sakura can natively parse switch events (like lid switches) through the `inputs { switches { ... } }` block in `hikari.conf`. You can bind these events to any Hikari Sakura action. For example, to lock the screen when the lid closes:
 
 ```ucl
 inputs {
@@ -158,16 +158,16 @@ inputs {
 }
 ```
 
-However, `hikari sakura` itself does not manage suspend/resume states. On FreeBSD, suspend is typically handled by `devd(8)` or `acpi(4)`. 
+However, Hikari Sakura itself does not manage suspend/resume states. On FreeBSD, suspend is typically handled by `devd(8)` or `acpi(4)`. 
 Ensure `hw.acpi.lid_switch_state` is set appropriately via `sysctl` or `/etc/sysctl.conf` to trigger a suspend (e.g., state `S3`) when the lid is closed.
 
 ## Touchscreen & Trackpad Gestures
 
-`hikari sakura` natively supports touchscreens and multi-finger trackpad gestures.
+Hikari Sakura natively supports touchscreens and multi-finger trackpad gestures.
 
-Touchscreens are attached to the same output layout as the mouse cursor, and touch input is forwarded to clients via the standard Wayland touch protocol. The first touch point of a new touch sequence also drives `hikari`'s own focus, raise, move, and resize behavior — the same as a left mouse click — so windows can be managed by tapping and dragging directly on a touchscreen. Additional simultaneous touch points are left for the client to interpret (e.g. pinch-to-zoom in a PDF viewer).
+Touchscreens are attached to the same output layout as the mouse cursor, and touch input is forwarded to clients via the standard Wayland touch protocol. The first touch point of a new touch sequence also drives Hikari Sakura's own focus, raise, move, and resize behavior — the same as a left mouse click — so windows can be managed by tapping and dragging directly on a touchscreen. Additional simultaneous touch points are left for the client to interpret (e.g. pinch-to-zoom in a PDF viewer).
 
-Trackpad swipe, pinch, and hold gestures (via `wlr_pointer_gestures_v1`) can be bound to `hikari` actions in the `inputs { gestures { ... } }` block, using keys of the form `swipe-<direction>-<fingers>`, `pinch-<direction>-<fingers>`, or `hold-<fingers>`, where `<fingers>` is an integer from 1 to 5. A gesture that matches a binding triggers the action instead of being forwarded to the client; unmatched gestures are forwarded to the client. Update events are buffered until the gesture ends (in case it turns out to match a binding); a gesture with more than 128 update events has the excess silently dropped from what is forwarded.
+Trackpad swipe, pinch, and hold gestures (via `wlr_pointer_gestures_v1`) can be bound to Hikari Sakura actions in the `inputs { gestures { ... } }` block, using keys of the form `swipe-<direction>-<fingers>`, `pinch-<direction>-<fingers>`, or `hold-<fingers>`, where `<fingers>` is an integer from 1 to 5. A gesture that matches a binding triggers the action instead of being forwarded to the client; unmatched gestures are forwarded to the client. Update events are buffered until the gesture ends (in case it turns out to match a binding); a gesture with more than 128 update events has the excess silently dropped from what is forwarded.
 
 ```ucl
 inputs {
@@ -182,7 +182,7 @@ inputs {
 
 ## Building
 
-`hikari sakura` currently only works on FreeBSD. This is unlikely to change. When building directly from the repository, breaking changes might be encountered due to the project being in its `first` stages; it is currently considered `unstable`. 
+Hikari Sakura currently only works on FreeBSD. This is unlikely to change. When building directly from the repository, breaking changes might be encountered due to the project being in its `first` stages; it is currently considered `unstable`. 
 
 ### Dependencies
 
@@ -236,7 +236,7 @@ start-hikari
 If you are using a display manager (GDM, SDDM, greetd), the installed
 `hikari.desktop` session file will call `start-hikari` automatically.
 
-`hikari` can be configured via `$XDG_CONFIG_HOME/hikari/hikari.conf`, the
+Hikari Sakura can be configured via `$XDG_CONFIG_HOME/hikari/hikari.conf`, the
 default configuration can be found under `${ETC_PREFIX}/etc/hikari/hikari.conf`
 (depending on the value of `ETC_PREFIX` that was specified during the installation).
 
@@ -245,9 +245,9 @@ in the `$TERMINAL` environment variable.
 
 The installation destination can be configured by setting `PREFIX` (default is
 `/usr/local` and does not need to be given explicitly). If you want to install
-`hikari` into a directory other than `/usr/local` you always should state the
+Hikari Sakura into a directory other than `/usr/local` you always should state the
 `PREFIX` when issuing `make`, since this information is also used to specify
-where `hikari` can find the default configuration on your system and is needed
+where Hikari Sakura can find the default configuration on your system and is needed
 during the compilation process. To override installation paths for `etc` specify
 `ETC_PREFIX`.
 
@@ -273,7 +273,7 @@ make WITH_ALL=YES
 
 #### Building with XWayland support
 
-`hikari` offers optional XWayland support which is enabled via setting
+Hikari Sakura offers optional XWayland support which is enabled via setting
 `WITH_XWAYLAND`.
 
 ```sh
@@ -282,7 +282,7 @@ make WITH_XWAYLAND=YES
 
 #### Building with screencopy support
 
-Screencopy support allows tools like `grim` to work with `hikari`, it also
+Screencopy support allows tools like `grim` to work with Hikari Sakura, it also
 allows applications to copy the desktop content. This is disabled by default
 and can be added by setting `WITH_SCREENCOPY`.
 
@@ -319,15 +319,15 @@ make WITH_VIRTUAL_INPUT=YES
 
 #### Building the manpage
 
-Building the `hikari` manpage requires [`pandoc`](http://pandoc.org/). To build
+Building the Hikari Sakura manpage requires [`pandoc`](http://pandoc.org/). To build
 the manpage just run `make VERSION=1.0.0 doc`, where `VERSION` is the version
 number that will be spliced into the manpage. The distribution tarball of
-`hikari` comes with a precompiled manpage removing the need for a `pandoc`
+Hikari Sakura comes with a precompiled manpage removing the need for a `pandoc`
 installation.
 
 #### Installing with SUID
 
-If `hikari` should require root privileges for startup, state `WITH_SUID=YES`
+If Hikari Sakura should require root privileges for startup, state `WITH_SUID=YES`
 during installation.
 
 ```sh
@@ -336,7 +336,7 @@ make WITH_SUID=YES install
 
 #### Building a DEBUG build
 
-In the case of a crash or a bug you should build a debug version of `hikari` and
+In the case of a crash or a bug you should build a debug version of Hikari Sakura and
 try to reproduce the issue. `DEBUG=YES` builds with debug symbols, disables
 optimisation, and leaves `assert()` enabled (release builds define `NDEBUG`).
 Extracting a stack trace for debugging purposes is also very helpful if you are
