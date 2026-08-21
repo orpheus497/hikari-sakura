@@ -1,4 +1,8 @@
-Language: C
+# clang-format handles C sources under the "Cpp" language selector; there is no
+# "C" value in any clang-format release, so the previous "Language: C" made
+# this file fail to load entirely ("unknown enumerated scalar"), which is why
+# TC-FORMAT-01 could never be run. Style options below are unchanged.
+Language: Cpp
 BasedOnStyle: LLVM
 
 # Indentation (8-width tabs)

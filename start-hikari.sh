@@ -106,6 +106,32 @@ else
     exit 1
 fi
 
+# [COMMENT] Action purpose: Capture compositor diagnostics when HIKARI_LOG is
+# set to a file path. wlr_log writes exclusively to stderr and nothing
+# redirects it by default, which is why the Phase 53/57/61 crash
+# investigations had no output to work from. Kept opt-in so an ordinary
+# session keeps its current tty behaviour unchanged.
+#
+# This redirects the wrapper's own descriptors rather than piping into tee,
+# so the exec below is a real exec: the compositor stays the top-level
+# process and its exit status and signal disposition remain the script's.
+# A pipeline would report tee's status instead, so a compositor killed by
+# SIGSEGV would surface as a clean exit 0 -- the opposite of what a
+# diagnostic build needs. `set -o pipefail` is not POSIX and this script
+# declares #!/bin/sh, so it is not an option here. The trade-off is that
+# output no longer echoes to the terminal while logging; the compositor
+# takes over the VT regardless, so capture is the point.
+#
+# Writability is probed in a subshell first: a redirection failure on `exec`
+# (a special built-in) would otherwise terminate the shell with no message.
+if [ -n "$HIKARI_LOG" ]; then
+    if ! ( : >> "$HIKARI_LOG" ) 2>/dev/null; then
+        echo "start-hikari: cannot write HIKARI_LOG ($HIKARI_LOG)" >&2
+        exit 1
+    fi
+    exec >> "$HIKARI_LOG" 2>&1
+fi
+
 # [COMMENT] Action purpose: Wrap execution in a D-Bus session if one is not
 # already active. Required for XDG portal, clipboard, and secret service.
 if [ -z "$DBUS_SESSION_BUS_ADDRESS" ] && command -v dbus-run-session > /dev/null 2>&1; then

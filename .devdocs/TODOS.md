@@ -1,8 +1,43 @@
 # Granular Task List
 
-*Last Updated:* 2026-08-21 16:55
+*Last Updated:* 2026-08-22 08:53
 
 ## Active List
+
+### Phase 69: Review round 4 (see DECISIONS_LOG Phase 69)
+
+- [x] **`setenv()` return value now checked at `setup_xwayland()`.** Silent failure either reinstated the Phase 68 lazy-start deadlock or left DISPLAY pointing at the user's separate `Xorg :2`, sending every autostarted X client to a foreign display. Fatal, with a `wlr_log(WLR_ERROR)` diagnostic.
+- [x] **`setenv()` checked in `xwayland_ready_handler()`, deliberately non-fatal.** Departs from the finding's "equivalent failure handling" on purpose: post-Phase-68 this is a redundant re-export running from a live event handler, DISPLAY already holds a valid value, and tearing down a session over it would destroy more than it protects. Logged instead.
+- [x] **Logging pipeline replaced (`start-hikari.sh`).** Phase 68's `exec ... | tee -a` reported the *last* pipeline command's status, so a SIGSEGV'd compositor surfaced as **exit 0** (verified empirically); `exec` also replaced only a subshell, so hikari was not the top-level process. Now `exec >> "$HIKARI_LOG" 2>&1` on the wrapper's own descriptors -- true exec restored, status and signal disposition preserved (verified: 42 -> 42, SIGSEGV -> 139), duplicated dbus branches collapsed. `pipefail` unavailable under `#!/bin/sh`.
+- [x] Writability of `HIKARI_LOG` probed in a subshell before `exec`, since a redirection failure on a special built-in would otherwise kill the shell with no message.
+- [x] Validated: clang + all five feature macros = 0 warnings across 60 files; `sh -n` clean; both streams confirmed captured.
+
+### Phase 68: Diagnostics + XWayland + NULL-deref class + clang-format (see DECISIONS_LOG Phase 68)
+
+- [x] **A -- `start-hikari.sh` stderr capture.** Opt-in `HIKARI_LOG` tee across both the dbus-wrapped and bare exec paths. `wlr_log` writes only to stderr and nothing redirected it, which is why the Phase 53/57/61 investigations had no output. Default sessions behave identically.
+- [x] **A -- diagnostic surface re-verified.** `/var/coredumps` exists (`drwxrwxrwt`), `kern.corefile` = `/var/coredumps/%N.%P.%U.core`, `ulimit -c` unlimited, 3 hikari cores present, gdb + lldb installed. **Corrects Phase 53's record that the directory did not exist.** `ASAN=YES` still unusable (Makefile:90-96).
+- [x] **B -- XWayland lazy-start deadlock FIXED (Phase 65 P0 root cause).** `DISPLAY` was exported only from the `ready` handler, but lazy mode does not exec Xwayland until a client connects, and no client can connect without `DISPLAY`. Now exported straight after `wlr_xwayland_create()`, matching the 0.20.2 header contract.
+- [x] **C -- 7 unguarded `wlr_*_create` sites guarded** (`setup_virtual_keyboard`, `setup_virtual_pointer`, `setup_decorations` x2, `setup_xdg_shell`, `setup_xdg_activation`, `setup_idle_inhibit`), all 64 create calls enumerated and each hit hand-verified.
+- [x] **C -- `idle_notifier` guarded.** Different shape: only dereferenced once a media client takes an idle inhibitor, so a NULL faulted minutes into a session with no link back to init.
+- [x] **C -- `server->seat` assert replaced with a real guard.** `-DNDEBUG` made `assert(server->seat != NULL)` dead in every shipped binary; it read as guarded while being unguarded.
+- [x] **D -- `.clang-format` loads again.** `Language: C` is invalid in every clang-format release (C uses `Cpp`). One-line fix, style untouched per user instruction. **Corrects Phase 67's version-mismatch diagnosis.**
+- [x] **Validation method corrected.** clang + all five feature macros + pkg-config -> **0 warnings across 60 files**. Command recorded in DECISIONS_LOG Phase 68.
+- [x] **Stale item retired:** "cosmetic enum-compare warnings (`dnd_mode.c:63`, `move_mode.c:78`)" -- both clean under the corrected check.
+- [ ] **P0 -- USER BUILD + TEST (single cycle).** `rm -f *.o && make DEBUG=YES && sudo make DEBUG=YES install`, then `export HIKARI_LOG=/tmp/hikari-$(date +%s).log` and run. Verified `DEBUG=YES` compiles clean. `DEBUG=YES` also re-enables all 234 asserts -- any that fire are real invariant violations release silently ignores.
+- [ ] **P0 -- XWayland verification:** `xterm`, then `xeyes`. Confirms or refutes the B diagnosis.
+- [ ] **P1 -- Phase 64 XWayland render gap: re-evaluate ONLY after B is confirmed.** `xwayland_view.c` attaches no surface content to its scene tree. This has been untestable all along because XWayland never started.
+- [ ] **P2 -- 234 dead `assert()` calls across 32 files** (`view.c`: 101). All compiled out by `-DNDEBUG`. Phase 61 approved the `wlr_log(WLR_ERROR)` + safe-bail replacement policy but it has only been applied at a handful of sites. Needs scoping as its own project.
+- [ ] **P2 -- TC-FORMAT-01 is loadable but still must not be run casually.** The configured style (8-wide tabs, Allman) does not describe the tree (2-space, tabless, attached control braces); `src/server.c` alone measures a ~4050-line diff. `SortIncludes: true` also orphans the `Action purpose:` comment above `wlr/interfaces/wlr_buffer.h`. User has elected to keep the style as configured -- decide separately whether the run ever happens.
+- [ ] **P3 -- `WITH_POSIX_C_SOURCE=YES` is a broken build configuration.** Never set by `WITH_ALL`, so unused by default; enabling it yields 3 implicit-function-declaration warnings and, with `DEBUG=YES` (`-Werror`), fails the build. Two are security-relevant: `explicit_bzero` (`lock_mode.c:70`, wipes the password buffer) and `setgroups` (`server.c:1087`, privilege dropping); `usleep` (`bar.c:385`) is cosmetic.
+
+### Phase 67: External review round 3 (see DECISIONS_LOG Phase 67)
+
+- [x] **Finding 1 — layer-shell NULL deref (`src/server.c`, `setup_layer_shell`).** `wlr_layer_shell_v1_create()`'s result went straight into `wl_signal_add`, so `&NULL->events.new_surface` was computed and written through on allocation failure. Guarded with `wl_display_destroy` + `exit(EXIT_FAILURE)`, matching the `pointer_gestures` guard six lines from the call site.
+- [x] **Finding 2 — virtual pointer confined the whole cursor (`src/server.c`, `new_virtual_pointer_handler`).** `wlr_cursor_map_to_output()` is cursor-wide; a `zwlr_virtual_pointer_v1` client with a suggested output trapped the physical mouse/touchpad/touchscreen on that output with no recovery short of restart. Replaced with `wlr_cursor_map_input_to_output(cursor, device, suggested_output)`. Attach precondition, call ordering vs `add_pointer()`, and idiom parity with `map_touch_to_output()` all verified before editing.
+- [x] Both regions syntax-check clean with `-DHAVE_LAYERSHELL -DHAVE_VIRTUAL_INPUT` and a `__kernel_size_t` shim. Full command in DECISIONS_LOG Phase 67.
+- [ ] **P2 — decision needed: sweep the sibling `setup_*` helpers?** `setup_xdg_shell`, `setup_xdg_activation` and `setup_idle_inhibit` have the **identical** unguarded `wlr_*_create` → `wl_signal_add` pattern Finding 1 just fixed. Deliberately left untouched as outside the reviewed findings. Needs user direction before any edit.
+- [ ] **TC-FORMAT-01 blocked, not just pending.** The installed `clang-format` rejects this repo's `.clang-format` outright (`unknown enumerated scalar` on `Language: C` — a version mismatch), so the compliance run cannot be performed in this environment at all. Either pin a matching `clang-format` version or relax the config.
+- [ ] **P3 — `PLANS.md` items 4a/12 note.** The planned headless smoke-test client binds `zwlr_virtual_pointer_v1`; before Finding 2 it would have hit the cursor-hijack bug and likely been misread as a test-harness quirk. Worth a line in the test plan when it is written.
 
 ### Phase 66: License and Branding Update
 

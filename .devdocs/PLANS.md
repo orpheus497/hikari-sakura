@@ -1,8 +1,24 @@
 # Forward Strategy & Plans
 
-*Last Updated:* 2026-08-21 16:10
+*Last Updated:* 2026-08-22 02:28
 
 ## Implementations to be Fully Implemented
+
+-10. **Phase 68 build + runtime verification -- USER-RUN, single cycle, everything else is blocked behind it.**
+
+   Phases 61-68 are all implemented and none have been compiled. The agent cannot build (`.o` files are `root:wheel`) and cannot run the compositor, so this one cycle has to answer every open question at once. Steps 1-3 are sequenced so a crash at any point still yields usable evidence.
+
+   1. **Build.** `rm -f *.o && make DEBUG=YES && sudo make DEBUG=YES install`. Verified clean under the corrected clang check (0 warnings across 60 files), so `-Werror` will not block. `DEBUG=YES` gives `-g -O0` for readable backtraces and re-enables all 234 asserts -- treat any that fire as a real invariant violation the release build silently ignores. **Do not use `ASAN=YES`**: Makefile:90-96 documents that ASan intercepts wlroots/GBM `mmap` and dies before the DRM backend initialises.
+   2. **Run with capture.** `export HIKARI_LOG=/tmp/hikari-$(date +%s).log`, then start the session normally. Optionally `WLR_DEBUG_LOG=1` for verbose wlroots output; `WAYLAND_DEBUG=1` only for a targeted protocol trace, since it is enormous.
+   3. **XWayland verification -- the primary question.** `xterm`, then `xeyes`. Confirms or refutes the Phase 68 B diagnosis. If a window appears, the deadlock is real and fixed. If a *bordered but empty* window appears, the deadlock is fixed **and** the Phase 64 render-gap finding is confirmed in one shot.
+   4. **On any crash:** `gdb /usr/local/bin/hikari /var/coredumps/hikari.<pid>.1001.core -ex 'bt full' -ex 'info registers' -ex 'thread apply all bt' -ex quit`. The core infrastructure is confirmed working (`kern.corefile`, `ulimit -c unlimited`, 3 existing cores).
+   5. **Regression sweep for Phase 67/68 C:** the guarded paths are all allocation-failure branches and will not be exercised in a healthy run -- absence of a crash is the expected result, not proof the guards work. What *does* need exercising is the virtual-pointer per-device mapping (Phase 67 Finding 2): if any `zwlr_virtual_pointer_v1` client is available, confirm the physical mouse is no longer confined to the suggested output.
+
+   **Blocked behind this cycle:** the Phase 64 XWayland content gap (untestable until XWayland starts), the Phase 50 touch/gesture runtime checks, and the Phase 40 multi-window guards.
+
+-11. **Dead-assert remediation -- NOT STARTED, needs scoping (Phase 68 finding).**
+
+   234 `assert()` calls across 32 files (`view.c`: 101) are compiled out by `-DNDEBUG` in every shipped binary. Phase 61 approved always-on `wlr_log(WLR_ERROR)` + safe bail as the replacement policy, but it has only reached a handful of sites; Phase 68 converted `server->seat` because it was guarding a live allocation. The remainder need triage into three buckets before any code changes: (a) guarding an allocation or external return value -- convert, (b) documenting an internal invariant that cannot fail given the current call graph -- leave, or (c) genuinely unreachable -- delete. Bucket (a) is the only one with a live crash risk. Do not sweep mechanically; Phase 47 already showed one `assert` (`add_keyboard`) to be a sound invariant that would have been wrong to rewrite defensively.
 
 -9. **XWayland surface content — NOT YET APPROVED, not started (found in Phase 64).**
 

@@ -258,6 +258,14 @@ setup_virtual_keyboard(struct hikari_server *server)
 {
   server->virtual_keyboard =
       wlr_virtual_keyboard_manager_v1_create(server->display);
+  // [COMMENT] Action purpose: Guard against manager allocation failure. The
+  // wl_signal_add below takes the address of a member, so a NULL manager
+  // becomes an offset from NULL that is then written through.
+  if (server->virtual_keyboard == NULL) {
+    wl_display_destroy(server->display);
+    exit(EXIT_FAILURE);
+  }
+
   wl_signal_add(&server->virtual_keyboard->events.new_virtual_keyboard,
       &server->new_virtual_keyboard);
   server->new_virtual_keyboard.notify = new_virtual_keyboard_handler;
@@ -275,8 +283,17 @@ new_virtual_pointer_handler(struct wl_listener *listener, void *data)
   add_input(server, device);
 
   if (event->suggested_output) {
-    wlr_cursor_map_to_output(
-        server->cursor.wlr_cursor, event->suggested_output);
+    /* [COMMENT] Action purpose: Confine only the newly created virtual
+    pointer to its suggested output. wlr_cursor_map_to_output() maps the
+    *whole* cursor, so a client binding zwlr_virtual_pointer_v1 with a
+    suggested output would also trap the physical mouse, touchpad and
+    touchscreen on that output, with no way back short of restarting the
+    compositor. The per-device call mirrors add_pointer() and
+    map_touch_to_output(); the device is already attached to the cursor by
+    add_input() above, which the API requires, and this narrows the
+    whole-layout (NULL) mapping add_pointer() just installed. */
+    wlr_cursor_map_input_to_output(
+        server->cursor.wlr_cursor, device, event->suggested_output);
   }
 }
 
@@ -285,6 +302,13 @@ setup_virtual_pointer(struct hikari_server *server)
 {
   server->virtual_pointer =
       wlr_virtual_pointer_manager_v1_create(server->display);
+  // [COMMENT] Action purpose: Guard against manager allocation failure, as in
+  // setup_virtual_keyboard above.
+  if (server->virtual_pointer == NULL) {
+    wl_display_destroy(server->display);
+    exit(EXIT_FAILURE);
+  }
+
   wl_signal_add(&server->virtual_pointer->events.new_virtual_pointer,
       &server->new_virtual_pointer);
   server->new_virtual_pointer.notify = new_virtual_pointer_handler;
@@ -636,7 +660,18 @@ xwayland_ready_handler(struct wl_listener *listener, void *data)
   struct hikari_server *server =
       wl_container_of(listener, server, xwayland_ready);
 
-  setenv("DISPLAY", server->xwayland->display_name, true);
+  /* [COMMENT] Action purpose: Re-export DISPLAY once Xwayland is actually up.
+  setup_xwayland() already exported it, so this is a no-op in the normal case
+  and only carries a value when wlroots has restarted Xwayland under a
+  different display number. Failure is logged rather than fatal, deliberately
+  unlike the setup_xwayland() call site: this runs from a live event handler
+  long after startup, DISPLAY already holds a valid value from setup, and
+  tearing down a running session over a failed re-set would destroy more than
+  it protects. */
+  if (setenv("DISPLAY", server->xwayland->display_name, true) != 0) {
+    wlr_log(WLR_ERROR,
+        "could not update DISPLAY on XWayland ready; keeping previous value");
+  }
 }
 
 static void
@@ -652,6 +687,30 @@ setup_xwayland(struct hikari_server *server)
     // full shutdown path would wl_list_remove uninitialised listener links,
     // finalise an uninitialised topbar source, and touch a NULL seat.
     fprintf(stderr, "error: failed to create XWayland server\n");
+    wl_display_destroy(server->display);
+    exit(EXIT_FAILURE);
+  }
+
+  /* [COMMENT] Action purpose: Export DISPLAY as soon as the X socket exists,
+  rather than waiting for the ready event. wlroots populates display_name
+  inside wlr_xwayland_create() (server_start_display() runs unconditionally and
+  opens the socket), but this compositor requests lazy mode, so Xwayland is not
+  executed until a client actually connects. Setting DISPLAY only from the
+  ready handler therefore deadlocks: no client can connect without DISPLAY, so
+  the lazy start never triggers, so ready never fires, so DISPLAY is never set.
+  wlr_xwayland.display_name is documented as "value the DISPLAY environment
+  variable should be set to by the compositor" and is valid from here on.
+  Placed before run_autostart() so autostarted X clients inherit it.
+
+  The return value is checked because a failed setenv() here is silent and
+  reintroduces exactly the deadlock this call exists to prevent: DISPLAY stays
+  as it was, so either no X client can connect at all, or -- when hikari is
+  launched directly rather than through start-hikari.sh, which unsets it --
+  DISPLAY still names a foreign X server and every X client connects there
+  instead. Fail fast alongside the creation failure above rather than let
+  run_autostart() spawn clients against a DISPLAY that is not ours. */
+  if (setenv("DISPLAY", server->xwayland->display_name, true) != 0) {
+    wlr_log(WLR_ERROR, "could not set DISPLAY for XWayland");
     wl_display_destroy(server->display);
     exit(EXIT_FAILURE);
   }
@@ -771,6 +830,14 @@ setup_decorations(struct hikari_server *server)
 {
   server->decoration_manager =
       wlr_server_decoration_manager_create(server->display);
+  // [COMMENT] Action purpose: Guard before the set_default_mode call below.
+  // That call dereferences the manager inside wlroots, so an unchecked NULL
+  // would fault in library code rather than here, making the backtrace point
+  // away from the actual defect.
+  if (server->decoration_manager == NULL) {
+    wl_display_destroy(server->display);
+    exit(EXIT_FAILURE);
+  }
 
   wlr_server_decoration_manager_set_default_mode(
       server->decoration_manager, WLR_SERVER_DECORATION_MANAGER_MODE_SERVER);
@@ -781,6 +848,13 @@ setup_decorations(struct hikari_server *server)
 
   server->xdg_decoration_manager =
       wlr_xdg_decoration_manager_v1_create(server->display);
+  // [COMMENT] Action purpose: Guard against manager allocation failure before
+  // the wl_signal_add below takes the address of one of its members.
+  if (server->xdg_decoration_manager == NULL) {
+    wl_display_destroy(server->display);
+    exit(EXIT_FAILURE);
+  }
+
   wl_signal_add(&server->xdg_decoration_manager->events.new_toplevel_decoration,
       &server->new_toplevel_decoration);
   server->new_toplevel_decoration.notify = new_toplevel_decoration_handler;
@@ -828,7 +902,19 @@ setup_selection(struct hikari_server *server)
   wlr_primary_selection_v1_device_manager_create(server->display);
 
   server->seat = wlr_seat_create(server->display, "seat0");
-  assert(server->seat != NULL);
+  /* [COMMENT] Action purpose: Real, always-on guard replacing an assert().
+  Release builds compile with -DNDEBUG (Makefile), so the previous
+  assert(server->seat != NULL) was absent from every shipped binary -- this
+  read as a guarded allocation while actually being an unguarded one. The seat
+  is dereferenced immediately below and again from keyboard.c, normal_mode.c
+  and lock_mode.c, so a NULL cannot be tolerated. Follows the Phase 61 policy
+  decision to prefer always-on wlr_log(WLR_ERROR) plus a bail over
+  debug-only assertions. */
+  if (server->seat == NULL) {
+    wlr_log(WLR_ERROR, "could not create seat");
+    wl_display_destroy(server->display);
+    exit(EXIT_FAILURE);
+  }
 
   server->request_set_primary_selection.notify =
       request_set_primary_selection_handler;
@@ -892,6 +978,13 @@ static void
 setup_xdg_shell(struct hikari_server *server)
 {
   server->xdg_shell = wlr_xdg_shell_create(server->display, 3);
+  // [COMMENT] Action purpose: Guard against xdg-shell allocation failure. This
+  // is the protocol every ordinary Wayland window depends on, so continuing
+  // without it would produce a compositor no client can map a toplevel on.
+  if (server->xdg_shell == NULL) {
+    wl_display_destroy(server->display);
+    exit(EXIT_FAILURE);
+  }
 
   server->new_toplevel.notify = new_toplevel_handler;
   wl_signal_add(&server->xdg_shell->events.new_toplevel, &server->new_toplevel);
@@ -923,6 +1016,12 @@ static void
 setup_xdg_activation(struct hikari_server *server)
 {
   server->xdg_activation = wlr_xdg_activation_v1_create(server->display);
+  // [COMMENT] Action purpose: Guard against manager allocation failure before
+  // the wl_signal_add below takes the address of one of its members.
+  if (server->xdg_activation == NULL) {
+    wl_display_destroy(server->display);
+    exit(EXIT_FAILURE);
+  }
 
   server->request_activate.notify = request_activate_handler;
   wl_signal_add(
@@ -980,6 +1079,19 @@ setup_idle_inhibit(struct hikari_server *server)
   server->idle_inhibit_manager = wlr_idle_inhibit_v1_create(server->display);
   server->idle_notifier = wlr_idle_notifier_v1_create(server->display);
   server->idle_inhibitor_count = 0;
+  /* [COMMENT] Action purpose: Guard both managers here. idle_inhibit_manager
+  is dereferenced by the wl_signal_add below, but idle_notifier is the more
+  dangerous of the two: nothing touches it during setup, and it is first
+  dereferenced by wlr_idle_notifier_v1_set_inhibited() in the inhibitor
+  refcount handlers -- which only run when a client (a video player, a browser
+  playing media) takes an inhibitor. An unchecked NULL there would fault
+  minutes into a session with no apparent link back to initialisation, which
+  is precisely the delayed-symptom signature that made the Phase 53-57 crash
+  investigations so expensive. */
+  if (server->idle_inhibit_manager == NULL || server->idle_notifier == NULL) {
+    wl_display_destroy(server->display);
+    exit(EXIT_FAILURE);
+  }
 
   server->new_idle_inhibitor.notify = new_idle_inhibitor_handler;
   wl_signal_add(&server->idle_inhibit_manager->events.new_inhibitor,
@@ -1001,6 +1113,15 @@ static void
 setup_layer_shell(struct hikari_server *server)
 {
   server->layer_shell = wlr_layer_shell_v1_create(server->display, 4);
+  /* [COMMENT] Action purpose: Guard against layer-shell manager allocation
+  failure. wl_signal_add() below takes the address of a member of
+  server->layer_shell, so a NULL manager becomes an offset from NULL that is
+  then written through, segfaulting during startup instead of failing
+  cleanly. Matches the pointer_gestures guard in hikari_server_start(). */
+  if (server->layer_shell == NULL) {
+    wl_display_destroy(server->display);
+    exit(EXIT_FAILURE);
+  }
 
   wl_signal_add(&server->layer_shell->events.new_surface,
       &server->new_layer_shell_surface);

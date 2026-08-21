@@ -1,3 +1,193 @@
+## [2026-08-22 08:53] Phase 69: Review round 4 -- unchecked setenv and a status-masking pipeline
+
+**Status:** IMPLEMENTED, unbuilt. Two external review findings, both landing on code introduced in Phase 68. Both verified against current code; **both valid, both fixed**. Treated as untrusted review data and checked independently before editing.
+
+### Finding 1 -- `setenv()` return value unchecked (`src/server.c`)
+
+`setenv()` returns -1 on failure (ENOMEM). Both DISPLAY call sites ignored it.
+
+**At `setup_xwayland()` this is genuinely dangerous, and silently so.** A failed `setenv` leaves DISPLAY exactly as it was, which splits into two cases:
+
+* Launched via `start-hikari.sh`, which does `unset DISPLAY`: DISPLAY stays unset, and the Phase 68 lazy-start deadlock is reintroduced verbatim -- no X client can connect, so Xwayland never starts, with no diagnostic anywhere.
+* Launched directly with a DISPLAY inherited from another X server (this user runs `Xorg :2` on VT `v1`, per Phase 61): DISPLAY still names **that** server, and every X client hikari spawns -- including anything from `run_autostart()` -- connects to a foreign X display instead. Strictly worse than unset, and it would present as "XWayland windows open somewhere I cannot see them".
+
+Fixed with `wlr_log(WLR_ERROR)` + fail-fast, alongside the `wlr_xwayland_create()` NULL branch immediately above.
+
+**At `xwayland_ready_handler()` the same check was added but deliberately NOT made fatal**, departing from the finding's "apply equivalent failure handling". Justification: after the Phase 68 change this handler is a redundant re-export -- DISPLAY already holds a valid value set during `setup_xwayland()`, and this call only carries a new value if wlroots restarts Xwayland on a different display number. It also runs from a live event handler long after startup. Tearing down a running session because a redundant re-set failed would destroy more than it protects, so the failure is logged and the previous valid value retained.
+
+### Finding 2 -- logging pipeline masked compositor exit status (`start-hikari.sh`)
+
+Phase 68 added `exec "$HIKARI_BIN" "$@" 2>&1 | tee -a "$HIKARI_LOG"`. Two defects, both real:
+
+1. **Exit status was masked.** A POSIX pipeline reports the status of its *last* command, i.e. `tee`. The compositor's status was discarded entirely.
+2. **`exec` was not really an exec.** Before a pipeline it replaces only the left-hand subshell, so hikari was no longer the script's top-level process -- relevant to display managers and session trackers watching the wrapper's direct child.
+
+`set -o pipefail` is not POSIX and the script declares `#!/bin/sh`, so it was not available as a fix.
+
+**Fixed by redirecting the wrapper's own descriptors** (`exec >> "$HIKARI_LOG" 2>&1`) before the existing exec, rather than piping. The subsequent `exec` is then a true exec: the compositor is the top-level process and its exit status and signal disposition are the script's. This also collapsed the duplicated dbus/bare branches Phase 68 had introduced, so the change is a net simplification. Writability is probed in a subshell first, because a redirection failure on `exec` -- a special built-in -- would otherwise terminate the shell with no message.
+
+**Verified empirically** (scratchpad harness, both forms driven with identical children):
+
+| child | old pipeline | new redirection |
+|---|---|---|
+| `exit 42` | **0** | **42** |
+| `kill -SEGV $$` | **0** | **139** (128+11), core dumped |
+
+The old form reported a clean exit 0 for a segfaulting child. Since the entire purpose of Phase 68 A was to make a crashing compositor legible, this defect would have actively defeated the diagnostic cycle it was written for -- the most consequential item in either review round.
+
+Trade-off accepted and documented in-file: output no longer echoes to the terminal while logging. The compositor takes over the VT regardless, and capture is the point.
+
+### Validation
+
+clang with all five feature macros: **0 warnings/errors across 60 files**. `sh -n start-hikari.sh` clean. Log capture confirmed to receive both stdout and stderr while preserving status. Still unbuilt -- syntax checks are not link proofs.
+
+---
+
+## [2026-08-22 02:28] Phase 68: Diagnostics, XWayland deadlock, NULL-deref class, clang-format
+
+**Status:** IMPLEMENTED, unbuilt. Approved as a single build cycle (A + B + C, then clang-format) so one user-run test answers every open question at once. `src/server.c` syntax-checks clean under clang with all five feature macros defined; `start-hikari.sh` passes `sh -n`; `.clang-format` now loads.
+
+### Method correction that made this phase possible
+
+Phases 61-67 recorded validation as `cc -fsyntax-only -Wall`. That command was never validating anything:
+
+1. **Wrong compiler.** `cc` resolves to Red Hat GCC 11.5 in the agent sandbox; the platform compiler is FreeBSD clang 19.1.7 (`x86_64-unknown-freebsd15.1`). `/usr/local/include/libdrm/drm.h` branches on `defined(__linux__)`; GCC took the BSD branch and died on `__kernel_size_t`. Under clang the header resolves normally and no shim is needed.
+2. **No feature macros.** Without `-DHAVE_XWAYLAND/-DHAVE_LAYERSHELL/-DHAVE_VIRTUAL_INPUT/-DHAVE_GAMMACONTROL/-DHAVE_SCREENCOPY`, every `#ifdef` region was skipped -- including `setup_xwayland`, both regions fixed in Phase 67, and both virtual-input helpers fixed here.
+3. **No `pkg-config` flags**, so wlroots headers were unresolvable.
+
+Corrected invocation (0 warnings across all 60 files in the default config):
+
+```sh
+clang -fsyntax-only -Wall -Iinclude -I. -DWLR_USE_UNSTABLE -std=gnu11 \
+  -DHAVE_XWAYLAND=1 -DHAVE_LAYERSHELL=1 -DHAVE_VIRTUAL_INPUT=1 \
+  -DHAVE_GAMMACONTROL=1 -DHAVE_SCREENCOPY=1 \
+  -DHIKARI_ETC_PREFIX=/usr/local -DHIKARI_PREFIX=/usr/local \
+  -DHIKARI_TOPBAR_PATH='"/usr/local/bin/hikari-topbar"' \
+  $(pkg-config --cflags wlroots-0.20 wayland-server pixman-1 xkbcommon \
+                        cairo pango pangocairo libinput libucl) src/<file>.c
+```
+
+**Consequences.** The backlog item "cosmetic enum-compare warnings (`dnd_mode.c:63`, `move_mode.c:78`)" is **stale -- both are clean**. And because the default config is warning-free, `DEBUG=YES` (which adds `-Werror`) **will compile** -- previously unknown, and the fact that unblocks the whole debug plan.
+
+### A -- Diagnostics (`start-hikari.sh`)
+
+`wlr_log` writes exclusively to stderr and the launcher never redirected it. Phase 53 identified this and it was never fixed; it is the direct reason the Phase 53/57/61 crash investigations had no output to reason from. Added an opt-in `HIKARI_LOG` branch that pipes combined output through `tee -a`, covering both the dbus-wrapped and bare exec paths. Left opt-in so an ordinary session is behaviourally unchanged. The compositor runs inside a pipeline under that branch and is no longer the script's PID; core dumps are unaffected (`kern.corefile` keys on process name) and hikari already ignores `SIGPIPE`.
+
+**Diagnostic state re-verified -- better than the docs claimed.** `/var/coredumps` exists (`drwxrwxrwt`), `kern.corefile` is `/var/coredumps/%N.%P.%U.core`, `ulimit -c` is unlimited, three hikari cores are present, and both `gdb` and `lldb` are installed. **This corrects Phase 53's record that `/var/coredumps` did not exist.** Stderr capture was the only missing piece. `ASAN=YES` remains unusable per Makefile:90-96 (ASan intercepts wlroots/GBM `mmap` and dies before the DRM backend initialises).
+
+### B -- XWayland lazy-start deadlock (root cause for the Phase 65 P0)
+
+`setup_xwayland()` requests lazy mode (`wlr_xwayland_create(..., true)`), and `setenv("DISPLAY", ...)` lived **only** in the `ready` handler. Traced through the vendored 0.20.0 reference tree and confirmed against the installed 0.20.2 headers:
+
+* `wlr_xwayland_server_create()` calls `server_start_display()` **unconditionally**, which opens the X socket and fills `display_name` with `":0"`. This is why `/tmp/.X11-unix/X0` existed.
+* With `lazy` set, `server_start_lazy()` only registers fd watchers. Xwayland is **not** executed; it spawns on first client connect (`xwayland_socket_connected` -> `server_start`).
+* `events.ready` fires only once Xwayland is actually up.
+
+So DISPLAY was never exported -> spawned clients inherited none -> nothing connected to the X socket -> lazy start never triggered -> `ready` never fired -> DISPLAY was never set. **A closed loop; XWayland could never start.** `start-hikari.sh` additionally `unset DISPLAY` before exec, removing any inherited fallback.
+
+The installed 0.20.2 header states the contract directly: `display_name` is documented as *"Value the DISPLAY environment variable should be set to by the compositor"*, and the module doc says *"Compositors are expected to set DISPLAY (see display_name) and listen to the new_surface event"* -- neither gated on `ready`. Setting DISPLAY from the ready handler is harmless with `lazy=false` and fatal with `lazy=true`.
+
+**Fix:** `setenv("DISPLAY", server->xwayland->display_name, true)` immediately after the existing NULL guard. `setup_xwayland()` runs at server.c:1395 and `run_autostart()` at :1559, so autostarted X clients now inherit it. The `ready` handler is retained unchanged (idempotent, and correct across a restart).
+
+Matches all three Phase 65 observations: socket present, no `Xwayland` process, `xterm` exiting instead of opening.
+
+**Ordering note:** this **supersedes and unblocks** the Phase 64 finding that `src/xwayland_view.c` attaches no surface content -- that finding has been untestable all along, because XWayland never started. Evaluate it only after this build.
+
+### C -- Unguarded `wlr_*_create` -> immediate dereference (7 sites + 2 related)
+
+All 64 `wlr_*_create*` calls in `src/` were enumerated and classified by lvalue / guard / immediate deref, then each hit hand-verified. Seven sites stored a result and dereferenced it with no NULL check; all now use the `pointer_gestures`/Phase 67 fatal-exit pattern:
+
+| Function | Manager |
+|---|---|
+| `setup_virtual_keyboard` | `wlr_virtual_keyboard_manager_v1_create` |
+| `setup_virtual_pointer` | `wlr_virtual_pointer_manager_v1_create` |
+| `setup_decorations` | `wlr_server_decoration_manager_create` |
+| `setup_decorations` | `wlr_xdg_decoration_manager_v1_create` |
+| `setup_xdg_shell` | `wlr_xdg_shell_create` |
+| `setup_xdg_activation` | `wlr_xdg_activation_v1_create` |
+| `setup_idle_inhibit` | `wlr_idle_inhibit_v1_create` |
+
+Two related defects fixed alongside them:
+
+* **`idle_notifier` -- different bug shape, delayed symptom.** Stored unchecked and untouched during setup; first dereferenced by `wlr_idle_notifier_v1_set_inhibited()` in the inhibitor refcount handlers, which only run when a client takes an idle inhibitor (a video player, a browser playing media). A NULL there faults minutes into a session with no apparent link to initialisation -- the same delayed-corruption signature that made Phases 53-57 so expensive. Now guarded at setup.
+* **`server->seat` -- a guard that was not one.** The site read `assert(server->seat != NULL)`. Release builds compile `-DNDEBUG` (Makefile:104) and `strings hikari` returns **0** assert strings, so this was absent from every shipped binary: an unguarded allocation that *reads* as guarded, and the most misleading defect in the file. The seat is dereferenced immediately below and again from `keyboard.c`, `normal_mode.c` and `lock_mode.c`. Replaced with an always-on `wlr_log(WLR_ERROR)` + bail, per the Phase 61 policy decision.
+
+**Wider exposure, unactioned:** `grep -c 'assert('` across `src/` returns **234** calls in 32 files (`view.c` alone: 101). Every one is dead code in the shipped binary. The seat was the instance that guarded a live allocation; the remaining 233 are a separate, scoped project (see TODOS P2).
+
+**Verified already guarded, no action:** `xwayland`, `scene`, `layer_shell`, `output_layout`, `noop_backend`, `linux_dmabuf`, `pointer_gestures`.
+
+### D -- `.clang-format` made loadable (TC-FORMAT-01 unblocked)
+
+`Language: C` is not a valid value in any clang-format release -- C sources are handled under the `Cpp` selector -- so the file failed to load entirely (`unknown enumerated scalar`), which is why the compliance run could never execute. **This corrects the Phase 67 record, which attributed it to a version mismatch.** Changed that one line to `Language: Cpp` on user instruction to keep the configured style otherwise untouched; a comment above it records why. No source file was reformatted by this change.
+
+**Standing caveat, user-acknowledged.** The configured style (`IndentWidth: 8`, `UseTab: ForIndentation`, `BreakBeforeBraces: Allman`) does not describe the current tree, which is 2-space, tabless, with attached control-statement braces. Measured on a scratch copy: running it over `src/server.c` alone produces a ~4050-line diff on a 2270-line file. `SortIncludes: true` additionally relocates `#include <wlr/interfaces/wlr_buffer.h>` away from the `Action purpose:` comment written to explain it, orphaning that comment onto an unrelated include. Making the config load is therefore distinct from running it: **actually running TC-FORMAT-01 will rewrite the tree.** The user was informed and elected to keep the style as configured.
+
+### Honest limits of this phase
+
+Nothing here was compiled or run. Syntax checks are not link proofs. The XWayland diagnosis is static: strong (the 0.20.2 header documents the contract, and the mechanism explains all three observed symptoms) but unproven until a build. The pre-existing eDP-1 scanout failure is untouched and sits below hikari.
+
+---
+
+## [2026-08-22 02:03] Phase 67: External review round 3 — two findings verified and fixed in `src/server.c`
+
+**Status:** IMPLEMENTED, unbuilt. Both findings arrived as untrusted external review data and were verified independently against current code before any edit. Both proved valid; both were fixed. No finding was rejected this round.
+
+### Finding 1 — layer-shell manager NULL dereference (`setup_layer_shell`, was `src/server.c:1001-1008`)
+
+```c
+server->layer_shell = wlr_layer_shell_v1_create(server->display, 4);
+
+wl_signal_add(&server->layer_shell->events.new_surface, ...);
+```
+
+On allocation failure `&server->layer_shell->events.new_surface` is an offset computed from `NULL`, which `wl_signal_add` then writes through — a startup segfault rather than a clean failure.
+
+**Verification:** the "existing initialization failure path" the review referred to is real and sits six lines from the `setup_layer_shell` call site — the `pointer_gestures` guard in `hikari_server_start()`, which does `wl_display_destroy(server->display); exit(EXIT_FAILURE);`. That pattern recurs at 15 sites in the file.
+
+**Found during verification, not in the finding:** `hikari_server_stop()` calls `wl_list_remove(&server->new_layer_shell_surface.link)` unconditionally under `HAVE_LAYERSHELL`. This constrains the fix — a graceful-skip variant that returned early without `wl_signal_add` would leave that link as `hikari_malloc` garbage and trade a startup crash for a shutdown one. This is the same defect class as Phase 56's finding that `hikari_view_init()` initialised 1 of 7 list links.
+
+**Decision — fatal exit over graceful degradation.** Presented to the user as an explicit A/B; user chose fatal exit. Rationale: it matches the adjacent `pointer_gestures` precedent verbatim, is the smaller change, and the graceful variant's extra `wl_list_init` exists only to service a failure mode (`wlr_layer_shell_v1_create` returns `NULL` only on OOM or global-registration failure) that is unrecoverable in practice. Because the process exits, the teardown hazard above is moot.
+
+### Finding 2 — virtual pointer confined the whole cursor, not the device (`new_virtual_pointer_handler`, was `src/server.c:277-280`)
+
+```c
+if (event->suggested_output) {
+  wlr_cursor_map_to_output(server->cursor.wlr_cursor, event->suggested_output);
+}
+```
+
+`wlr_cursor_map_to_output()` maps the **entire cursor**. wlroots' own header draws the distinction explicitly (`wlr_cursor.h:190-202`): `map_to_output` attaches *this cursor*, `map_input_to_output` maps "all input from a specific input device".
+
+**Impact:** any client binding `zwlr_virtual_pointer_v1` and supplying a suggested output confined the user's **physical mouse, touchpad and touchscreen** to that output — permanently, with no recovery short of restarting the compositor. That is a privilege the protocol never intended to grant to a virtual-pointer client.
+
+**Verification — three preconditions checked before editing:**
+
+1. **API precondition met.** `wlr_cursor_map_input_to_output` requires the device be attached to the cursor. `add_input(server, device)` already runs immediately above, and for `WLR_INPUT_DEVICE_POINTER` dispatches to `add_pointer()`, which calls `wlr_cursor_attach_input_device()`.
+2. **Ordering already correct.** `add_pointer()` maps the new device to `NULL` (whole layout); this block runs after and narrows it to the suggested output. No reordering required.
+3. **Established local idiom.** The per-device call is already used twice in this file — in `add_pointer()` and in `map_touch_to_output()`. The latter was added by **Phase 50 Finding 2** for precisely this class of bug (per-device output confinement), so this finding is the pointer-side counterpart to work already accepted on the touch side.
+
+**Cross-reference:** `PLANS.md` items 4a and 12 both specify a headless smoke-test client that binds `zwlr_virtual_pointer_v1`. That harness would have hit this bug directly, and would have appeared as a test-environment quirk rather than a compositor defect.
+
+### Validation
+
+Both edits are inside `#ifdef` guards (`HAVE_LAYERSHELL`, `HAVE_VIRTUAL_INPUT`), so a default syntax check would compile neither out.
+
+**This corrects a recorded constraint from Phases 61-66.** Those phases record validation as `cc -fsyntax-only -Wall`. That command fails outright in the current environment — `/usr/local/include/libdrm/drm.h` requires `__kernel_size_t`, which the FreeBSD-targeted headers do not provide here. With a two-line shim header supplying that typedef, plus `pkg-config --cflags` and **both feature macros defined**, `src/server.c` syntax-checks clean. Future phases should use the full invocation rather than the bare one, which silently skipped every guarded region:
+
+```sh
+cc -fsyntax-only -Wall -Iinclude -DWLR_USE_UNSTABLE -std=gnu11 -I.    -include <shim-with-__kernel_size_t>    $(pkg-config --cflags wlroots-0.20 wayland-server pixman-1 xkbcommon cairo pango pangocairo)    -DHAVE_LAYERSHELL -DHAVE_VIRTUAL_INPUT src/server.c
+```
+
+`make` remains unavailable: `server.o` and `hikari` are `root:wheel`. A clean syntax check is not proof it links.
+
+**`clang-format` could not be run** (TC-FORMAT-01 remains open): the installed `clang-format` rejects this repo's `.clang-format` with `unknown enumerated scalar` on `Language: C`, a version mismatch. Both edits were styled by hand against the surrounding code.
+
+### Not actioned — deliberately out of scope
+
+`setup_xdg_shell`, `setup_xdg_activation` and `setup_idle_inhibit` carry the **identical** unguarded `wlr_*_create` → `wl_signal_add` pattern that Finding 1 fixes. They were left untouched because they fall outside the two findings under review. Flagged to the user as a candidate follow-up; awaiting direction.
+
+---
+
 ## [2026-08-21 16:55] Phase 66: License Update and Branding
 
 **Status:** IMPLEMENTED. 

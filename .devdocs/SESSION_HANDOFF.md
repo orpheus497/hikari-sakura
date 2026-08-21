@@ -2,6 +2,59 @@
 
 *Note: Most recent entries are listed at the top.*
 
+## Session Date: 2026-08-22 08:53 -- Phase 69: Review round 4 (unchecked setenv, status-masking log pipeline)
+
+**Timestamp:** 2026-08-22 08:53
+**Current Status:** Two review findings against Phase 68's own code. Both verified valid and fixed. Syntax-clean; still unbuilt.
+
+**Accomplishments:**
+* **Finding 1 -- unchecked `setenv()` at both DISPLAY call sites.** At `setup_xwayland()` a silent failure either reinstates the Phase 68 deadlock (wrapper unsets DISPLAY) or leaves DISPLAY naming the user's separate `Xorg :2`, sending autostarted X clients to a foreign display. Now fatal with a diagnostic. In `xwayland_ready_handler()` the check was added but deliberately kept **non**-fatal -- it is a redundant re-export from a live handler and DISPLAY already holds a valid value.
+* **Finding 2 -- Phase 68's `| tee -a` logging pipeline masked the compositor's exit status** and prevented a true `exec`. Verified empirically: the old form reported **exit 0** for a child killed by SIGSEGV; the replacement reports **139**. Fixed by redirecting the wrapper's own descriptors instead of piping, which also collapsed the duplicated dbus branches. `pipefail` unavailable under `#!/bin/sh`.
+* This was the most consequential item of either review round: left in place, it would have defeated the debug cycle Phase 68 A was written to enable.
+
+**Modified files:** `src/server.c` (+129/-4 cumulative for Phases 68-69), `start-hikari.sh` (+26).
+
+**Next steps:** unchanged from Phase 68 -- the single user-run build cycle is still the gate. `rm -f *.o && make DEBUG=YES && sudo make DEBUG=YES install`, then `export HIKARI_LOG=/tmp/hikari-$(date +%s).log`, run, and test `xterm` / `xeyes`. The log now also yields a trustworthy exit status if the compositor dies.
+
+## Session Date: 2026-08-22 02:28 -- Phase 68: Diagnostics, XWayland deadlock, NULL-deref class, clang-format
+
+**Timestamp:** 2026-08-22 02:28
+**Current Status:** Four workstreams implemented in one batch for a single user-run build cycle. All syntax-clean; nothing compiled or run.
+
+**Accomplishments:**
+* **A -- Diagnostics.** Added opt-in `HIKARI_LOG` stderr capture to `start-hikari.sh` (both dbus and bare exec paths). Confirmed core dumps, `kern.corefile`, `ulimit -c`, and gdb/lldb are all already working -- **correcting Phase 53's record that `/var/coredumps` did not exist**. Stderr was the only gap.
+* **B -- XWayland deadlock root-caused and fixed.** Lazy mode plus a `ready`-gated `setenv("DISPLAY")` formed a closed loop: no DISPLAY -> no client connect -> no lazy start -> no ready -> no DISPLAY. Fixed by exporting `display_name` immediately after `wlr_xwayland_create()`, matching the contract documented in the installed 0.20.2 header. Explains all three Phase 65 symptoms.
+* **C -- 7 unguarded `wlr_*_create` sites guarded**, plus `idle_notifier` (delayed-symptom shape) and `server->seat`. The seat's `assert()` was dead in every release binary, making an unguarded allocation read as guarded.
+* **D -- `.clang-format` now loads.** `Language: C` has never been valid in any clang-format release; changed to `Cpp` only, style untouched per user instruction.
+* **Validation method corrected for Phases 61-67** -- wrong compiler (sandbox GCC vs FreeBSD clang) and no feature macros meant every `#ifdef` region went unchecked. Under clang with all macros: 0 warnings across 60 files, so `DEBUG=YES` (`-Werror`) will compile.
+
+**Modified files:** `src/server.c` (+104/-2), `start-hikari.sh` (+16), `.clang-format` (+6/-2).
+
+**Next steps (user-run, one cycle):**
+1. `rm -f *.o && make DEBUG=YES && sudo make DEBUG=YES install` -- verified it will compile clean.
+2. `export HIKARI_LOG=/tmp/hikari-$(date +%s).log`, start the session, then test `xterm` / `xeyes` for XWayland.
+3. On any crash: `gdb /usr/local/bin/hikari /var/coredumps/hikari.<pid>.1001.core -ex 'bt full' -ex 'thread apply all bt' -ex quit`.
+4. **Only after XWayland starts**, re-evaluate the Phase 64 finding that `xwayland_view.c` attaches no surface content.
+5. Decide on the 234 dead asserts and on whether TC-FORMAT-01 should ever actually run.
+
+## Session Date: 2026-08-22 02:04 — Phase 67: External review round 3 (two findings, both valid, both fixed)
+
+**Timestamp:** 2026-08-22 02:04
+**Current Status:** Two `src/server.c` defects verified and fixed. Syntax-checked clean with both feature guards defined; still unbuilt.
+
+**Accomplishments:**
+* **Finding 1 — layer-shell NULL deref.** `setup_layer_shell()` passed the result of `wlr_layer_shell_v1_create()` straight to `wl_signal_add` without a NULL check, making allocation failure a startup segfault. Guarded with the `pointer_gestures` fatal-exit pattern from the same file, chosen by the user over graceful degradation.
+* **Finding 2 — virtual pointer hijacked the whole cursor.** `new_virtual_pointer_handler()` called `wlr_cursor_map_to_output()`, which is cursor-wide, so any `zwlr_virtual_pointer_v1` client supplying a suggested output permanently confined the physical mouse, touchpad and touchscreen to that output. Replaced with the per-device `wlr_cursor_map_input_to_output()`, matching `add_pointer()` and `map_touch_to_output()`.
+* **Corrected the validation procedure for Phases 61-66.** The recorded `cc -fsyntax-only -Wall` command does not actually run in this environment (libdrm needs `__kernel_size_t`), and even when it did it defined neither `HAVE_LAYERSHELL` nor `HAVE_VIRTUAL_INPUT` — so every guarded region was silently skipped. The working full invocation is recorded in DECISIONS_LOG Phase 67.
+* Confirmed `clang-format` cannot run here (version mismatch against this repo's `.clang-format`); TC-FORMAT-01 stays open.
+
+**Modified files:** `src/server.c` (+20/-2, two hunks).
+
+**Next steps:**
+1. **User build/verify:** `sudo make clean && sudo make install` — still outstanding for Phases 61-67 collectively.
+2. **Decision needed:** `setup_xdg_shell`, `setup_xdg_activation` and `setup_idle_inhibit` have the identical unguarded-`_create` pattern as Finding 1. Left untouched as out of scope; confirm whether to sweep them.
+3. Phase 65's P0 XWayland-does-not-start diagnosis remains the highest-priority open item, unchanged by this phase.
+
 ## Session Date: 2026-08-21 16:55 — Phase 66: License and Branding Update
 
 **Timestamp:** 2026-08-21 16:55
