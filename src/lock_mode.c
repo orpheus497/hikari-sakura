@@ -125,10 +125,8 @@ start_unlocker(void)
     close(locker_pipe[1][0]);
     // [COMMENT] Action purpose: dup2 both endpoints onto stdin/stdout, checking
     // for failure -- an unchecked dup2 could silently leave the child reading
-    // or writing the wrong descriptor. The original endpoint is only closed
-    // when it differs from its target: dup2 is a no-op when src == dst, so
-    // closing an endpoint that already equals 0 or 1 would sever the freshly
-    // established stdin/stdout.
+    // or writing the wrong descriptor. The original endpoints need no explicit
+    // close here; the closefrom() below sweeps them up.
     if (dup2(locker_pipe[0][0], STDIN_FILENO) == -1 ||
         dup2(locker_pipe[1][1], STDOUT_FILENO) == -1) {
       static const char msg[] =
@@ -447,13 +445,11 @@ submit_password(void)
   size_t password_length = strnlen(input_buffer, BUFFER_SIZE - 1) + 1;
 
   hikari_lock_indicator_set_verify(mode->lock_indicator);
-  // [COMMENT] Action purpose: Write password to unlocker pipe. If write fails
-  // (broken pipe, full buffer), the password is silently lost — the unlocker
-  // will not receive it and will not write a result, so locker_result_handler
-  // will eventually fire with WL_EVENT_HANGUP and show the deny indicator.
   // [COMMENT] Action purpose: Write the full password to the unlocker pipe,
-  // handling both EINTR interrupts and partial writes. The buffer position
-  // and remaining length are advanced after each successful partial write.
+  // advancing past each partial write and retrying on EINTR. On any other
+  // write failure the password never reaches the unlocker, which then writes
+  // no result -- locker_result_handler eventually fires with WL_EVENT_HANGUP
+  // and shows the deny indicator, so the attempt fails closed.
   const char *buf = input_buffer;
   size_t remaining = password_length;
   while (remaining > 0) {

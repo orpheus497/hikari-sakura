@@ -17,3 +17,7 @@ compile_flags.txt
 .clangd
 hikari.log
 wlroots-0.20.0/
+
+# Captured runtime logs from redirect typos (e.g. `2>1` instead of `2>&1`)
+/1
+/2

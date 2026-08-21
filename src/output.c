@@ -67,6 +67,10 @@ static const struct wlr_buffer_impl bg_buffer_impl = {
   .end_data_ptr_access = bg_buffer_end_data_ptr_access,
 };
 
+/* Function purpose: Draw the background image onto the output-sized surface
+using the configured fit. Returns false when Cairo cannot render it, in which
+case the caller must leave the output without a background rather than using
+the half-drawn surface. */
 static inline bool
 render_image_to_surface(cairo_surface_t *output,
     cairo_surface_t *image,
@@ -748,7 +752,11 @@ hikari_output_fini(struct hikari_output *output)
       unmanaged_temp,
       &output->unmanaged_xwayland_views,
       unmanaged_output_views) {
-    wlr_log(WLR_ERROR,
+    /* Action purpose: On the noop path there is no surviving workspace to
+    evacuate to, so leftover views are expected and this is routine. Anywhere
+    else hikari_workspace_merge() should already have emptied the list, and a
+    remaining view means that failed -- worth an error. */
+    wlr_log(noop ? WLR_DEBUG : WLR_ERROR,
         "hikari_output_fini: override-redirect view %p still linked to output "
         "%s at teardown; detaching to avoid a dangling reference",
         (void *)unmanaged,

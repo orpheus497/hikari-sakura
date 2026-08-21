@@ -1,8 +1,20 @@
 # Forward Strategy & Plans
 
-*Last Updated:* 2026-08-21 14:56
+*Last Updated:* 2026-08-21 16:10
 
 ## Implementations to be Fully Implemented
+
+-9. **XWayland surface content — NOT YET APPROVED, not started (found in Phase 64).**
+
+   `src/xwayland_view.c` creates `xwayland_view->scene_tree` and attaches only `hikari_border_init()` and `hikari_indicator_frame_init()` to it. No `wlr_scene_subsurface_tree_create()` (or equivalent) is called for `xwayland_surface->surface` anywhere in the file, so a managed X11 window should render its border and indicator frame with **no content inside**.
+
+   1. **Confirm before implementing.** Launch a genuinely X11-only client (`xterm`, `xeyes`, `xclock`) and check whether an empty bordered rectangle appears. Everything below is conditional on that.
+   2. Attach the surface tree at map time, not init time — the `wlr_surface` does not exist until `associate` fires, which is why this cannot mirror `hikari_xdg_view_init`'s init-time `wlr_scene_xdg_surface_create()` call.
+   3. Store the returned tree on `struct hikari_xwayland_view` and tear it down on unmap, so a dissociate/re-associate cycle (X11 surface recreation) does not leak or double-attach.
+   4. Check the same question for `xwayland_unmanaged_view.c` — override-redirect windows have no scene node either, and hit-testing already walks them via `output->unmanaged_xwayland_views`.
+   5. Re-verify `surface_at()` in both XWayland files once content renders. Unlike xdg, XWayland surfaces carry no window-geometry offset, so the Phase 64 cursor correction should **not** be copied there — but that needs confirming against real rendering rather than assumed.
+
+   **Ordering note:** this is the third "was never wired up" gap found in a row (popup scene nodes, layer-popup scene nodes, now XWayland content). Step 4 below — the headless smoke test — is what would have caught all three before release, and its value rises with each one found by hand.
 
 -8. **Phase 61 Steps 3 and 4 — approved, not yet started.** Steps 1 (crash fix + Finding A) and 2 (Finding B) are implemented; see DECISIONS_LOG Phase 61. These two remain.
 

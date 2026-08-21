@@ -9,7 +9,8 @@
 struct hikari_indicator;
 struct hikari_output;
 
-/* ##Class purpose: Single text bar in the view indicator overlay, rendered as a wlr_scene_buffer. */
+/* Single text bar in the view indicator overlay, rendered as a
+wlr_scene_buffer. */
 struct hikari_indicator_bar {
   struct wlr_scene_buffer *scene_buffer;
   struct hikari_indicator *indicator;
@@ -53,18 +54,18 @@ hikari_indicator_bar_update(struct hikari_indicator_bar *indicator_bar,
     struct hikari_output *output,
     const char *text);
 
-/* ##Function purpose: Reposition the indicator bar scene buffer relative to view geometry. */
+/* Function purpose: Reposition the indicator bar scene buffer relative to view geometry. */
 void
 hikari_indicator_bar_position(struct hikari_indicator_bar *indicator_bar,
     struct hikari_output *output,
     struct wlr_box *view_geometry);
 
-/* ##Function purpose: Record that this bar should be visible and enable its
+/* Function purpose: Record that this bar should be visible and enable its
 scene node if one currently exists. */
 void
 hikari_indicator_bar_show(struct hikari_indicator_bar *indicator_bar);
 
-/* ##Function purpose: Record that this bar should be hidden and disable its
+/* Function purpose: Record that this bar should be hidden and disable its
 scene node if one currently exists. */
 void
 hikari_indicator_bar_hide(struct hikari_indicator_bar *indicator_bar);

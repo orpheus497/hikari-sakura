@@ -2,6 +2,37 @@
 
 *Note: Most recent entries are listed at the top.*
 
+## Session Date: 2026-08-21 16:10 — Phases 61-64: Crash Root-Cause Campaign (three separate defects, all proven by core dump)
+
+**Timestamp:** 2026-08-21 16:10
+**Current Status:** Four phases of crash work. Three distinct crashes root-caused from **the first core dumps ever captured in this project**, plus a rendering gap and a hit-test bug. All implemented, **none built under the real Makefile** — every file passes `cc -fsyntax-only -Wall`, but the `.o` files are root-owned so the agent cannot run `make`.
+
+**What changed the investigation:** the user created `/var/coredumps` (it had never existed, so all prior crashes silently dumped nothing) and captured stderr. Phases 53-57 had reasoned statically for ~50 phases from a false premise. Two prior conclusions were corrected outright:
+1. There were always **two** crash signatures. `/var/log/messages` showed SIGSEGV (11) at 13:59:15, 14:26:15, 14:51:15 alongside the SIGABRTs. The "SIGABRT, not SIGSEGV" premise drove Phases 53-57 down the wrong path.
+2. The captured crash carried **no assertion message** and exited 139, contrary to Phase 57's prediction of a wlroots assertion.
+
+**Accomplishments:**
+* **Phase 61 — NULL deref in `session_active_handler`.** `*(bool *)data` where wlroots emits `data == NULL`. Unconditional segfault on every VT switch / seat disable. Also fixed the half-written `hikari_xwayland_unmanaged_evacuate()` (updated `->workspace` but never moved the output-list link, unlike its documented managed twin) and `override_redirect` being decided once and never revisited.
+* **Phase 62 — popup unconstrained before initialisation.** Aborted on *every* xdg_popup; explains "pavucontrol crashes immediately". Same defect in `layer_shell.c`.
+* **Phase 63 — popups never had a scene node.** They have never rendered, in either `xdg_view.c` or `layer_shell.c`; hidden only because creating one used to abort first. Plus a shutdown SIGSEGV in `hikari_workspace_focus_view()`.
+* **Phase 64 — cursor offset** (window-geometry vs wl_surface coordinate spaces), external review triage (7 implemented / 5 rejected / 2 declined as policy), and normalisation of 17 non-standard `##` comment prefixes.
+
+**Modified files:** `src/server.c`, `src/output.c`, `src/workspace.c`, `src/view.c`, `src/xdg_view.c`, `src/xwayland_view.c`, `src/xwayland_unmanaged_view.c`, `src/layer_shell.c`, `src/border.c`, `src/indicator_frame.c`, `src/binding_config.c`, `src/configuration.c`, `src/lock_mode.c`, `include/hikari/color.h`, `include/hikari/server.h`, `include/hikari/xdg_view.h`, `include/hikari/layer_shell.h`, `include/hikari/xwayland_view.h`, `include/hikari/xwayland_unmanaged_view.h`, `include/hikari/border.h`, `include/hikari/indicator.h`, `include/hikari/indicator_bar.h`, `include/hikari/indicator_frame.h`.
+
+**Decisions:**
+* Invariant checks are **always-on `wlr_log(WLR_ERROR)` + safe bail**, never `assert()`. Basis is measured, not argued: `strings hikari` finds **zero** assert strings (release `-DNDEBUG`) while `libwlroots-0.20.so` has **280**. Every assertion hikari accumulated over ~50 phases, including everything Phases 55-57 added as a safety net, is dead code in the shipped binary.
+* `AGENTS.md` left untouched despite a genuine rule-4 self-inconsistency (it is AI process documentation living outside `.devdocs/`, but must sit at the root to be discoverable). Recorded in `DECISIONS_LOG.md` Phase 64 so reviewers stop re-raising it.
+* `AGENTS.md` line 30 was amended by the user mid-session to "Documentation is only necessary where the code is not self explanatory", retiring the backlogged 48-file comment-header rollout.
+
+**Next steps:**
+1. **`sudo make clean && sudo make install`** — nothing across Phases 61-64 has been compiled under the real Makefile.
+2. Verify: VT switch away/back; right-click menus and submenus; pavucontrol; cursor accuracy on a GTK client; clean exit status 0.
+3. **Awaiting approval:** XWayland views attach no surface content to their scene tree (`src/xwayland_view.c` wires only border + indicator_frame). Confirm with `xterm`/`xeyes` — expect a border with nothing inside.
+4. Still outstanding from the approved four-step plan: **Step 3** (always-on invariant checkers) and **Step 4** (headless smoke test, which must include a popup-creation case and a VT-switch/output-destroy case — either would have caught these bugs pre-release).
+5. Deferred: `BLUEPRINT.md` "View Visibility State" (Phase 55 Step 3) and "View Ownership Graph" (Phase 54 W1), both still unwritten.
+
+**Housekeeping:** 14 `firefox.*.core` files (~8 GB) in `/var/coredumps` from Firefox's own children (ZFS `posix_fallocate` limitation, not a hikari fault). Several orphaned `hikari-topbar` helpers survive each crashed session — `bar.c` forks them and nothing reaps them when the compositor dies.
+
 ## Session Date: 2026-08-21 — Phase 49: Touchscreen & Trackpad Gesture Implementation
 **Timestamp:** 2026-08-21 (session context date; `date` not executed — IDE-only tooling directive continues)
 **Current Status:** Touchscreen and `wlr_pointer_gestures_v1` support implementation is complete; native compilation and testing remain outstanding before this can be called fully verified.

@@ -1,5 +1,7 @@
 # Hikari Sakura - FreeBSD Wayland Compositor
 
+![Hikari Sakura running on FreeBSD](share/hikari_sakura_alpha.png)
+
 ## Description
 
 *Hikari Sakura* is a FreeBSD-focused revamp and modernization of the original Hikari taken from https://github.com/antaz/hikari (which has since been abandoned upstream). It is very different from the original and is focused on being a comprehensive desktop environment specifically built for FreeBSD as the first purpose-built Wayland desktop environment for FreeBSD.

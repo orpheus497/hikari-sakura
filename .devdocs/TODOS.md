@@ -4,6 +4,19 @@
 
 ## Active List
 
+### Phase 65: Review round 2 + teardown ordering (see DECISIONS_LOG Phase 65)
+
+- [x] **Teardown ordering fixed (`src/server.c`).** `hikari_cursor_fini()`/`hikari_indicator_fini()` ran before `wl_display_destroy_clients()`, but client teardown runs hikari's view destroy handlers, which call into cursor and indicator code. Cursor was being finalised while code using it still had to run — in the same path that produced the Phase 63 shutdown SIGSEGV. Clients and XWayland now go first.
+- [x] Removed tracked runtime log `1` (8.4 KB, committed in `03f0ebd`, user-specific paths — a `2>1` typo). Added `/1` and `/2` to `.gitignore`.
+- [x] `hikari_output_fini` sweep now logs `noop ? WLR_DEBUG : WLR_ERROR` — leftover views are expected on the noop path, unexpected elsewhere.
+- [x] `src/lock_mode.c`: deleted the comment describing a conditional endpoint close that does not exist (`closefrom` handles it); merged two stacked comments on the password write loop.
+- [x] `src/xwayland_unmanaged_view.c`: documented why the re-entrant override-redirect transition is safe (self-removal is what `wl_signal_emit_mutable` is for; replacement wrapper carries the opposite guard).
+- [x] `AGENTS.md` line 30 hyphenation applied on explicit approval.
+- [x] 3 findings rejected as invalid: `parse_color` comment (already present at `:497`), adopt-path ownership (already consistent), `UCL_FLOAT`/`UCL_TIME` rejection (unverifiable premise, benign worst case).
+- [x] All touched files pass `cc -fsyntax-only -Wall`.
+- [ ] **P0 — XWayland does not start; supersedes the Phase 64 render-gap test.** `ps` shows **no `Xwayland` process**. hikari created `/tmp/.X11-unix/X0` at 16:05 but wlroots spawns XWayland lazily on first connect, and `xterm`/`obs` exited rather than opening blank. So "did not open" is XWayland failing to start — a separate, earlier problem than the missing scene content. **Next:** from inside hikari, `echo $DISPLAY`, then `xterm 2>&1 | tee /tmp/xterm.log`.
+- [ ] **Still open, unchanged:** Phase 64's finding that `src/xwayland_view.c` attaches no surface content to its scene tree. Verified by code inspection, but **not** demonstrated by the xterm test. Only observable once XWayland runs.
+
 ### Phase 64: Cursor offset FIXED; review-finding triage; XWayland content gap found
 
 - [x] **Cursor offset ROOT CAUSE + FIX.** `surface_at()` in `src/xdg_view.c` passed **window-geometry-local** coords to `wlr_xdg_surface_surface_at()`, which takes **wl_surface-local** ones. The two differ by `xdg_surface->geometry.x/y` — the CSD margin, non-zero for most GTK clients — so every hit test landed that far up-and-left of the real pointer. Rendering was already correct because `wlr_scene_xdg_surface_create()` applies the same correction with the opposite sign. Fixed by adding `+ window->x/y`.

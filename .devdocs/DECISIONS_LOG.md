@@ -1,3 +1,81 @@
+## [2026-08-21 16:34] Phase 65: Second review round; teardown ordering fixed; XWayland test inconclusive
+
+### XWayland test result — corrects the Phase 64 expectation
+
+User ran `xterm` (did not open), `obs` (did not open), and a native client (opened). That looked like confirmation of Phase 64's "XWayland views render no content" finding. **It is not.**
+
+`ps` shows **no `Xwayland` process running at all**. hikari created `/tmp/.X11-unix/X0` at 16:05, but wlroots runs XWayland lazily and only spawns it on first client connect. Neither `xterm` nor `obs` is running either — they exited rather than opening blank. So the symptom points at **XWayland failing to start**, which is a distinct and earlier problem than the missing scene content.
+
+The Phase 64 code finding still stands on its own: `src/xwayland_view.c` attaches only border and indicator_frame to its scene tree and never attaches the X11 surface. But it is **not** what this test demonstrated, and the render gap only becomes observable once XWayland actually runs. Recorded so the two are not conflated later. Next diagnostic: from inside hikari, `echo $DISPLAY` and `xterm 2>&1 | tee`.
+
+### Review round 2 — 10 findings triaged
+
+**Implemented (6):**
+
+* **Teardown ordering (`src/server.c`) — the one with real crash relevance.** `hikari_cursor_fini()` and `hikari_indicator_fini()` ran *before* `wl_display_destroy_clients()`. Destroying a client destroys its surfaces, which runs hikari's view destroy handlers, and those reach `hikari_server_cursor_focus()` and indicator code — so the cursor was finalised (including `wlr_xcursor_manager_destroy()`) while code that uses it was still to run. Dependency inverted, in the same teardown path that produced the Phase 63 SIGSEGV. `wl_display_destroy_clients()` and `wlr_xwayland_destroy()` now precede both; `wlr_xwayland_destroy()` is NULL-safe (`xwayland/xwayland.c:74`) so the move needs no extra guard.
+* **Removed tracked runtime log `1`.** 8.4 KB, committed in `03f0ebd`, containing `/home/orpheus497` paths and local graphics-stack detail — a `2>1` redirect typo. `git rm --cached` + delete; `.gitignore` gained `/1` and `/2` (it already covered `hikari.log`).
+* **Log level (`src/output.c`).** The Phase 61 override-redirect sweep logged `WLR_ERROR` unconditionally, but leftover views are *expected* on the noop path where no merge runs. Now `noop ? WLR_DEBUG : WLR_ERROR`, keeping the diagnostic where a leftover genuinely means `hikari_workspace_merge()` failed. Chosen over a flat lowering so the signal is not lost.
+* **Stale comment (`src/lock_mode.c`).** The child-process block described closing endpoints "only when it differs from its target" — **no such conditional exists**; `closefrom(STDERR_FILENO + 1)` sweeps them. Actively misleading in the authentication path.
+* **Duplicate comments (`src/lock_mode.c`).** Two stacked `Action purpose:` blocks on one loop; the first predated partial-write handling and claimed the password is "silently lost". Merged into one covering partial writes, EINTR, and the fail-closed hangup fallback.
+* **Re-entrancy documented (`src/xwayland_unmanaged_view.c`).** `set_override_redirect_handler` frees the wrapper holding the executing listener, then registers a new listener on the signal currently being emitted. Verified safe: `wl_signal_emit_mutable()` exists to allow self-removal mid-emission, and the replacement wrapper carries the **opposite** guard, so it no-ops even if the in-flight emission reached it. Safe regardless of libwayland's internal ordering — worth stating, since nothing in the code says so.
+
+**Rejected as invalid (3):**
+* `parse_color` missing a function comment — it has one at `configuration.c:497`; the finding cited the signature line. Stale snapshot.
+* Allocation ownership contract in `hikari_server_adopt_xwayland_surface` — already consistent. `hikari_xwayland_view_init` frees the wrapper on its only failure path and documents that contract; `hikari_xwayland_unmanaged_view_init` allocates nothing and cannot fail. No double-free, no leak.
+* Rejecting `UCL_FLOAT`/`UCL_TIME` before `ucl_object_toint_safe` — premise unverifiable from the installed libucl header, and the worst case is benign: a float colour truncates to a valid integer and then meets the Phase 64 range check. Left out to keep changes minimal; ~3 lines if stricter config validation is wanted later.
+
+**Policy:** `AGENTS.md` line 30 "self explanatory" → "self-explanatory" applied, on explicit approval this round. The Phase 64 decision to leave rule 4's `.devdocs/` self-inconsistency alone still stands.
+
+---
+
+## [2026-08-21 16:10] Phase 64: Cursor offset root-caused; external review triaged; XWayland content gap found
+
+### Cursor offset — root cause and fix
+
+`surface_at()` in `src/xdg_view.c` passed **window-geometry-local** coordinates to `wlr_xdg_surface_surface_at()`, which takes **wl_surface-local** ones (it forwards straight to `wlr_surface_surface_at`, `wlr_xdg_surface.c:583`).
+
+The two spaces differ by `xdg_surface->geometry.x/y` — the client-side-decoration margin, non-zero for essentially every GTK/CSD client. Every hit test therefore landed that margin up and to the left of the real pointer.
+
+Rendering was never wrong, which is what disguised this as a "cursor" bug rather than a hit-test bug: `wlr_scene_xdg_surface_create()` positions the surface tree at `-geometry.x/y` (`types/scene/xdg_shell.c:37`), applying the identical correction with the opposite sign. Fixed by adding `+ window->x/y` in `surface_at()`.
+
+**Checked and deliberately not changed:** the same space mismatch exists in the damage path (`for_each_surface` yields surface-local offsets, added to `geometry->x`). It is harmless — `hikari_output_add_damage()` and `hikari_output_add_effective_surface_damage()` both discard the rectangle and only schedule a frame, because the scene graph does the real damage tracking.
+
+### External review triage
+
+15 findings supplied as untrusted review data; each verified against current code before acting.
+
+**Implemented (7):**
+* **Premultiplied alpha.** wlroots requires premultiplied colour for scene rectangles (`wlr_scene.h:455,468`), while `hikari_color_convert_rgba()` produces straight RGBA (correct for Cairo, which premultiplies internally). Since `parse_color()` serves *every* colour, any border, indicator or background configured as `"#RRGGBBAA"` rendered too bright. Added `hikari_color_premultiply()`; applied at 12 scene-rect call sites in `border.c`, `indicator_frame.c`, `output.c`. **This corrects Phase 60**, which recorded that `border.c` and `indicator_frame.c` were "already alpha-correct" — they were not.
+* **`node_at()` out-parameters.** Every miss path left `*surface`, `*sx`, `*sy` untouched while all five callers passed uninitialised locals — so `if (surface != NULL)` tested indeterminate memory and touch-motion forwarded indeterminate coordinates to clients. Fixed at the source rather than per-call-site, which was broader than the finding proposed.
+* **Keycode parsing.** `strtol` with a NULL end pointer accepted `"12abc"`, and `"abc"` (reported as 0 with `errno` untouched) passed; values below 8 then wrapped the `- 8` subtraction, turning keycode 0 into 4294967288.
+* **Locker event source.** A NULL from `wl_event_loop_add_fd` left the lock screen hanging forever with two leaked fds and an unreaped child. Now mirrors the existing terminal-path teardown and denies the attempt.
+* Colour integer range validation; `hikari_output_damage_whole()` delegating to `hikari_output_schedule_frame()` so the enabled-output guard applies; `layer_popup->geometry` zeroed before `damage_popup()` can read it.
+
+**Rejected as invalid (5), with the verification that disproved each:**
+* View decoration links — the finding was conditional on `hikari_view_fini()` removing them unconditionally. It does not; `view.c:569` guards on `decoration.wlr_decoration != NULL`, which `view.c:525` initialises.
+* `strcpy` in `gesture_config.c` — provably bounded; `len >= sizeof(buf)` is rejected fourteen lines above.
+* Cairo stride/NULL checks in `output.c` — `data == NULL` is unreachable behind two `cairo_surface_status` checks, and `||` short-circuits so `byte_count == 0` prevents the stride division.
+* ` ```ucl ` fences in `hikari.md` — the file has 50 fences, not the four claimed, and `ucl` is not a lexer common renderers support, so the change would have no visible effect.
+* `set_title` detach in `toplevel_destroy_handler` — premise false; `destroy_xdg_toplevel()` calls `wlr_surface_unmap()` first, so `unmap()` has already removed the listener before the assertion runs.
+
+**Policy items declined by the user:** the two findings proposing amendments to `AGENTS.md` itself (restricting the `Script function and purpose:` prefix to shell scripts, and exempting the root `AGENTS.md` from the `.devdocs/`-only rule). Rule 4 does contain a genuine self-inconsistency — `AGENTS.md` is AI process documentation living outside `.devdocs/`, but it must sit at the repository root to be discoverable. **User decision: leave `AGENTS.md` untouched and record the inconsistency here so it is not repeatedly re-raised by reviewers.**
+
+### Documentation-standard cleanup
+
+17 comments used `##`-prefixed markers that are neither C comment syntax nor one of the three prefixes `AGENTS.md` defines: `##Function purpose:` ×13, `##Class purpose:` ×3 (a category that does not exist in the standard at all), `##Script function and purpose:` ×1. Normalised across `border.h`, `indicator.h`, `indicator_bar.h`, `indicator_frame.h`; struct comments kept their text with the invented prefix dropped. Added the two missing function comments (`parse_gestures`, `render_image_to_surface`).
+
+Note `AGENTS.md` line 30 was amended by the user this session to "Documentation is only necessary where the code is not self explanatory", which retires the previously-backlogged blanket comment-header rollout across 48 `src/` files.
+
+### NEW — XWayland views render no content (found while verifying, not yet fixed)
+
+`src/xwayland_view.c` creates a `scene_tree` and attaches **only** `border` and `indicator_frame` to it. There is no `wlr_scene_subsurface_tree_create()` for `xwayland_surface->surface` anywhere in the file — its own comment at `:526` describes the tree as being "for the XWayland view's border and indicator frame nodes". Managed X11 windows should therefore draw a border with nothing inside it.
+
+**This corrects Phase 62's reasoning.** Phase 62 attributed Firefox surviving the popup abort to "Firefox is XWayland and never creates xdg_popups". If XWayland content does not render at all, the Firefox observed working was native Wayland, and it survived only because no menu had been opened. The Phase 62 *fix* stands — it was proven by core dump — but that explanation did not.
+
+Confirmable in one step: launch a genuinely X11-only client (`xterm`, `xeyes`). Awaiting approval before implementation.
+
+---
+
 ## [2026-08-21 15:35] Phase 63: Popups have never had a scene node; plus a shutdown NULL deref
 
 **Status:** TWO DEFECTS FIXED. Session ran 11 minutes with no runtime crash (a first), then segfaulted on exit. User reported: *"right click menus and submenus in many apps did not come up."*

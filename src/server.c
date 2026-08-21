@@ -1650,17 +1650,23 @@ hikari_server_stop(void)
     destroy_shutdown_timer(server);
   }
 
-  hikari_cursor_fini(&server->cursor);
-  hikari_indicator_fini(&server->indicator);
-
-  hikari_lock_mode_fini(&server->lock_mode);
-  hikari_mark_assign_mode_fini(&server->mark_assign_mode);
-
+  /* Action purpose: Tear the clients down BEFORE the subsystems their teardown
+  calls into. Destroying a client destroys its surfaces, which runs hikari's own
+  view destroy handlers, and those reach hikari_server_cursor_focus() and the
+  indicator. Finalising the cursor first left those handlers running against a
+  destroyed wlr_xcursor_manager. XWayland is itself a client, so it follows the
+  general client teardown. */
   wl_display_destroy_clients(server->display);
 
 #ifdef HAVE_XWAYLAND
   wlr_xwayland_destroy(server->xwayland);
 #endif
+
+  hikari_cursor_fini(&server->cursor);
+  hikari_indicator_fini(&server->indicator);
+
+  hikari_lock_mode_fini(&server->lock_mode);
+  hikari_mark_assign_mode_fini(&server->mark_assign_mode);
 
   wlr_seat_destroy(server->seat);
   if (server->noop_backend != NULL) {

@@ -1338,6 +1338,8 @@ done:
   return success;
 }
 
+/* Function purpose: Parse the `inputs { gestures {} }` block into the
+configuration's gesture binding list. */
 static bool
 parse_gestures(struct hikari_configuration *configuration,
     const ucl_object_t *gestures_obj)

@@ -216,7 +216,16 @@ destroy_handler(struct wl_listener *listener, void *data)
 /* Function purpose: Re-adopt this surface as a managed view when the client
 clears the override_redirect attribute after the surface was created -- the
 inverse of the handler in xwayland_view.c, and needed for the same reason:
-the managed/unmanaged decision was previously made once and never revisited. */
+the managed/unmanaged decision was previously made once and never revisited.
+
+This runs re-entrantly: it frees the wrapper holding the currently-executing
+listener and then registers a fresh listener on the very signal being emitted.
+Both halves are safe. wl_signal_emit_mutable() exists precisely to let a
+listener remove itself mid-emission, and the replacement wrapper installs the
+OPPOSITE guard -- xwayland_view.c's handler returns unless override_redirect is
+now set, which it is not on this path -- so even if that new listener were
+reached by the in-flight emission it would do nothing. The transition therefore
+cannot loop back on itself. */
 static void
 set_override_redirect_handler(struct wl_listener *listener, void *data)
 {
