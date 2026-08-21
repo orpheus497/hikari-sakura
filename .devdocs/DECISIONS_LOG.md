@@ -1,3 +1,68 @@
+## [2026-08-21 14:56] Phase 61: ROOT CAUSE — NULL dereference in `session_active_handler`, proven by core dump
+
+**Status:** CRASH ROOT-CAUSED AND FIXED. First core dump ever captured in this project. Steps 1-2 of the approved four-step plan implemented; Steps 3-4 outstanding.
+
+### How this phase differed from Phases 53-57
+
+Every previous crash phase reasoned statically and guessed. This one read the evidence that was already sitting on disk, then got a core. Two prior conclusions were wrong and are corrected here.
+
+**Correction 1 — there were always TWO crash signatures, not one.** `/var/log/messages` shows 13 hikari exits on 2026-08-21: signal 11 (SIGSEGV) at 13:59:15, 14:26:15 and 14:51:15, and signal 6 (SIGABRT) for the rest. Phases 53/57 asserted "SIGABRT, not SIGSEGV" and drove the entire investigation from that premise. Half the crashes were segfaults.
+
+**Correction 2 — the captured crash carried no assertion message at all.** Phase 57 predicted a wlroots assertion. The 14:51:15 reproduction printed no `Assertion failed:` line and exited 139 (128+11). It is a clean segfault, not an assert.
+
+### Evidence chain
+
+1. `~/.local/share/sddm/wayland-session.log` (13:59, preserved because the user had since been in X) ended:
+   `[libseat] Disabling seat` → `[backend/drm] DRM FD paused` → `connector eDP-1: Failed to disable CRTC 98` → clients get `Broken pipe`.
+   Hikari's own `session_active_handler` log line never printed — it died before reaching `wlr_log`.
+2. User reproduced at 14:51:15 after creating `/var/coredumps`. Identical sequence, exit 139, core written.
+3. `gdb bt` on `hikari.27920.1001.core`:
+   ```
+   #0  session_active_handler ()            <- src/server.c
+   #1  wl_signal_emit_mutable ()
+   #2  libwlroots-0.20.so                   <- session active signal
+   #3  libseat.so.1
+   #6  wl_event_loop_dispatch ()
+   ```
+   `rip = session_active_handler+10` — the first memory access after the prologue.
+
+### Root cause
+
+`session_active_handler()` read `bool active = *(bool *)data;`. wlroots emits that signal with **`data == NULL`**:
+
+```
+wlroots-0.20.0/backend/session/session.c:27   wl_signal_emit_mutable(&session->events.active, NULL);
+wlroots-0.20.0/backend/session/session.c:33   wl_signal_emit_mutable(&session->events.active, NULL);
+```
+
+An unconditional NULL dereference on **every** session activate/deactivate — i.e. every VT switch and every seat disable. Not intermittent, not memory corruption, not a race: 100% deterministic. The authoritative state is the `active` field on `struct wlr_session` (`wlr/backend/session.h`).
+
+This is why the compositor died ~15s into a session whenever the user launched an app: the user runs hikari from a TTY while `Xorg :2` holds VT `v1`, so anything that pulls the VT back deactivates hikari's seat.
+
+**Fix:** `bool active = server->session != NULL ? server->session->active : true;`
+
+### Finding A — `hikari_xwayland_unmanaged_evacuate()` was half-implemented (the incomplete refactor)
+
+Independently found during the audit, and **on the same code path**. wlroots' `handle_session_active` (`backend/drm/backend.c:107-125`) calls `wlr_output_destroy()` on every connected connector when the session goes inactive — so `hikari_output_fini()` had *already run* ~66 ms before the NULL deref. This defect was being hit on every VT switch; the segfault simply beat it.
+
+`hikari_xwayland_unmanaged_evacuate()` updated `->workspace` and re-damaged, but never moved `unmanaged_output_views` to the destination output's list. Its managed counterpart `hikari_view_evacuate()` (`view.c:1610-1619`) does exactly that, and its comment names the hazard verbatim: *"they would otherwise be left dangling in the old (potentially destroyed) output's lists."* `hikari_workspace_merge()` calls it from `hikari_output_fini()`, which then frees both workspace and output — leaving every live X11 menu/tooltip/dropdown holding a link into a freed `wl_list` head. Next commit/unmap/`node_at` → UAF write → SIGSEGV, or silent heap corruption surfacing later as SIGABRT. **This is the most probable source of the SIGABRT half of the crash log.**
+
+**Fixes applied:** re-link the list in evacuate; `wl_list_init` the link at init (`hikari_malloc` does not zero); remove-then-init convention in `unmap()`; `unmap()` made idempotent; new `hikari_xwayland_unmanaged_detach()` for the teardown case with no surviving workspace (noop output / shutdown); last-resort sweep in `hikari_output_fini()`; NULL-workspace safe-bails in `map`/`unmap`/`commit`.
+
+### Finding B — `override_redirect` was decided once and never revisited
+
+`new_xwayland_surface_handler` chose managed vs unmanaged from `override_redirect` at new-surface time only, ignoring `events.set_override_redirect`. X11 toolkits routinely flip that attribute on a live window — it is how GTK and Chromium turn a window into a menu, tooltip or dropdown — so such windows stayed wrapped in the wrong type for their whole life. Not crash-causing; caused wrong layout/focus for exactly the XWayland clients the user reported (Firefox, VSCode, pavucontrol).
+
+**Fix:** extracted `hikari_server_adopt_xwayland_surface()` as the single adoption point; both view types now watch `set_override_redirect` and re-adopt through it; both `_init` functions adopt an already-mapped surface so re-adoption mid-flight does not leave the window invisible. Also NULL-guarded `hikari_server.workspace`, which `hikari_output_fini()` sets to NULL during noop-output teardown.
+
+### Decision recorded — always-on invariant checks (Phase 54 W3 open question, now closed)
+
+`strings hikari` → **0** assert strings; the shipped binary is release `-DNDEBUG`, so every `assert()` added by Phases 55/56/57 is compiled out. `strings libwlroots-0.20.so` → **280**. Assertions are live only in wlroots. User chose **always-on, `wlr_log(WLR_ERROR)` + safe bail** over debug-only, on the grounds that debug-only checks have been dead code for 50 phases. The safe-bail guards added in this phase are the first instances of that policy.
+
+### Not yet done
+
+Step 3 (always-on invariant checkers, Phase 55 item 1c + Phase 54 W3) and Step 4 (headless smoke test with a VT-switch/output-destroy case) remain. Also newly reported by the user and not yet investigated: a **cursor pointer offset** bug, and **orphaned `hikari-topbar` helpers** (four alive from crashed sessions — `bar.c` forks them and nothing reaps them when the compositor dies).
+
 ## [2026-08-21] Phase 60: Execution — Top Bar Centre Lane and Alpha-Capable Colours (Issue 1 of Phase 58, Parts A + B option 3)
 
 *(Timestamp: date from session context; time-of-day omitted, IDE-tooling-only directive. No build run.)*

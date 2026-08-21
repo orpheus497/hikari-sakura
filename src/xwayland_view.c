@@ -248,16 +248,13 @@ unmap_handler(struct wl_listener *listener, void *data)
 /* [COMMENT] Function purpose: Listener for the XWayland surface destroy
 event; unmaps when needed, finalises the view, destroys the scene tree,
 removes all listeners, and frees the wrapper. */
+/* Function purpose: Tear the managed wrapper down completely and free it.
+Shared by destroy_handler (the X11 surface going away) and
+set_override_redirect_handler (the same surface being re-adopted as an
+unmanaged view), so both paths release exactly the same listener set. */
 static void
-destroy_handler(struct wl_listener *listener, void *data)
+xwayland_view_destroy(struct hikari_xwayland_view *xwayland_view)
 {
-  struct hikari_xwayland_view *xwayland_view =
-      wl_container_of(listener, xwayland_view, destroy);
-
-#if !defined(NDEBUG)
-  printf("XWAYLAND DESTROY %p\n", xwayland_view);
-#endif
-
   struct hikari_view *view = (struct hikari_view *)xwayland_view;
 
   if (hikari_view_is_mapped(view)) {
@@ -268,6 +265,8 @@ destroy_handler(struct wl_listener *listener, void *data)
 
   if (xwayland_view->scene_tree != NULL) {
     wlr_scene_node_destroy(&xwayland_view->scene_tree->node);
+    xwayland_view->scene_tree = NULL;
+    view->scene_node = NULL;
   }
 
   /* [COMMENT] Action purpose: Remove all listeners. map/unmap links were
@@ -280,8 +279,51 @@ destroy_handler(struct wl_listener *listener, void *data)
   wl_list_remove(&xwayland_view->destroy.link);
   wl_list_remove(&xwayland_view->request_configure.link);
   wl_list_remove(&xwayland_view->set_title.link);
+  wl_list_remove(&xwayland_view->set_override_redirect.link);
 
   hikari_free(xwayland_view);
+}
+
+static void
+destroy_handler(struct wl_listener *listener, void *data)
+{
+  struct hikari_xwayland_view *xwayland_view =
+      wl_container_of(listener, xwayland_view, destroy);
+
+#if !defined(NDEBUG)
+  printf("XWAYLAND DESTROY %p\n", xwayland_view);
+#endif
+
+  xwayland_view_destroy(xwayland_view);
+}
+
+/* Function purpose: Re-adopt this surface as an unmanaged (override-redirect)
+view when the client sets that attribute after the surface was created.
+
+X11 toolkits routinely flip override_redirect on an existing window -- it is
+how GTK and Chromium turn a window into a menu, tooltip or dropdown. hikari
+previously decided managed-vs-unmanaged once, at new_surface time, and never
+revisited it, so such a window stayed wrapped in the wrong type for its whole
+life: laid out and focused as an ordinary tiled window instead of a free
+floating popup. */
+static void
+set_override_redirect_handler(struct wl_listener *listener, void *data)
+{
+  struct hikari_xwayland_view *xwayland_view =
+      wl_container_of(listener, xwayland_view, set_override_redirect);
+
+  struct wlr_xwayland_surface *xwayland_surface = xwayland_view->surface;
+
+  if (!xwayland_surface->override_redirect) {
+    return;
+  }
+
+  /* [COMMENT] Action purpose: Capture the surface before the wrapper is freed,
+  then hand it to the shared adoption path, which re-wraps it as the unmanaged
+  type and re-maps it if it is already mapped. */
+  xwayland_view_destroy(xwayland_view);
+
+  hikari_server_adopt_xwayland_surface(xwayland_surface);
 }
 
 static void
@@ -524,11 +566,31 @@ hikari_xwayland_view_init(struct hikari_xwayland_view *xwayland_view,
   xwayland_view->set_title.notify = set_title_handler;
   wl_signal_add(&xwayland_surface->events.set_title, &xwayland_view->set_title);
 
+  /* [COMMENT] Action purpose: Watch for the override_redirect attribute being
+  set after creation, so a window that becomes a menu/tooltip is re-adopted as
+  the unmanaged type instead of staying wrongly managed for its whole life. */
+  xwayland_view->set_override_redirect.notify = set_override_redirect_handler;
+  wl_signal_add(&xwayland_surface->events.set_override_redirect,
+      &xwayland_view->set_override_redirect);
+
   view->activate = activate;
   view->resize = resize;
   view->move = move;
   view->move_resize = move_resize;
   view->quit = quit;
   view->constraints = constraints;
+
+  /* [COMMENT] Action purpose: Adopt a surface that is already mapped. On the
+  new_surface path this is never true, but set_override_redirect_handler
+  re-adopts a live window mid-flight, and its wlr_surface map event has already
+  fired by then -- without this the re-adopted window would never appear again.
+  Runs last so every vtable entry above is in place before the view maps. */
+  if (xwayland_surface->surface != NULL && xwayland_surface->surface->mapped) {
+    if (hikari_view_is_unmanaged(view)) {
+      first_map(xwayland_view);
+    }
+
+    map(view, false);
+  }
 }
 #endif

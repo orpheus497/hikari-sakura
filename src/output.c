@@ -22,6 +22,7 @@
 #include <hikari/server.h>
 #ifdef HAVE_XWAYLAND
 #include <hikari/view.h>
+#include <hikari/xwayland_unmanaged_view.h>
 #endif
 
 struct hikari_background_buffer {
@@ -723,6 +724,35 @@ hikari_output_fini(struct hikari_output *output)
   } else {
     hikari_server.workspace = NULL;
   }
+
+#ifdef HAVE_XWAYLAND
+  /* [COMMENT] Action purpose: Last-resort detach of any override-redirect view
+  still referencing this output. hikari_workspace_merge() above evacuates them
+  on the normal path, but the noop-output branch never merges at all, and at
+  shutdown there is no surviving workspace to evacuate to. This output and its
+  workspace are both freed the moment this function returns, so anything left
+  pointing at either would be holding freed memory -- this sweep exists to make
+  that impossible rather than merely unlikely.
+
+  Detaching sets workspace to NULL, which map_handler, unmap() and
+  commit_handler all now treat as "this view has outlived its output" and bail
+  on. That is the approved safe-bail policy: the view stops being hit-tested
+  and stops damaging a dead output, while its own destroy_handler still tears
+  down every listener correctly afterwards. */
+  struct hikari_xwayland_unmanaged_view *unmanaged, *unmanaged_temp;
+  wl_list_for_each_safe (unmanaged,
+      unmanaged_temp,
+      &output->unmanaged_xwayland_views,
+      unmanaged_output_views) {
+    wlr_log(WLR_ERROR,
+        "hikari_output_fini: override-redirect view %p still linked to output "
+        "%s at teardown; detaching to avoid a dangling reference",
+        (void *)unmanaged,
+        output->wlr_output->name);
+
+    hikari_xwayland_unmanaged_detach(unmanaged);
+  }
+#endif
 
   hikari_workspace_fini(workspace);
   hikari_free(workspace);

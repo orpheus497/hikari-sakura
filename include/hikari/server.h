@@ -167,6 +167,18 @@ struct hikari_server {
 
 extern struct hikari_server hikari_server;
 
+#ifdef HAVE_XWAYLAND
+struct wlr_xwayland_surface;
+
+/* Function purpose: Wrap an X11 surface in the hikari view type matching its
+current override_redirect flag. Called for every new X11 surface, and again by
+either view type's set_override_redirect handler when a client flips the flag
+after creation. */
+void
+hikari_server_adopt_xwayland_surface(
+    struct wlr_xwayland_surface *wlr_xwayland_surface);
+#endif
+
 static inline bool
 hikari_server_is_indicating(void)
 {

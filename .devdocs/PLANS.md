@@ -1,8 +1,33 @@
 # Forward Strategy & Plans
 
-*Last Updated:* 2026-08-21 10:56
+*Last Updated:* 2026-08-21 14:56
 
 ## Implementations to be Fully Implemented
+
+-8. **Phase 61 Steps 3 and 4 — approved, not yet started.** Steps 1 (crash fix + Finding A) and 2 (Finding B) are implemented; see DECISIONS_LOG Phase 61. These two remain.
+
+   **STEP 3 — Always-on invariant checks (user decision recorded: always-on `wlr_log(WLR_ERROR)` + safe bail, NOT `assert()`).**
+
+   The justification is now measured rather than argued: `strings hikari` finds **zero** assert strings because the shipped binary is release `-DNDEBUG`, while `strings libwlroots-0.20.so` finds **280**. Every `assert()` hikari has accumulated over ~50 phases — including every safety net Phases 55/56/57 added — is dead code in the binary the user actually runs. Phase 55 deliberately deferred item 1c on the reasoning that "the user's binary is DEBUG=YES with asserts live"; that premise was false, and the check has been missing ever since.
+
+   1. Add a shared `HIKARI_CHECK(cond, fmt, ...)` primitive: on failure, `wlr_log(WLR_ERROR, ...)` with file/line and return a failure indication the caller can bail on. Never `abort()`, never compiled out.
+   2. Phase 55 item 1c — `view_assert_visible_consistent()`: verify all six representations of "this view is visible" agree (hidden flag; `workspace->views`; `hikari_server.visible_views`; `group->visible_views`; the `group->visible_server_groups` aggregate; the scene-node enabled bit). Call at entry and exit of `view_link_visible_at()` / `view_unlink_visible()`, and at entry of `hikari_view_unmap()` / `hikari_view_fini()`.
+   3. Phase 54 W3 — `hikari_view_check_invariants(view, expected_lifecycle)`: assert the expected graph shape per lifecycle phase (which of the seven links must be linked vs. empty, which of the six owning pointers must be NULL vs. non-NULL), at all five teardown entry points.
+   4. Extend the same treatment to the unmanaged XWayland view: a check that `unmanaged_output_views` is empty exactly when `hidden`, and that `workspace != NULL` implies the view's output still exists.
+
+   **STEP 4 — Headless smoke test (carries over Phase 54 W4 and Phase 55 Step 4).**
+
+   5. Driver client binding `zwlr_virtual_pointer_v1` (already enabled, `Makefile:141`) against a nested instance (`WLR_BACKENDS=headless`).
+   6. Run under `MALLOC_CONF=junk:true,abort_conf:true`.
+   7. **New mandatory case, from Phase 61:** deactivate/reactivate the session with a live override-redirect window open, exercising the output-destroy path that both the NULL deref and Finding A sat on. Plus the Phase 55 cases: close focused vs. unfocused; close last view of a group; close while tiled; close with popup open; lock-mode forced view; sheet switch with mixed hidden/visible; `view-lower` then close.
+   8. Wire to a `make` target, replacing the `test.mk` stub.
+
+   **Sequencing:** Step 4 before Step 3 would let the checks be demonstrated firing on the pre-fix tree, but Step 3 is cheap and independently valuable. Either order.
+
+-7.5. **Phase 61 follow-ups, not yet scoped.**
+   * **Cursor pointer offset (user-reported 2026-08-21 14:51, uninvestigated).** Pointer renders/hit-tests offset from its true position. First place to look is the interaction between the top bar's `usable_area` reservation and cursor layout coordinates.
+   * **Orphaned `hikari-topbar` helpers.** Four alive at 14:56 from crashed sessions. `bar.c` forks them and nothing reaps them when the compositor dies; they survive as session leaders. Also observed in Phase 53.
+   * **`XDG_RUNTIME_DIR` on ZFS.** Reclassify from cosmetic backlog to live crash amplifier: `posix_fallocate()` is unsupported there, so `wl_shm` clients fail their buffer allocation and disconnect abruptly, driving exactly the teardown storms that expose the defects above.
 
 -7. **Phase 58 Issue 1 — Top bar: centre lane + real opacity (PLANNED, awaiting a decision on the config question; see DECISIONS_LOG Phase 58 for the analysis).** Issue 2 of Phase 58 is done (Phase 59). This is the remaining half.
 

@@ -574,15 +574,31 @@ request_set_selection_handler(struct wl_listener *listener, void *data)
 }
 
 #ifdef HAVE_XWAYLAND
-static void
-new_xwayland_surface_handler(struct wl_listener *listener, void *data)
+/* Function purpose: Wrap an X11 surface in whichever hikari view type its
+current override_redirect flag calls for, and hand it the active workspace.
+
+Shared by new_xwayland_surface_handler and by both set_override_redirect
+handlers, which re-adopt a surface whose flag changed after creation. Keeping
+the managed/unmanaged decision in one place is what makes re-adoption possible
+at all -- previously the choice was made once, inline, and never revisited. */
+void
+hikari_server_adopt_xwayland_surface(
+    struct wlr_xwayland_surface *wlr_xwayland_surface)
 {
-  struct hikari_server *server =
-      wl_container_of(listener, server, new_xwayland_surface);
+  struct hikari_workspace *workspace = hikari_server.workspace;
 
-  struct wlr_xwayland_surface *wlr_xwayland_surface = data;
-
-  struct hikari_workspace *workspace = server->workspace;
+  /* [COMMENT] Action purpose: Safe-bail rather than fault. hikari_output_fini()
+  sets hikari_server.workspace to NULL while tearing down the noop output, and
+  every view wrapper dereferences the workspace it is handed (->workspace->output)
+  on its very first map. An X11 client connecting during that window would
+  otherwise segfault the compositor; declining to wrap the surface merely leaves
+  it unmanaged, which is recoverable. */
+  if (workspace == NULL) {
+    wlr_log(WLR_ERROR,
+        "hikari_server_adopt_xwayland_surface: no active workspace, ignoring "
+        "surface");
+    return;
+  }
 
   if (wlr_xwayland_surface->override_redirect) {
     struct hikari_xwayland_unmanaged_view *xwayland_unmanaged_view =
@@ -596,6 +612,14 @@ new_xwayland_surface_handler(struct wl_listener *listener, void *data)
 
     hikari_xwayland_view_init(xwayland_view, wlr_xwayland_surface, workspace);
   }
+}
+
+static void
+new_xwayland_surface_handler(struct wl_listener *listener, void *data)
+{
+  struct wlr_xwayland_surface *wlr_xwayland_surface = data;
+
+  hikari_server_adopt_xwayland_surface(wlr_xwayland_surface);
 }
 
 // [COMMENT] Function purpose: Handle XWayland ready event, setting the DISPLAY environment variable.
@@ -1206,7 +1230,17 @@ session_active_handler(struct wl_listener *listener, void *data)
   struct hikari_server *server =
       wl_container_of(listener, server, session_active_listener);
 
-  bool active = *(bool *)data;
+  /* [COMMENT] Action purpose: Read the state from the session struct, NOT from
+  the listener's data argument. wlroots emits this signal as
+  wl_signal_emit_mutable(&session->events.active, NULL) -- both at
+  backend/session/session.c:27 and :33 -- so data is ALWAYS NULL and the
+  previous `*(bool *)data` was an unconditional NULL dereference. It faulted on
+  every session activate/deactivate, i.e. on every VT switch and every seat
+  disable, killing the compositor with SIGSEGV before this function could log a
+  single line. Confirmed from a core dump: the faulting instruction is the
+  first memory access in this function. The authoritative state is the
+  session's own `active` field (wlr/backend/session.h). */
+  bool active = server->session != NULL ? server->session->active : true;
 
   /* Action purpose: Log session active state transitions to provide structured
   context if a compositor crash occurs after a VT switch. */

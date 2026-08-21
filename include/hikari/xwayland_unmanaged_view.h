@@ -27,6 +27,7 @@ struct hikari_xwayland_unmanaged_view {
   struct wl_listener commit;
   struct wl_listener associate;
   struct wl_listener dissociate;
+  struct wl_listener set_override_redirect;
 
   struct wl_list unmanaged_output_views;
 };
@@ -41,5 +42,14 @@ void
 hikari_xwayland_unmanaged_evacuate(
     struct hikari_xwayland_unmanaged_view *xwayland_unmanaged_view,
     struct hikari_workspace *workspace);
+
+/* Function purpose: Sever every reference this view holds to its output and
+workspace, for the teardown case where there is no surviving workspace to
+evacuate it to (compositor shutdown, noop output). Leaves the view alive and
+its own destroy path intact, but marks it as having outlived its output --
+map/unmap/commit all bail on a NULL workspace afterwards. Idempotent. */
+void
+hikari_xwayland_unmanaged_detach(
+    struct hikari_xwayland_unmanaged_view *xwayland_unmanaged_view);
 
 #endif
