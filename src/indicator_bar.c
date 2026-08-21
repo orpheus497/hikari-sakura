@@ -14,6 +14,7 @@
 #include <hikari/configuration.h>
 #include <hikari/font.h>
 #include <hikari/indicator.h>
+#include <hikari/memory.h>
 #include <hikari/output.h>
 #include <hikari/server.h>
 #include <hikari/view.h>
@@ -27,6 +28,7 @@ hikari_indicator_bar_init(struct hikari_indicator_bar *indicator_bar,
   indicator_bar->scene_buffer = NULL;
   indicator_bar->indicator = indicator;
   indicator_bar->offset = offset;
+  indicator_bar->cache_text = NULL;
 
   hikari_indicator_bar_set_color(indicator_bar, color);
 }
@@ -48,6 +50,9 @@ hikari_indicator_bar_fini(struct hikari_indicator_bar *indicator_bar)
     wlr_scene_node_destroy(&indicator_bar->scene_buffer->node);
     indicator_bar->scene_buffer = NULL;
   }
+
+  hikari_free(indicator_bar->cache_text);
+  indicator_bar->cache_text = NULL;
 }
 
 // [COMMENT] Function purpose: Reposition the indicator bar scene buffer
@@ -78,6 +83,22 @@ hikari_indicator_bar_update(struct hikari_indicator_bar *indicator_bar,
     struct hikari_output *output,
     const char *text)
 {
+  // [COMMENT] Action purpose: Skip the destroy+cairo-render+recreate cycle
+  // when called again with text and color identical to the last render.
+  // hikari_indicator_update() fires on every focus change and on every
+  // keystroke while assigning a mark/group/sheet -- without this check every
+  // such call reallocated a cairo surface, re-shaped the text through Pango,
+  // copied it into a second buffer, and destroyed/recreated the scene node,
+  // even when nothing visible changed. Mirrors the cache-key short-circuit
+  // already proven in hikari_bar_refresh() (src/bar.c).
+  if (indicator_bar->scene_buffer != NULL && indicator_bar->cache_text != NULL &&
+      text != NULL && strcmp(indicator_bar->cache_text, text) == 0 &&
+      memcmp(indicator_bar->cache_color,
+          indicator_bar->color,
+          sizeof(indicator_bar->color)) == 0) {
+    return;
+  }
+
   // [COMMENT] Action purpose: Clean up existing scene buffer before recreation.
   if (indicator_bar->scene_buffer != NULL) {
     hikari_indicator_bar_fini(indicator_bar);
@@ -138,6 +159,15 @@ hikari_indicator_bar_update(struct hikari_indicator_bar *indicator_bar,
     indicator_bar->scene_buffer =
         wlr_scene_buffer_create(&hikari_server.scene->tree, buffer);
     wlr_buffer_drop(buffer);
+
+    // [COMMENT] Action purpose: Record what was actually rendered so the next
+    // call can short-circuit if nothing changed. Only done on success -- a
+    // failed render must not poison the cache into skipping a retry.
+    indicator_bar->cache_text = hikari_malloc(strlen(text) + 1);
+    strcpy(indicator_bar->cache_text, text);
+    memcpy(indicator_bar->cache_color,
+        indicator_bar->color,
+        sizeof(indicator_bar->color));
   }
 
   cairo_surface_destroy(surface);

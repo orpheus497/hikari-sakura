@@ -95,12 +95,22 @@ struct hikari_view_child {
 
   struct wl_listener commit;
   struct wl_listener new_subsurface;
+
+  /* [COMMENT] Action purpose: Concrete-type teardown, set by whichever
+  initializer (hikari_view_subsurface_init, xdg_popup_create) embeds this
+  struct as its first member. hikari_view_unmap() walks every entry in
+  view->children generically through this pointer instead of assuming every
+  entry is a hikari_view_subsurface -- hikari_xdg_popup is also linked into
+  the same list via this shared prefix, and its layout diverges after this
+  point, so a hardcoded cast there was reading/freeing the wrong fields. */
+  void (*fini)(struct hikari_view_child *);
 };
 
 void
 hikari_view_child_init(struct hikari_view_child *view_child,
     struct hikari_view *parent,
-    struct wlr_surface *surface);
+    struct wlr_surface *surface,
+    void (*fini)(struct hikari_view_child *));
 
 void
 hikari_view_child_fini(struct hikari_view_child *view_child);

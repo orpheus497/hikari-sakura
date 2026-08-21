@@ -1,6 +1,6 @@
 NAME
 ====
-**hikari** - Wayland Compositor
+**Hikari Sakura** - FreeBSD Wayland Compositor
 
 SYNTAX
 ======
@@ -9,7 +9,9 @@ SYNTAX
 DESCRIPTION
 ===========
 
-**hikari** is a stacking Wayland compositor with additional tiling capabilities,
+**Hikari Sakura** is a FreeBSD-focused revamp and modernization of the original Hikari (abandoned 2 years ago by antaz). It is explicitly designed as a comprehensive, focused Wayland desktop environment for FreeBSD.
+
+It is a stacking Wayland compositor with additional tiling capabilities,
 it is heavily inspired by the Calm Window manager (cwm(1)). Its core concepts
 are views, workspaces, sheets and groups.
 
@@ -156,6 +158,11 @@ _etc_ directory.
 
 The default configuration is going to use **$TERMINAL** as your standard
 terminal application.
+
+Structural changes like UI themes, custom actions, and new bindings can be
+hot-reloaded using the **reload** action. Environment-level hardware configurations
+(like `xkb` layouts or XWayland initialization) are pulled from the session
+environment and require a full restart of the compositor to apply.
 
 On startup **hikari** attempts to execute _~/.config/hikari/autostart_ to
 autostart applications.
@@ -520,6 +527,14 @@ defined the following.
 terminal = sakura
 ```
 
+You can also define actions for laptop media controls, such as volume and brightness:
+
+```
+vol-up = "mixer vol +5"
+vol-down = "mixer vol -5"
+bright-up = "backlight +5"
+```
+
 Now we can bind the newly defined *action-terminal* to a key combination in the
 *bindings* section.
 
@@ -551,6 +566,15 @@ Once a key combination has been identified it can be bound to an action.
 ```
 "LS+a" = action1 # symbol binding
 "LS-38" = action2 # code binding
+```
+
+For laptop media keys, you can bind `XF86` keysyms directly without a modifier
+by using `0`:
+
+```
+"0+XF86AudioRaiseVolume" = action-vol-up
+"0+XF86AudioLowerVolume" = action-vol-down
+"0+XF86MonBrightnessUp" = action-bright-up
 ```
 
 The *bindings* section can contain 2 subsections *keyboard* and *mouse* for
@@ -1117,6 +1141,41 @@ inputs {
   }
 }
 ```
+
+Gestures
+--------
+Trackpad gestures reported via *wlr\_pointer\_gestures\_v1* can be bound in the
+*gestures* subsection, same as switches. A binding key has the form
+*swipe-\<direction\>-\<fingers\>*, *pinch-\<direction\>-\<fingers\>*, or
+*hold-\<fingers\>*, where *direction* is one of *up*, *down*, *left*, *right*
+for swipe or *in*, *out* for pinch, and *fingers* is the number of touchpoints
+the gesture requires.
+
+A gesture that matches a configured binding triggers that action instead of
+being forwarded to the focused client; any gesture without a matching binding
+is delivered to the client unchanged.
+
+```
+inputs {
+  gestures {
+    "swipe-left-3"  = workspace-cycle-next
+    "swipe-right-3" = workspace-cycle-prev
+    "pinch-in-3"    = view-toggle-maximize-full
+    "hold-3"        = action-terminal
+  }
+}
+```
+
+Touch
+-----
+Touchscreen input is supported natively: a touch device is attached to the
+cursor's output layout like a pointer, and touch events are forwarded to
+clients via the standard Wayland touch protocol. The first touch point of a
+new touch sequence additionally drives the same focus, raise, move, and
+resize behavior as a left mouse click, so windows can be managed by tapping
+and dragging on a touchscreen without a mouse. Further simultaneous touch
+points are left untouched for the client to interpret (e.g. pinch-to-zoom in
+a PDF viewer).
 
 OUTPUTS
 =======

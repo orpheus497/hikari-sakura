@@ -311,6 +311,53 @@ refresh_all_bars(void)
   }
 }
 
+// [COMMENT] Function purpose: Terminate and reap a just-forked topbar helper
+// child after a startup failure, keeping *pid set until reaping is confirmed
+// so neither failure path loses the only reference to a still-running child.
+// Runs during synchronous compositor startup, before the event loop is
+// entered -- a short bounded retry loop here cannot stall any live session,
+// unlike hikari-unlocker's reap path (src/lock_mode.c), which must stay
+// strictly non-blocking because it runs mid-session from inside the event
+// loop.
+static void
+terminate_and_reap_topbar_child(pid_t *pid)
+{
+  kill(*pid, SIGTERM);
+
+  int status;
+  pid_t result;
+  int attempts = 0;
+
+  for (;;) {
+    result = waitpid(*pid, &status, WNOHANG);
+
+    if (result == *pid || (result == -1 && errno == ECHILD)) {
+      break;
+    }
+
+    if (result == -1 && errno == EINTR) {
+      continue;
+    }
+
+    // [COMMENT] Action purpose: Not yet reaped -- back off briefly instead of
+    // busy-looping, and give up after a bounded number of attempts (~1s
+    // total) rather than risking an unbounded startup hang if the child is
+    // somehow stuck. The OS reparents it to init on exit either way, so
+    // giving up here does not leak it permanently.
+    if (++attempts >= 1000) {
+      fprintf(stderr,
+          "error: could not reap topbar helper (pid %d) during startup "
+          "cleanup\n",
+          (int)*pid);
+      break;
+    }
+
+    usleep(1000);
+  }
+
+  *pid = -1;
+}
+
 /* [COMMENT] Function purpose: Event-loop callback for the helper pipe. Reads
 whatever is available without blocking, splits on newlines, and renders the
 most recent complete line. Never blocks the compositor: a slow or wedged helper
@@ -479,16 +526,11 @@ hikari_topbar_source_init(struct hikari_topbar_source *source)
     loop: topbar_readable reads until EAGAIN, which never arrives. Tear the
     helper down instead of running the bar at that cost. */
     fprintf(stderr, "error: could not set topbar pipe non-blocking\n");
+
+    terminate_and_reap_topbar_child(&source->pid);
+
     close(source->fd);
     source->fd = -1;
-
-    kill(child, SIGTERM);
-    int status;
-    pid_t result;
-    do {
-      result = waitpid(child, &status, WNOHANG);
-    } while (result == -1 && errno == EINTR);
-    source->pid = -1;
 
     return;
   }
@@ -501,6 +543,9 @@ hikari_topbar_source_init(struct hikari_topbar_source *source)
 
   if (source->event_source == NULL) {
     fprintf(stderr, "error: could not register topbar event source\n");
+
+    terminate_and_reap_topbar_child(&source->pid);
+
     close(source->fd);
     source->fd = -1;
   }

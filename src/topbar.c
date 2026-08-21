@@ -480,18 +480,6 @@ int main(void) {
         /* ── Render bar ─────────────────────────────────────────────── */
         printf("[");
 
-        /* Media / MPRIS */
-        if (s.mpris[0]) {
-            char mpris_escaped[256];
-            json_escape(s.mpris, mpris_escaped, sizeof(mpris_escaped));
-            printf("{\"full_text\":\"  %s \","
-                   "\"color\":\"%s\",\"align\":\"left\"},",
-                   mpris_escaped, pywal_colors[14]);
-        } else
-            printf("{\"full_text\":\"  Idle \","
-                   "\"color\":\"%s\",\"align\":\"left\"},",
-                   pywal_colors[8]);
-
         /* CPU usage */
         printf("{\"full_text\":\"  %.0f%% \",\"color\":\"%s\"},",
                s.cpu_usage, pywal_colors[2]);
@@ -520,18 +508,25 @@ int main(void) {
         printf("{\"full_text\":\" 󰋊 %.0f%% \",\"color\":\"%s\"},",
                s.home_usage, pywal_colors[5]);
 
+        /* Media / MPRIS */
+        if (s.mpris[0]) {
+            char mpris_escaped[256];
+            json_escape(s.mpris, mpris_escaped, sizeof(mpris_escaped));
+            printf("{\"full_text\":\"  %s \","
+                   "\"color\":\"%s\",\"align\":\"left\"},",
+                   mpris_escaped, pywal_colors[14]);
+        } else
+            printf("{\"full_text\":\"  Idle \","
+                   "\"color\":\"%s\",\"align\":\"left\"},",
+                   pywal_colors[8]);
+
         /* Spacer (pushes right-side items toward the edge) */
         printf("{\"full_text\":\"\",\"separator\":false,\"min_width\":400},");
+
 
         /* Network */
         printf("{\"full_text\":\"  %s \",\"color\":\"%s\"},",
                s.net_status, pywal_colors[6]);
-
-        /* Battery -- omitted when no battery is present */
-        if (s.bat_life >= 0) {
-            printf("{\"full_text\":\" 󰁹 %d%% \",\"color\":\"%s\"},",
-                   s.bat_life, pywal_colors[8]);
-        }
 
         /* Volume -- omitted when no sink is readable */
         if (s.volume >= 0) {
@@ -545,6 +540,12 @@ int main(void) {
                    s.backlight, pywal_colors[10]);
         }
 
+        /* Battery -- omitted when no battery is present */
+        if (s.bat_life >= 0) {
+            printf("{\"full_text\":\" 󰁹 %d%% \",\"color\":\"%s\"},",
+                   s.bat_life, pywal_colors[8]);
+        }
+
         /* Clock (no trailing comma — last block in the array) */
         printf("{\"full_text\":\"  %s \","
                "\"color\":\"%s\",\"align\":\"right\"}",
@@ -553,6 +554,7 @@ int main(void) {
         printf("],\n");
         fflush(stdout);
         ticks++;
+
     }
 
     return 0;

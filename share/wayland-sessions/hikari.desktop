@@ -1,6 +1,6 @@
 [Desktop Entry]
-Name=Hikari
-Comment=Stacking compositor with tiling capabilities
+Name=Hikari Sakura
+Comment=FreeBSD focused comprehensive Wayland desktop environment
 Exec=start-hikari
 Type=Application
-DesktopNames=Hikari
+DesktopNames=Hikari Sakura

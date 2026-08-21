@@ -54,6 +54,8 @@ struct hikari_server {
   char *config_path;
 
   struct wl_event_source *shutdown_timer;
+  struct wl_event_source *sigterm_source;
+  struct wl_event_source *sigint_source;
 
   struct hikari_indicator indicator;
 
@@ -109,6 +111,7 @@ struct hikari_server {
   struct wlr_compositor *compositor;
   struct wlr_server_decoration_manager *decoration_manager;
   struct wlr_xdg_decoration_manager_v1 *xdg_decoration_manager;
+  struct wlr_pointer_gestures_v1 *pointer_gestures;
 
   struct wlr_xdg_shell *xdg_shell;
   struct wlr_layer_shell_v1 *layer_shell;
@@ -131,6 +134,7 @@ struct hikari_server {
   struct wl_list pointers;
   struct wl_list keyboards;
   struct wl_list switches;
+  struct wl_list touches;
   struct wl_list outputs;
 
   struct wl_list groups;

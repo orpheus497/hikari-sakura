@@ -358,14 +358,15 @@ for_each_surface(struct hikari_node *node,
   wlr_xdg_surface_for_each_surface(xdg_view->surface, func, data);
 }
 
+// [COMMENT] Function purpose: Full teardown of a hikari_xdg_popup -- remove
+// every listener registered in xdg_popup_create (both the shared
+// hikari_view_child ones and this struct's own destroy/commit/unmap/map/
+// new_popup) and free the struct. Shared by destroy_popup_handler (the popup
+// closing on its own) and popup_child_fini (the parent view unmapping while
+// this popup is still open) so both paths tear down identically.
 static void
-destroy_popup_handler(struct wl_listener *listener, void *data)
+xdg_popup_destroy(struct hikari_xdg_popup *popup)
 {
-#if !defined(NDEBUG)
-  printf("DESTROY POPUP\n");
-#endif
-  struct hikari_xdg_popup *popup = wl_container_of(listener, popup, destroy);
-
   hikari_view_child_fini(&popup->view_child);
 
   wl_list_remove(&popup->destroy.link);
@@ -375,6 +376,32 @@ destroy_popup_handler(struct wl_listener *listener, void *data)
   wl_list_remove(&popup->new_popup.link);
 
   hikari_free(popup);
+}
+
+static void
+destroy_popup_handler(struct wl_listener *listener, void *data)
+{
+#if !defined(NDEBUG)
+  printf("DESTROY POPUP\n");
+#endif
+  struct hikari_xdg_popup *popup = wl_container_of(listener, popup, destroy);
+
+  xdg_popup_destroy(popup);
+}
+
+// [COMMENT] Function purpose: hikari_view_child.fini implementation for
+// hikari_xdg_popup, dispatched generically from hikari_view_unmap()'s
+// teardown loop over view->children when the parent view unmaps while this
+// popup is still open (e.g. the window closes with a context menu/tooltip/
+// dropdown still up). Removes this popup's own listener registrations before
+// freeing so wlroots never fires into freed memory later in the same destroy
+// cascade -- see DECISIONS_LOG Phase 42 Finding 1.
+static void
+popup_child_fini(struct hikari_view_child *view_child)
+{
+  struct hikari_xdg_popup *popup = (struct hikari_xdg_popup *)view_child;
+
+  xdg_popup_destroy(popup);
 }
 
 // [COMMENT] Function purpose: Handle wlroots 0.20 popup initial_commit lifecycle.
@@ -471,8 +498,19 @@ popup_unconstrain(struct hikari_xdg_popup *popup)
 static void
 xdg_popup_create(struct wlr_xdg_popup *wlr_popup, struct hikari_view *parent)
 {
+  // [COMMENT] Action purpose: Graceful-degradation allocation. wlroots' scene
+  // helper (wlr_scene_xdg_surface_create, called once for the toplevel)
+  // already manages popup scene nodes automatically -- this struct is purely
+  // hikari's own tracking (unconstrain-from-box positioning, damage, nested
+  // popups). Skipping it under memory pressure means the popup may render
+  // unconstrained/without granular damage tracking, not that it fails to
+  // render. See DECISIONS_LOG Finding 4.
   struct hikari_xdg_popup *popup =
-      hikari_malloc(sizeof(struct hikari_xdg_popup));
+      hikari_try_malloc(sizeof(struct hikari_xdg_popup));
+
+  if (popup == NULL) {
+    return;
+  }
 
 #if !defined(NDEBUG)
   printf("CREATE POPUP\n");
@@ -484,7 +522,7 @@ xdg_popup_create(struct wlr_xdg_popup *wlr_popup, struct hikari_view *parent)
   wlr_popup->base->surface->data = parent;
 
   popup->destroy.notify = destroy_popup_handler;
-  wl_signal_add(&wlr_popup->base->surface->events.destroy, &popup->destroy);
+  wl_signal_add(&wlr_popup->events.destroy, &popup->destroy);
 
   popup->new_popup.notify = new_popup_popup_handler;
   wl_signal_add(&wlr_popup->base->events.new_popup, &popup->new_popup);
@@ -501,8 +539,10 @@ xdg_popup_create(struct wlr_xdg_popup *wlr_popup, struct hikari_view *parent)
   popup->unmap.notify = popup_unmap;
   wl_signal_add(&wlr_popup->base->surface->events.unmap, &popup->unmap);
 
-  hikari_view_child_init(
-      (struct hikari_view_child *)popup, parent, wlr_popup->base->surface);
+  hikari_view_child_init((struct hikari_view_child *)popup,
+      parent,
+      wlr_popup->base->surface,
+      popup_child_fini);
 
   popup_unconstrain(popup);
 }

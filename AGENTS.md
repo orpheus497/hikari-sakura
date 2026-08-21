@@ -72,6 +72,8 @@ Read `.devdocs/` → Update `BRIEFING.md` → Ask Permission → Execute Step �
 
 ## COMMAND LAWS
 
+* When inside an IDE ALWAYS use the IDE Native Tooling over Shell or Terminal Commands, do not use shell or terminal commands unless inside a CLI or directly permitted by the user.
+
 * All Date/Time inputs in `.devdocs/` must be sequential, displaying most recent entries at the top of the document, and sourced by using the following command:
 
   ```sh

@@ -340,7 +340,7 @@ init_popup(
   wl_signal_add(&wlr_popup->base->surface->events.unmap, &layer_popup->unmap);
 
   layer_popup->destroy.notify = destroy_popup_handler;
-  wl_signal_add(&wlr_popup->base->events.destroy, &layer_popup->destroy);
+  wl_signal_add(&wlr_popup->events.destroy, &layer_popup->destroy);
 
   layer_popup->new_popup.notify = new_popup_popup_handler;
   wl_signal_add(&wlr_popup->base->events.new_popup, &layer_popup->new_popup);
@@ -756,8 +756,16 @@ new_popup_popup_handler(struct wl_listener *listener, void *data)
 
   struct wlr_xdg_popup *wlr_popup = data;
 
+  // [COMMENT] Action purpose: Graceful-degradation allocation, matching
+  // xdg_view.c's xdg_popup_create -- this struct is hikari's own tracking
+  // (unconstrain/damage), not required for the popup to render. See
+  // DECISIONS_LOG Finding 4.
   struct hikari_layer_popup *layer_popup_popup =
-      hikari_malloc(sizeof(struct hikari_layer_popup));
+      hikari_try_malloc(sizeof(struct hikari_layer_popup));
+
+  if (layer_popup_popup == NULL) {
+    return;
+  }
 
   init_popup_popup(layer_popup_popup, layer_popup, wlr_popup);
 }
@@ -771,8 +779,14 @@ new_popup_handler(struct wl_listener *listener, void *data)
   printf("NEW LAYER POPUP\n");
 #endif
 
+  // [COMMENT] Action purpose: Graceful-degradation allocation -- see
+  // new_popup_popup_handler above and DECISIONS_LOG Finding 4.
   struct hikari_layer_popup *layer_popup =
-      hikari_malloc(sizeof(struct hikari_layer_popup));
+      hikari_try_malloc(sizeof(struct hikari_layer_popup));
+
+  if (layer_popup == NULL) {
+    return;
+  }
 
   struct wlr_xdg_popup *wlr_popup = data;
 

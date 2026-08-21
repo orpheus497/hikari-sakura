@@ -253,28 +253,34 @@ try_reap_locker(void)
 /* [COMMENT] Function purpose: Park the live unlocker pid in the pending set so a
 subsequent start_unlocker() can overwrite locker_pid without dropping the only
 reference to the previous child, which would leave it a zombie for the rest of
-the session. */
-static void
+the session. Returns false when the pending table is full and locker_pid could
+not be parked -- unlike src/bar.c's topbar startup cleanup, this runs mid-session
+from inside the live Wayland event loop, so it must never block. The caller must
+not proceed to start_unlocker() when this returns false, since that would
+immediately overwrite (and leak) the still-live pid. */
+static bool
 defer_locker_pid(void)
 {
   if (locker_pid <= 0) {
-    return;
+    return true;
   }
 
   for (size_t i = 0; i < HIKARI_MAX_PENDING_LOCKERS; i++) {
     if (pending_locker_pids[i] <= 0) {
       pending_locker_pids[i] = locker_pid;
       locker_pid = -1;
-      return;
+      return true;
     }
   }
 
-  // [COMMENT] Action purpose: Table full (many rapid restarts). Block on this one
-  // child rather than leak it; the set is sized so this is not reached normally.
-  int status;
-  while (waitpid(locker_pid, &status, 0) == -1 && errno == EINTR) {
-  }
-  locker_pid = -1;
+  // [COMMENT] Action purpose: Table full (many rapid restarts, all still
+  // pending reap). Do not block the event loop waiting for this child to
+  // exit, and do not drop the only reference to it by clearing locker_pid --
+  // leave it tracked as-is. try_reap_locker() (driven by reap_locker_deferred's
+  // retry timer) already attempts to reap locker_pid directly on every tick, so
+  // a pending slot -- or locker_pid itself -- will free up on its own without
+  // blocking here.
+  return false;
 }
 
 /* [COMMENT] Function purpose: Timer callback that retries the non-blocking reap
@@ -418,7 +424,17 @@ submit_password(void)
     // locker_pid set when the child has not exited yet, and the fork below would
     // then drop the only reference to it.
     if (locker_pid > 0) {
-      defer_locker_pid();
+      if (!defer_locker_pid()) {
+        // [COMMENT] Action purpose: Pending table full; locker_pid could not
+        // be parked. Do not call start_unlocker() -- its fork() would
+        // immediately overwrite locker_pid and leak this reference. Deny
+        // this attempt instead; reap_locker_deferred's retry timer frees a
+        // slot (or reaps locker_pid directly) without blocking, and the next
+        // attempt will park/restart normally.
+        reap_locker_deferred(mode);
+        hikari_lock_indicator_set_deny(mode->lock_indicator);
+        return;
+      }
       reap_locker_deferred(mode);
     }
     if (!start_unlocker()) {

@@ -848,8 +848,17 @@ new_subsurface_handler(struct wl_listener *listener, void *data)
 
   struct wlr_subsurface *wlr_subsurface = data;
 
+  // [COMMENT] Action purpose: Graceful-degradation allocation. A subsurface
+  // added under memory pressure still renders via wlr_scene (which manages
+  // subsurface scene nodes automatically); skipping hikari's own tracking
+  // wrapper only loses granular damage-tracking for it, not visibility. See
+  // DECISIONS_LOG Finding 4.
   struct hikari_view_subsurface *view_subsurface =
-      hikari_malloc(sizeof(struct hikari_view_subsurface));
+      hikari_try_malloc(sizeof(struct hikari_view_subsurface));
+
+  if (view_subsurface == NULL) {
+    return;
+  }
 
   hikari_view_subsurface_init(view_subsurface, view, wlr_subsurface);
 }
@@ -874,17 +883,25 @@ hikari_view_map(struct hikari_view *view, struct wlr_surface *surface)
   view->new_subsurface.notify = new_subsurface_handler;
   wl_signal_add(&surface->events.new_subsurface, &view->new_subsurface);
 
+  // [COMMENT] Action purpose: Graceful-degradation allocation -- see
+  // new_subsurface_handler above and DECISIONS_LOG Finding 4.
   struct wlr_subsurface *wlr_subsurface;
   wl_list_for_each (
       wlr_subsurface, &surface->current.subsurfaces_below, current.link) {
     struct hikari_view_subsurface *subsurface =
-        hikari_malloc(sizeof(struct hikari_view_subsurface));
+        hikari_try_malloc(sizeof(struct hikari_view_subsurface));
+    if (subsurface == NULL) {
+      continue;
+    }
     hikari_view_subsurface_init(subsurface, view, wlr_subsurface);
   }
   wl_list_for_each (
       wlr_subsurface, &surface->current.subsurfaces_above, current.link) {
     struct hikari_view_subsurface *subsurface =
-        hikari_malloc(sizeof(struct hikari_view_subsurface));
+        hikari_try_malloc(sizeof(struct hikari_view_subsurface));
+    if (subsurface == NULL) {
+      continue;
+    }
     hikari_view_subsurface_init(subsurface, view, wlr_subsurface);
   }
 
@@ -937,12 +954,15 @@ hikari_view_unmap(struct hikari_view *view)
 
   wl_list_remove(&view->new_subsurface.link);
 
+  // [COMMENT] Action purpose: Dispatch through each child's own fini pointer
+  // instead of assuming every entry is a hikari_view_subsurface. hikari_xdg_popup
+  // is also linked into view->children via the shared hikari_view_child prefix
+  // (xdg_popup_create -> hikari_view_child_init), and its layout diverges past
+  // that prefix -- blindly casting freed the wrong fields and left wlroots
+  // holding live listeners into freed memory. See DECISIONS_LOG Phase 42/44.
   struct hikari_view_child *child, *child_temp;
   wl_list_for_each_safe (child, child_temp, &view->children, link) {
-    struct hikari_view_subsurface *subsurface =
-        (struct hikari_view_subsurface *)child;
-    hikari_view_subsurface_fini(subsurface);
-    hikari_free(subsurface);
+    child->fini(child);
   }
 
   if (hikari_view_is_forced(view)) {
@@ -1687,6 +1707,20 @@ destroy_subsurface_handler(struct wl_listener *listener, void *data)
   hikari_free(view_subsurface);
 }
 
+// [COMMENT] Function purpose: hikari_view_child.fini implementation for
+// hikari_view_subsurface, dispatched generically from hikari_view_unmap()'s
+// teardown loop over view->children.
+static void
+subsurface_child_fini(struct hikari_view_child *view_child)
+{
+  struct hikari_view_subsurface *view_subsurface =
+      (struct hikari_view_subsurface *)view_child;
+
+  hikari_view_subsurface_fini(view_subsurface);
+
+  hikari_free(view_subsurface);
+}
+
 void
 hikari_view_subsurface_init(struct hikari_view_subsurface *view_subsurface,
     struct hikari_view *parent,
@@ -1698,8 +1732,10 @@ hikari_view_subsurface_init(struct hikari_view_subsurface *view_subsurface,
   wl_signal_add(
       &subsurface->surface->events.destroy, &view_subsurface->destroy);
 
-  hikari_view_child_init(
-      (struct hikari_view_child *)view_subsurface, parent, subsurface->surface);
+  hikari_view_child_init((struct hikari_view_child *)view_subsurface,
+      parent,
+      subsurface->surface,
+      subsurface_child_fini);
 }
 
 void
@@ -1762,8 +1798,15 @@ static void
 view_subsurface_create(
     struct wlr_subsurface *wlr_subsurface, struct hikari_view *parent)
 {
+  // [COMMENT] Action purpose: Graceful-degradation allocation -- see
+  // new_subsurface_handler and DECISIONS_LOG Finding 4. Nested subsurfaces
+  // (a subsurface's or popup's own subsurfaces) go through this shared path.
   struct hikari_view_subsurface *view_subsurface =
-      hikari_malloc(sizeof(struct hikari_view_subsurface));
+      hikari_try_malloc(sizeof(struct hikari_view_subsurface));
+
+  if (view_subsurface == NULL) {
+    return;
+  }
 
   hikari_view_subsurface_init(view_subsurface, parent, wlr_subsurface);
 }
@@ -1782,10 +1825,12 @@ new_subsurface_child_handler(struct wl_listener *listener, void *data)
 void
 hikari_view_child_init(struct hikari_view_child *view_child,
     struct hikari_view *parent,
-    struct wlr_surface *surface)
+    struct wlr_surface *surface,
+    void (*fini)(struct hikari_view_child *))
 {
   view_child->parent = parent;
   view_child->surface = surface;
+  view_child->fini = fini;
 
   view_child->new_subsurface.notify = new_subsurface_child_handler;
   wl_signal_add(&surface->events.new_subsurface, &view_child->new_subsurface);

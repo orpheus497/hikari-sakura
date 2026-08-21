@@ -2,6 +2,159 @@
 
 *Note: Most recent entries are listed at the top.*
 
+## Session Date: 2026-08-21 — Phase 49: Touchscreen & Trackpad Gesture Implementation
+**Timestamp:** 2026-08-21 (session context date; `date` not executed — IDE-only tooling directive continues)
+**Current Status:** Touchscreen and `wlr_pointer_gestures_v1` support fully implemented. Pending user compilation and testing.
+**Accomplishments:**
+- Executed the user-approved implementation plan to add full touchscreen and gesture functionality to `hikari`.
+- Created `touch.h` and `touch.c` to wrap `wlr_input_device` of type `WLR_INPUT_DEVICE_TOUCH`, correctly listening to the `destroy` signal to prevent memory leaks and dangling pointers.
+- Updated `src/server.c` to handle `WLR_INPUT_DEVICE_TOUCH` in the `new_input_handler`/`add_input` loop, and attach the device to `wlr_cursor` using `wlr_cursor_attach_input_device`. Ensured `WL_SEAT_CAPABILITY_TOUCH` is advertised to clients.
+- Initialized `server->pointer_gestures = wlr_pointer_gestures_v1_create(server->display)` in `setup_decorations` within `src/server.c`.
+- Updated `include/hikari/cursor.h` with `wl_listener` structures for all touch and gesture lifecycle events (down, up, motion, cancel, frame, swipe, pinch, hold).
+- Implemented handlers for these events in `src/cursor.c`. Used `hikari_server_node_at` in the touch down/motion handlers to appropriately route touch input via `wlr_seat_touch_notify_*` and `wlr_pointer_gestures_v1_send_*` calls.
+- Wired up the listeners in `hikari_cursor_activate` and tore them down in `hikari_cursor_deactivate`.
+**Decisions Logged:**
+- Implemented touch coordinates conversion and surface routing dynamically through the cursor handlers, relying directly on `wlroots` seat implementations without reinventing the layout mechanism.
+**Modified Files:**
+- `include/hikari/touch.h` [NEW]
+- `src/touch.c` [NEW]
+- `Makefile`
+- `src/server.c`
+- `include/hikari/cursor.h`
+- `src/cursor.c`
+**Next Steps:**
+- User must build and test the changes natively (`sudo make clean && sudo make install`) on the FreeBSD target system with touchscreen/trackpad support.
+- Proceed to address remaining `TODOS.md` items like further testing or documentation.
+
+---
+
+## Session Date: 2026-08-21 — Phase 43: User-Facing Documentation Enhancement (Completed)
+**Current Status:** Documentation updates executed and verified.
+**Accomplishments:**
+- User approved the implementation plan to significantly enhance user-facing documentation (`README.md`, `hikari.conf`, and `hikari.md`) following a deep audit of the configuration parser.
+- Executed updates using IDE-native tooling to add comprehensive configuration examples covering inputs (pointers with tap-to-click/natural scrolling, keyboards with xkb layouts, switches for lid actions), advanced multi-monitor outputs (background fits, absolute positioning), complex view matching (inheritance overrides), and binary-space-partitioned layouts.
+- Corrected statements in the README claiming `xkb` layouts and lid switches required OS-level setup.
+- Logged changes in `PROGRESS.md` and `BRIEFING.md`.
+- Tasks tracked in `task.md` and summarized in `walkthrough.md`.
+**Decisions Logged:**
+- Added laptop media controls and XF86 keysym bindings to `hikari.conf` natively.
+- Clarified structural vs environmental config limitations in `README.md` and `hikari.md`.
+**Modified Files:**
+- `etc/hikari/hikari.conf`
+- `README.md`
+- `.devdocs/PROGRESS.md`
+- `.devdocs/BRIEFING.md`
+- `.devdocs/SESSION_HANDOFF.md`
+**Next Steps:**
+- User can build and review the updated configuration file and documentation by running `sudo make clean && sudo make install`.
+
+## Session Date: 2026-08-21 — Phase 47: Finding 5 Resolved by Investigation; Finding 9 Reachability Confirmed; Audit Complete
+**Timestamp:** 2026-08-21 (session context date; `date` not executed — IDE-only tooling directive continues)
+**Current Status:** User said "proceed" to continue Finding 5's investigation. Read `configuration.c` and `keyboard_config.c` in full — this closes out every finding from the Phase 42/44 crash-and-memory audit.
+**Accomplishments:**
+- **Finding 9 reachability confirmed:** `hikari_configuration_reload()` (`configuration.c:1748-1759`) walks `hikari_server.keyboards` and calls `hikari_keyboard_configure()` again on every already-connected keyboard, on every successful config reload. The Phase 45 `xkb_keymap_unref` fix was closing a real, repeatable per-reload leak, not dead code.
+- **Finding 5 investigated and closed, no code change:** Traced whether `add_keyboard()`'s `assert(keyboard_config != NULL)` guards a reachable failure. Confirmed `hikari_keyboard_config_default()` (`keyboard_config.c:287-299`) always tags itself `keyboard_name = "*"`, and two independent synthesis paths — `parse_keyboards()` (when the config has a "keyboards" section without a user-defined wildcard) and `finalize_keyboard_configs()` (when the config has no "keyboards" section at all) — both guarantee this wildcard default gets inserted into `configuration->keyboard_configs`. `hikari_configuration_load()` only reports success after `finalize_keyboard_configs()` has run, so every path that reaches the assert does so only once this guarantee is already established. Verdict: the invariant is genuinely sound as written today; converting the assert to a runtime guard would be defensive noise for a risk that isn't real, and would mask a future regression behind a silently-handled branch instead of a loud debug-build failure. Also re-confirmed the related `input_grab_mode.c` assert is sound for the same reason (Phase 44's `clear_focus`/`mode->cancel()` dispatch mechanism).
+- **Full audit status:** all 9 findings from Phases 42/44 are now resolved — 7 implemented (1, 2, 3, 4, 7, 8, 9), 1 investigated and confirmed sound (5), 1 remaining as an explicit, low-priority, not-yet-actioned backlog item (6).
+**Decisions Logged:**
+- Full evidence chain for both findings: see `DECISIONS_LOG.md` Phase 47.
+**Modified Files:**
+- None (investigation only this phase). `.devdocs/DECISIONS_LOG.md`, `TODOS.md`, `PROGRESS.md`, `BRIEFING.md`, this file updated.
+**Next Steps:**
+- User builds (`sudo make clean && sudo make install`) and stress-tests everything from Phases 45-47: close a native-Wayland window with an open popup; Ctrl+C shutdown; multi-tab/media-player/rapid-window-switching stress test; ideally a memory-constrained run to exercise Finding 4's new graceful-degradation paths; and a couple of config reloads with keyboards connected to confirm Finding 9's fix.
+- Finding 6 remains available if the user wants it (`command.c`'s blocking `waitpid` hardening) — low priority, offer rather than assume.
+
+---
+
+## Session Date: 2026-08-21 — Phase 46: Execution — Findings 3 and 4, Scoped as Directed
+**Timestamp:** 2026-08-21 (session context date; `date` not executed — IDE-only tooling directive continues)
+**Current Status:** User answered both open questions from Phase 45 directly, no further clarification needed: Finding 4 → graceful degradation specifically for "subsurface/popup creation, buffer allocation"; Finding 3 → "scope it down first (e.g. just the crash-relevant paths)". Implemented both as scoped.
+**Accomplishments:**
+- **Finding 4:** Added `hikari_try_malloc()` to `memory.c`/`memory.h` — an opt-in, non-aborting counterpart to the existing fail-fast `hikari_malloc`/`hikari_calloc`; returns NULL on failure (after logging via `wlr_log`) instead of aborting. Applied at exactly 6 call sites: `new_subsurface_handler`, both loops in `hikari_view_map`, and `view_subsurface_create` in `view.c` (4 subsurface-creation sites); `xdg_popup_create` in `xdg_view.c`; `new_popup_handler`/`new_popup_popup_handler` in `layer_shell.c` (2 popup-creation sites); `hikari_server_create_argb8888_buffer` in `server.c` and `hikari_output_load_background` in `output.c` (2 buffer-allocation sites, the latter restructured to fall through to its existing solid-color fallback on allocation failure). Every other `hikari_malloc`/`hikari_calloc` call site in the codebase is unchanged and keeps the fail-fast abort policy.
+- **Finding 3:** No new logging module. `memory.c`'s fail-fast abort diagnostics and the new `hikari_try_malloc` degradation warning now route through `wlr_log(WLR_ERROR, ...)` — the codebase's existing, already-initialized, already-used-elsewhere logging primitive — instead of raw `fprintf(stderr, ...)`. Pre-existing `fprintf` diagnostics throughout the rest of the codebase (including the new context-specific "falling back to solid color" line added in `output.c` as part of Finding 4) were deliberately left as `fprintf`, matching their sibling lines, since `hikari_try_malloc` already supplies the leveled diagnostic underneath.
+- Re-read `output.c`'s full modified `hikari_output_load_background` end-to-end after editing to confirm the allocation-failure → solid-color-fallback → guarded-`wlr_buffer_drop` control flow is correct.
+**Decisions Logged:**
+- Full per-site rationale: see `DECISIONS_LOG.md` Phase 46.
+**Modified Files:**
+- `src/memory.c`, `include/hikari/memory.h`
+- `src/view.c`
+- `src/xdg_view.c`
+- `src/layer_shell.c`
+- `src/server.c`
+- `src/output.c`
+**Next Steps:**
+- 7 of 9 findings (1, 2, 3, 4, 7, 8, 9) are now implemented. Remaining: Finding 5 (assert-for-invariant audit — needs a `configuration.c` read to confirm whether `hikari_configuration_resolve_keyboard_config` can return NULL, which also resolves Finding 9's open reachability question) and Finding 6 (optional `command.c` waitpid hardening).
+- User builds (`sudo make clean && sudo make install`) and stress-tests everything from Phases 45-46 together: close a native-Wayland window with an open popup; Ctrl+C shutdown; general multi-tab/media-player/rapid-window-switching stress test; and ideally a low-memory/`ulimit -v`-constrained run to exercise the new graceful-degradation paths specifically.
+
+---
+
+## Session Date: 2026-08-21 — Phase 45: Execution — Findings 1, 2, 7, 8, 9 Implemented
+**Timestamp:** 2026-08-21 (session context date; `date` not executed — IDE-only tooling directive continues)
+**Current Status:** User said "proceed" after reviewing the Phase 42/44 findings. Implemented the five approved items in the agreed order; deferred Findings 3-6 pending a short check-in rather than guessing at a policy decision or expanding scope unilaterally.
+**Accomplishments:**
+- **Finding 1 fix:** `include/hikari/view.h` — added a `void (*fini)(struct hikari_view_child *)` field to `struct hikari_view_child`; `hikari_view_child_init()` gained a 4th `fini` parameter. `src/view.c` — `hikari_view_unmap()`'s teardown loop now calls `child->fini(child)` instead of casting every entry to `hikari_view_subsurface`; added `subsurface_child_fini()`, wired into `hikari_view_subsurface_init()`. `src/xdg_view.c` — extracted `destroy_popup_handler`'s teardown into a shared `xdg_popup_destroy()`, added `popup_child_fini()` calling it, wired into `xdg_popup_create()`.
+- **Finding 2 fix:** `src/server.c` — replaced `sig_handler`/raw `signal(SIGTERM, ...)` with `terminate_signal_handler` registered via `wl_event_loop_add_signal()` for both `SIGTERM` and `SIGINT`; added `#include <signal.h>`; both sources removed in `hikari_server_stop()`. `include/hikari/server.h` — added `sigterm_source`/`sigint_source` fields.
+- **Finding 7 fix:** `src/switch.c` — added `hikari_free(swtch);` to `destroy_handler`.
+- **Finding 8 fix:** `include/hikari/indicator_bar.h` — added `cache_text`/`cache_color` fields. `src/indicator_bar.c` — `hikari_indicator_bar_update()` now short-circuits on an unchanged (text, color) pair instead of unconditionally destroying and re-rendering; `hikari_indicator_bar_fini()` frees the cache; added `#include <hikari/memory.h>`.
+- **Finding 9 fix:** `src/keyboard.c` — `hikari_keyboard_configure()` now calls `xkb_keymap_unref(keyboard->keymap)` before overwriting the field.
+- Re-read each edited region after applying to confirm structural consistency. No build run (IDE-only tooling this session, matching the user's explicit instruction not to use shell/terminal commands).
+**Decisions Logged:**
+- Full per-finding fix description: see `DECISIONS_LOG.md` Phase 45.
+- Findings 3-6 explicitly deferred, not forgotten: Finding 4 (OOM/fail-fast policy in `memory.c`) is a product decision, not something to change unilaterally; Finding 3 (built-in `hikari_log()` + sweep) is larger in scope and worth confirming before starting; Finding 5 (assert-for-invariant audit) depends on a `configuration.c` read not yet done; Finding 6 (`command.c` waitpid) is optional.
+**Modified Files:**
+- `src/view.c`, `src/xdg_view.c`, `include/hikari/view.h`
+- `src/server.c`, `include/hikari/server.h`
+- `src/switch.c`
+- `src/indicator_bar.c`, `include/hikari/indicator_bar.h`
+- `src/keyboard.c`
+**Next Steps:**
+- User builds (`sudo make clean && sudo make install`) and stress-tests: close a native-Wayland window (Firefox, GTK/Qt app) while a context menu/tooltip/autocomplete dropdown is open (Finding 1's exact trigger); confirm Ctrl+C now shuts the compositor down cleanly (Finding 2); general multi-tab/media-player/rapid-window-switching stress test as originally reported.
+- Check in with the user on Findings 3-6: get direction on the Finding 4 OOM-policy decision, confirm scope before starting Finding 3's logging sweep, and read `configuration.c`'s reload path for Finding 5/9's reachability question.
+
+---
+
+## Session Date: 2026-08-21 — Phase 44: Deepened Audit — DOD Verdict, Allocation Churn, Two More Leaks
+**Timestamp:** 2026-08-21 (session context date; `date` not executed — IDE-only tooling directive continues)
+**Current Status:** Investigation-only, continuing directly from Phase 42 in the same session. User asked to "deepen the investigation" specifically through a data-oriented-design lens on memory/process handling, and to check for anything else (leaks, UAF, render crashes from CPU/RAM thrashing, async process crashes).
+**Accomplishments:**
+- Checked project history before proposing any DOD direction: `PROGRESS.md` footnote records that a DOD SoA/object-pool rewrite was already attempted and reverted as "incompatible with wlr_scene workflows." The supporting doc (`docs/data_oriented_design.md`) no longer exists in the tree; reconstructed the technical reason from this session's own evidence instead (wlroots owns and individually heap-allocates every protocol object plus its embedded listeners; hikari's wrapper structs are 1:1 with those; a pool/SoA layer would add an indirection on every hot signal callback for no locality benefit, since the real hot data already lives inside `wlr_scene` itself, outside hikari's control).
+- Read `src/keyboard.c`, `src/pointer.c`, `src/switch.c`, `src/workspace.c`, `src/move_mode.c`, `src/resize_mode.c`, `src/group_assign_mode.c`, `src/mark_assign_mode.c`, `src/sheet_assign_mode.c`, `src/input_grab_mode.c`, `src/normal_mode.c`, `include/hikari/mode.h`, `src/bar.c`, `src/indicator.c`, `src/indicator_bar.c`, `src/border.c`, `src/tile.c`, `src/lock_mode.c` in full.
+- **Positively ruled out a suspected bug class:** whether a client crashing mid-drag/mid-resize/mid-mark-assign/mid-group-assign/mid-sheet-assign could leave a mode holding a dangling `struct hikari_view *`. Traced the mechanism fully: `hikari_view_unmap` → `hikari_view_hide` → `clear_focus` calls `hikari_server_enter_normal_mode(NULL)` *before* nulling `focus_view`, and `hikari_normal_mode_enter()` (`normal_mode.c:357`) calls the outgoing mode's `cancel()` synchronously first. None of the 6 checked modes cache a view pointer across calls (all re-fetch `workspace->focus_view`; `sheet_assign_mode` caches a `hikari_sheet*`, which is safe — sheets live for the workspace's lifetime). This is sound, existing design, not a bug.
+- **Found Finding 7 (confirmed leak):** `src/switch.c`'s `destroy_handler` calls `hikari_switch_fini()` but never `hikari_free(swtch)` — compare `keyboard.c`/`pointer.c`, which both free. Leaks one struct per switch-device hot-unplug.
+- **Found Finding 8 (confirmed churn — the clearest concrete "CPU/RAM thrashing" match):** `hikari_indicator_bar_update()` (`indicator_bar.c`) destroys and fully re-renders (cairo surface + Pango layout + a second ARGB8888 buffer copy + scene node recreate) on *every* call, with no change-detection — fires on every focus change and every keystroke while typing a mark/group/sheet name. `bar.c`'s `hikari_bar_refresh()` already solves this exact problem with a cache-key/`strcmp` short-circuit; the fix is to port that pattern, not invent a new one.
+- **Found Finding 9 (confirmed leak, reachability not fully pinned down):** `hikari_keyboard_configure()` (`keyboard.c`) overwrites `keyboard->keymap` without `xkb_keymap_unref()`-ing the previous value. Confirmed one call site (`add_keyboard` in `server.c`, once per hotplug). Whether config reload re-invokes this on already-connected keyboards was not confirmed (`configuration.c` not read in full this pass) — noted as a follow-up read before/alongside the fix.
+- Recorded an explicit non-decision: no SoA/object-pool rewrite, now or as a default next step. If pursued at all, must be profiling-driven (not speculative) and scoped to one narrowly-bounded, independently-revertible object class at a time.
+**Decisions Logged:**
+- DOD verdict and full technical rationale, Findings 7-9, and the "ruled out" dangling-focus-view analysis: see `DECISIONS_LOG.md` Phase 44.
+**Modified Files:**
+- None (product code). Updated `.devdocs/DECISIONS_LOG.md`, `TODOS.md`, `PLANS.md`, `PROGRESS.md`, `BRIEFING.md`, this file.
+**Next Steps:**
+- Present the consolidated 9-finding, tiered plan to the user (done, this session) and get explicit approval before implementing, per `AGENTS.md` Zero Unapproved Action. Suggested order: Findings 1-2 (CRITICAL) → 7 (trivial) → 8 (clearest perf/thrashing win) → 9 (needs the `configuration.c` reload-path read first) → 3-6 (logging/OOM policy/asserts/command.c, in the order recorded in `PLANS.md`).
+- If Finding 9's reachability follow-up is done next session, read `configuration.c`'s reload path specifically for whether it walks `hikari_server.keyboards` and re-calls `hikari_keyboard_configure`.
+
+---
+
+## Session Date: 2026-08-21 — Phase 42: Memory Management, Crash, and Error-Handling Deep Audit
+**Timestamp:** 2026-08-21 (session context date; `date` not executed — IDE-only tooling directive this session, no shell/terminal commands, no Grep/Glob tool available so search was done via direct full-file Reads)
+**Current Status:** Investigation-only. User reported crashes still occur (media players, closing windows, multiple browser tabs, "random") plus no graceful termination, no error handling, no built-in logging, and general memory mismanagement. Also clarified: the vendored `wlroots-0.20.0/` tree in the repo is a reference-only resource for API cross-checking, not part of the actual build (the build depends on the system-installed wlroots port); and this session must avoid shell/terminal tool calls and use IDE-native tooling (Read/Edit) instead.
+**Accomplishments:**
+- Read `.devdocs/AGENTS.md`, `BRIEFING.md`, `PROGRESS.md`, `TODOS.md`, `PLANS.md`, `DECISIONS_LOG.md` (Phases 38-41), and `BLUEPRINT.md` for full context before starting (Phase 2 Session-Start protocol).
+- Read in full: `main.c`, `src/server.c` (2238 lines), `src/view.c` (2034 lines), `include/hikari/view.h`, `src/xdg_view.c`, `include/hikari/xdg_view.h`, `src/xwayland_view.c`, `src/xwayland_unmanaged_view.c`, `src/cursor.c`, `src/command.c`, `src/output.c`, `src/layer_shell.c` (current working-tree state), `src/topbar.c` (current working-tree state), `src/decoration.c`, `src/memory.c`.
+- **Found the likely root cause (Finding 1, CRITICAL):** `hikari_view_unmap` (`src/view.c` ~940) walks `view->children` and blindly casts every entry to `struct hikari_view_subsurface`, but `struct hikari_xdg_popup` (`include/hikari/xdg_view.h`) is inserted into the *same* list via the shared `hikari_view_child` prefix. The two structs' layouts diverge after byte 88 (`hikari_view_subsurface`'s `destroy` listener aliases `hikari_xdg_popup`'s `map` listener), so treating a popup as a subsurface unlinks the wrong signal and then frees a struct while wlroots still holds 4 live listener registrations (`unmap`/`destroy`/`commit`/`new_popup`) pointing into it — a delayed use-after-free triggered whenever a window with an open popup (context menu, tooltip, autocomplete — extremely common in browsers) is closed. Cross-referenced against `swaywm/sway` issue #5321 (a Firefox-triggered heap UAF in the identical subsurface/popup container-lifecycle area of a different wlroots compositor) as independent real-world corroboration that this bug class is real, not theoretical.
+- **Found a second concrete root cause (Finding 2, CRITICAL):** `sig_handler` (`src/server.c:1358`) calls `hikari_server_terminate()` directly from a raw `signal(3)` handler — not async-signal-safe (list traversal, virtual dispatch, potential allocator reentrancy) — and only `SIGTERM` is ever registered; `SIGINT` (Ctrl+C) is never handled, so it takes the default disposition and skips all cleanup. Cross-referenced via WebSearch against `wl_event_loop_add_signal` (the documented wayland-book.com pattern) and confirmed Wayfire/labwc both use it for graceful SIGINT/SIGTERM handling — hikari's raw-`signal()` approach is a deviation from established practice, not merely a style choice.
+- Also documented three secondary findings: no built-in structured logging (Finding 3, HIGH — only scattered `fprintf(stderr,...)`), the fail-fast `abort()`-on-OOM policy having no degradation path under exactly the memory pressure a many-tabs/media workload creates (Finding 4, HIGH, flagged as a decision point rather than unilaterally changed), and a production invariant gated behind a `NDEBUG`-stripped `assert()` in `add_keyboard()` (Finding 5, MEDIUM). Finding 6 (LOW) notes `hikari_command_execute`'s blocking intermediate-child reap for completeness; not believed to cause a practical stall.
+- Verified the same type-confusion bug class does **not** appear elsewhere: `src/layer_shell.c`'s own popup type (`hikari_layer_popup`) is never mixed into a list with another struct kind; `src/xwayland_view.c`/`src/xwayland_unmanaged_view.c`/`src/decoration.c`/`src/cursor.c`/`src/output.c`/`src/command.c` were read in full and found sound.
+**Decisions Logged:**
+- Finding 1: `hikari_view_child` needs a discriminator (enum tag or `fini` function pointer, matching hikari's existing virtual-dispatch conventions) so `hikari_view_unmap`'s teardown loop stops blind-casting.
+- Finding 2: replace raw `signal(SIGTERM, ...)` with `wl_event_loop_add_signal()` for both `SIGTERM` and `SIGINT`, routed through the existing (already-correct) `hikari_server_terminate` graceful-shutdown sequence.
+- Findings 3-6: see `DECISIONS_LOG.md` Phase 42 for full detail.
+**Modified Files:**
+- None (product code). Updated `.devdocs/DECISIONS_LOG.md`, `TODOS.md`, `PLANS.md`, `PROGRESS.md`, `BRIEFING.md`, this file — documentation only, per `AGENTS.md`'s file-location rule.
+**Next Steps:**
+- Present findings to the user (done, this session) and get explicit approval before implementing, per `AGENTS.md` Zero Unapproved Action. Recommended order: Finding 1 and Finding 2 first (both CRITICAL, both concretely diagnosed and independently corroborated), then Finding 3 and the Finding 4 policy decision, then Findings 5-6.
+- Once Finding 1's fix is implemented, re-verify the pre-existing Phase 38 "window close teardown: confirm closing a window neither crashes nor leaks" TODO item specifically with a window that has an open popup/context-menu/tooltip at close time — that is the precise scenario this bug requires.
+
+---
+
 ## Session Date: 2026-08-20 — Phase 40: Resize/Move NULL-Output Guard Sweep
 **Timestamp:** 2026-08-20 (session context date; `date` not executed this session)
 **Current Status:** Agent-side static investigation and fix complete; build/runtime verification pending user (root-owned `.o` artifacts block agent-side `make`; user opted to build independently).

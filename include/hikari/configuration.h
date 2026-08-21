@@ -43,6 +43,7 @@ struct hikari_configuration {
   struct wl_list keyboard_binding_configs;
   struct wl_list mouse_binding_configs;
   struct wl_list switch_configs;
+  struct wl_list gesture_binding_configs;
 };
 
 extern struct hikari_configuration *hikari_configuration;

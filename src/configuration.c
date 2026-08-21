@@ -17,6 +17,7 @@
 #include <hikari/command.h>
 #include <hikari/exec.h>
 #include <hikari/geometry.h>
+#include <hikari/gesture_config.h>
 #include <hikari/keyboard.h>
 #include <hikari/keyboard_config.h>
 #include <hikari/layout.h>
@@ -1283,6 +1284,49 @@ done:
 }
 
 static bool
+parse_gestures(struct hikari_configuration *configuration,
+    const ucl_object_t *gestures_obj)
+{
+  bool success = false;
+  const ucl_object_t *cur;
+  struct hikari_gesture_binding_config *gesture_binding_config;
+
+  ucl_object_iter_t it = ucl_object_iterate_new(gestures_obj);
+  while ((cur = ucl_object_iterate_safe(it, true)) != NULL) {
+    const char *key = ucl_object_key(cur);
+
+    gesture_binding_config =
+        hikari_malloc(sizeof(struct hikari_gesture_binding_config));
+    wl_list_insert(&configuration->gesture_binding_configs,
+        &gesture_binding_config->link);
+
+    if (!hikari_gesture_binding_config_key_parse(key,
+            &gesture_binding_config->type,
+            &gesture_binding_config->direction,
+            &gesture_binding_config->fingers)) {
+      fprintf(stderr,
+          "configuration error: invalid gesture binding \"%s\"\n",
+          key);
+      goto done;
+    }
+
+    struct hikari_action *action = &gesture_binding_config->action;
+    hikari_action_init(action);
+
+    if (!hikari_action_parse(action, &configuration->action_configs, cur)) {
+      goto done;
+    }
+  }
+
+  success = true;
+
+done:
+  ucl_object_iterate_free(it);
+
+  return success;
+}
+
+static bool
 parse_inputs(
     struct hikari_configuration *configuration, const ucl_object_t *inputs_obj)
 {
@@ -1303,6 +1347,10 @@ parse_inputs(
       }
     } else if (!strcmp(key, "switches")) {
       if (!parse_switches(configuration, cur)) {
+        goto done;
+      }
+    } else if (!strcmp(key, "gestures")) {
+      if (!parse_gestures(configuration, cur)) {
         goto done;
       }
     } else {
@@ -1825,6 +1873,7 @@ hikari_configuration_init(struct hikari_configuration *configuration)
   wl_list_init(&configuration->keyboard_binding_configs);
   wl_list_init(&configuration->mouse_binding_configs);
   wl_list_init(&configuration->switch_configs);
+  wl_list_init(&configuration->gesture_binding_configs);
 
   hikari_color_convert(configuration->clear, 0x282C34);
   hikari_color_convert(configuration->foreground, 0x000000);
@@ -1897,6 +1946,16 @@ hikari_configuration_fini(struct hikari_configuration *configuration)
 
     hikari_switch_config_fini(switch_config);
     hikari_free(switch_config);
+  }
+
+  struct hikari_gesture_binding_config *gesture_binding_config,
+      *gesture_binding_config_temp;
+  wl_list_for_each_safe (gesture_binding_config,
+      gesture_binding_config_temp,
+      &configuration->gesture_binding_configs,
+      link) {
+    wl_list_remove(&gesture_binding_config->link);
+    hikari_free(gesture_binding_config);
   }
 
   struct hikari_binding_config *binding_config, *binding_config_temp;

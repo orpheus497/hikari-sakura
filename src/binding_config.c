@@ -85,6 +85,13 @@ hikari_binding_config_key_parse(
     binding_key->type = HIKARI_ACTION_BINDING_KEY_KEYSYM;
     binding_key->value.keysym = value;
   } else {
+    // [COMMENT] Action purpose: str is a bare modifier mask with no
+    // "-keycode" or "+keysym" suffix (e.g. "L" instead of "L+space").
+    // Every other failure path above this one reports a specific cause;
+    // without this, the caller's own load-failure message is the only
+    // diagnostic ever printed, silently hiding the actual line at fault.
+    fprintf(
+        stderr, "configuration error: invalid key binding \"%s\"\n", str);
     goto done;
   }
 

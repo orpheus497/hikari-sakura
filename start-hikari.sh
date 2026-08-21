@@ -1,5 +1,5 @@
 #!/bin/sh
-# [COMMENT] Script function and purpose: Launch wrapper for the hikari Wayland
+# [COMMENT] Script function and purpose: Launch wrapper for the Hikari Sakura Wayland
 # compositor. Ensures a correct Wayland session environment is established
 # before executing the compositor binary. Should be invoked instead of the
 # hikari binary directly unless a login manager (GDM, SDDM, greetd) already
@@ -19,11 +19,11 @@ export XDG_SESSION_TYPE=wayland
 export XDG_SESSION_CLASS=user
 
 # [COMMENT] Action purpose: Export XDG_CURRENT_DESKTOP so that xdg-desktop-portal
-# selects the correct portal backend for Hikari. Without this, portal clients
+# selects the correct portal backend for Hikari Sakura. Without this, portal clients
 # (file picker, screen share, secret service) fall back to the GTK or generic
 # portal which may reject compositor-specific requests. Matches the DesktopNames
 # field in hikari.desktop so display-manager and TTY sessions are consistent.
-export XDG_CURRENT_DESKTOP=Hikari
+export XDG_CURRENT_DESKTOP="Hikari Sakura"
 
 # [COMMENT] Action purpose: Bootstrap XDG_RUNTIME_DIR if the system (pam_xdg,
 # systemd, or elogind) did not provide one. FreeBSD with seatd typically

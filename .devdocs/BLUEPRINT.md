@@ -349,8 +349,12 @@ Read and cross-reference the content against the codebase.
   - `key_handler()`: Translates raw evdev scancodes to `xkb_keysym_t` and passes them to `hikari_server.mode->key_handler()`.
 - **`src/pointer.c`**: Mouse/Touchpad interfacing.
   - `hikari_pointer_init()`: Applies `libinput` profiles (acceleration, tap-to-click) and attaches the device to the global `wlr_cursor`.
-- **`src/cursor.c`**: Pointer coordinate mapping.
+- **`src/touch.c`**: Touchscreen device lifecycle.
+  - `hikari_touch_init()`: Tracks the device on `server->touches` (drives `WL_SEAT_CAPABILITY_TOUCH`) and attaches it to `wlr_cursor`. No hardware-config surface of its own (unlike pointers); output confinement is resolved once at attach time in `add_touch()` (`src/server.c`) via `wlr_touch_from_input_device(device)->output_name`.
+- **`src/cursor.c`**: Pointer coordinate mapping, plus touch and gesture dispatch.
   - `cursor_button_handler()` / `cursor_motion_handler()`: Updates `wlr_cursor_move()` absolute coordinates, then delegates to `hikari_server.mode->button_handler()` or `cursor_handler()`.
+  - `cursor_touch_down/motion_handler()`: Converts wlroots' normalized 0..1 touch coordinates to layout pixels via `wlr_cursor_absolute_to_layout_coords()` before hit-testing (`wlr_touch` reports device-relative coordinates, not layout coordinates — the codebase's own hit-testing helper, `hikari_server_node_at()`, only ever accepts layout coordinates elsewhere). Forwards to the focused surface via `wlr_seat_touch_notify_*`. The first touch point of a fresh multi-touch sequence (`cursor->primary_touch_id`) additionally synthesizes `BTN_LEFT` press/move/release calls into `hikari_server.mode->button_handler()`/`cursor_move()`, reusing the mouse-driven modal state machine verbatim for tap-to-focus/drag-to-move/resize; further simultaneous touch points stay pure client-forwarded input.
+  - `cursor_swipe/pinch/hold_*_handler()`: Accumulates each gesture stream (`struct hikari_gesture_state`, buffering up to `HIKARI_GESTURE_MAX_UPDATES` update events) between `_begin` and `_end`. At `_end`, classifies the gesture's direction (dominant swipe axis, or pinch scale vs. 1.0) and looks it up against `hikari_configuration->gesture_binding_configs`. A match fires the bound `hikari_action` and the gesture is never sent to the client; a non-match replays the buffered `_begin`/`_update`/`_end` sequence verbatim via `wlr_pointer_gestures_v1_send_*`.
 - **`src/switch.c`**: Lid switches and tablet modes.
   - `switch_toggle_handler()`: Executes `hikari_action` macros based on hardware switch state changes.
 
@@ -796,6 +800,24 @@ Hikari dynamically re-routes input based on the active `hikari_server.mode`.
 - `void hikari_pointer_configure(...)`:
   - If the device is managed by `libinput` (via `wlr_input_device_is_libinput`), extracts the raw `libinput_device` handle.
   - Applies configurations mapped from the user's `hikari.conf` (e.g., `libinput_device_config_accel_set_speed`, `libinput_device_config_dwt_set_enabled` (disable while typing), `libinput_device_config_scroll_set_natural_scroll_enabled`, tap-to-click).
+
+### 12.13 `include/hikari/touch.h` & `src/touch.c` (Touchscreen Devices)
+
+**Data Structures:**
+- `struct hikari_touch`: Wraps a physical `wlr_input_device` of type `WLR_INPUT_DEVICE_TOUCH`.
+  - **WLRoots Proxy**: `struct wlr_input_device *device`.
+  - **Listeners**: `destroy`.
+  - No per-device hardware-config surface (touchscreens have no accel/tap-to-click knobs); the only device-attach-time decision is output confinement, made in `add_touch()` (`src/server.c`) via `wlr_touch_from_input_device(device)->output_name` -> `wlr_cursor_map_input_to_output()`.
+
+### 12.14 `include/hikari/gesture_config.h` & `src/gesture_config.c` (Gesture Bindings)
+
+**Data Structures:**
+- `struct hikari_gesture_binding_config`: One parsed `inputs { gestures { "<key>" = <action> } }` entry.
+  - `enum hikari_gesture_type type`: `SWIPE` / `PINCH` / `HOLD`.
+  - `enum hikari_gesture_direction direction`: `UP`/`DOWN`/`LEFT`/`RIGHT` (swipe), `IN`/`OUT` (pinch), `NONE` (hold).
+  - `uint32_t fingers`, `struct hikari_action action` — resolved through the same `hikari_action_parse()` every other binding type uses.
+  - Stored on `hikari_configuration->gesture_binding_configs`; looked up directly from `src/cursor.c` at gesture-`_end` time (no separate compiled/copied table — gesture bindings are few enough that a linear `wl_list` scan is unnecessary to optimize, unlike the 256-bucket modifier-mask arrays keyboard/mouse bindings use).
+- `bool hikari_gesture_binding_config_key_parse(...)`: Parses a binding key string (`"swipe-left-3"`, `"pinch-in-4"`, `"hold-3"`) into the three typed fields above.
 
 ### 12.13 `include/hikari/cursor.h` & `src/cursor.c` (Virtual Cursor & Axis Dispatch)
 

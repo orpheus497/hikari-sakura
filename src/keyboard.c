@@ -190,6 +190,14 @@ void
 hikari_keyboard_configure(struct hikari_keyboard *keyboard,
     struct hikari_keyboard_config *keyboard_config)
 {
+  // [COMMENT] Action purpose: Release the previous keymap reference before
+  // overwriting the pointer. hikari_keyboard_configure can run more than once
+  // per device (e.g. a config reload re-resolving an already-connected
+  // keyboard's config), and load_keymap() always returns a fresh ref via
+  // xkb_keymap_ref() -- without this, each reconfigure leaks the prior keymap.
+  // xkb_keymap_unref(NULL) is a no-op, so this is safe on the first call too.
+  xkb_keymap_unref(keyboard->keymap);
+
   keyboard->keymap = load_keymap(keyboard_config);
   assert(keyboard->keymap != NULL);
   wlr_keyboard_set_keymap(keyboard->wlr_keyboard, keyboard->keymap);

@@ -1,10 +1,12 @@
-# Hikari - Wayland Compositor
+# Hikari Sakura - FreeBSD Wayland Compositor
 
 ![Screenshot](https://acmelabs.space/~raichoo/hikari.png)
 
 ## Description
 
-_hikari_ is a stacking Wayland compositor with additional tiling capabilities,
+*Hikari Sakura* is a FreeBSD-focused revamp and modernization of the original Hikari taken from https://github.com/antaz/hikari (which was abandoned 2 years ago). It is very different from the original and is focused on being a comprehensive desktop environment specifically built for FreeBSD as the first properly focused designed Wayland desktop environment for FreeBSD.
+
+It is a stacking Wayland compositor with additional tiling capabilities,
 it is heavily inspired by the Calm Window manager (cwm(1)). Its core concepts
 are *views*, *groups*, *sheets* and the *workspace*.
 
@@ -89,12 +91,93 @@ source tree to `/usr/local/etc/pam.d/hikari-unlocker`.
 
 ### Setting up the keyboard layout
 
-`hikari` gets its keyboard settings from `xkb` environment variables. To select
-a layout set the `XKB_DEFAULT_LAYOUT` to the desired value before starting
-`hikari`.
+`hikari` natively configures its keyboards via the `inputs { keyboards { ... } }` block in `hikari.conf`. You can directly specify your `xkb` layout, options, repeat rates, and delays there.
+
+If a keyboard is not explicitly configured in `hikari.conf`, `hikari` will fall back to using `xkb` environment variables. To select a layout this way, set `XKB_DEFAULT_LAYOUT` before starting `hikari`.
 
 ```sh
 export XKB_DEFAULT_LAYOUT="de(nodeadkeys),de"
+```
+
+## Configuration & Customization
+
+`hikari` is configured using `libucl` syntax. The configuration file is expected to be located at `$XDG_CONFIG_HOME/hikari/hikari.conf`. If it does not exist, `hikari` will fall back to the default config installed at `${ETC_PREFIX}/etc/hikari/hikari.conf`.
+
+The configuration file allows you to define:
+- **ui**: Colors, border sizes, fonts, and gaps.
+- **actions**: User-defined shell commands (e.g., launching a terminal, volume control).
+- **bindings**: Keyboard and mouse shortcuts mapped to actions or internal operations.
+- **layouts**: Defined workspace tiling patterns.
+- **views**: Window matching rules (by app ID) to automatically group, float, or pin applications to specific sheets.
+
+**Capabilities & Limitations:**
+- You can use environment variables (e.g., `$TERMINAL`) in the configuration file; they will be substituted when the configuration is loaded.
+- Structural changes like UI themes, custom actions, and new bindings can be hot-reloaded using the `reload` action (default: `L+S+r`).
+- `hikari` does not support conditional statements or complex logic within the config file itself.
+- Some environment-level initializations (like XWayland) require a full restart of the compositor to apply.
+- `hikari` does not provide a built-in status bar. You can use external layer-shell components like `waybar` or the included `hikari-topbar` for system telemetry.
+
+## Laptop Optimization
+
+When using `hikari` on a laptop, especially on FreeBSD, you may want to map your multimedia keys and handle the lid switch.
+
+### Multimedia Keys (Volume & Brightness)
+
+`hikari` natively understands `XF86` keysyms via `xkbcommon`. You can define custom actions that invoke FreeBSD's native `mixer(8)` and `backlight(8)` utilities, and bind them to your media keys in `hikari.conf`.
+
+```ucl
+actions {
+  vol-up       = "mixer vol +5"
+  vol-down     = "mixer vol -5"
+  vol-mute     = "mixer vol.mute=^"
+  bright-up    = "backlight +5"
+  bright-down  = "backlight -5"
+}
+
+bindings {
+  keyboard {
+    "0+XF86AudioRaiseVolume"  = action-vol-up
+    "0+XF86AudioLowerVolume"  = action-vol-down
+    "0+XF86AudioMute"         = action-vol-mute
+    "0+XF86MonBrightnessUp"   = action-bright-up
+    "0+XF86MonBrightnessDown" = action-bright-down
+  }
+}
+```
+*Note: The `0+` prefix specifies that no modifier keys (like Super or Alt) are required.*
+
+### Lid Switch Handling
+
+`hikari` can natively parse switch events (like lid switches) through the `inputs { switches { ... } }` block in `hikari.conf`. You can bind these events to any `hikari` action. For example, to lock the screen when the lid closes:
+
+```ucl
+inputs {
+  switches {
+    "Control Method Lid Switch" = lock
+  }
+}
+```
+
+However, `hikari` itself does not manage suspend/resume states. On FreeBSD, suspend is typically handled by `devd(8)` or `acpi(4)`. 
+Ensure `hw.acpi.lid_switch_state` is set appropriately via `sysctl` or `/etc/sysctl.conf` to trigger a suspend (e.g., state `S3`) when the lid is closed.
+
+## Touchscreen & Trackpad Gestures
+
+`hikari` natively supports touchscreens and multi-finger trackpad gestures.
+
+Touchscreens are attached to the same output layout as the mouse cursor, and touch input is forwarded to clients via the standard Wayland touch protocol. The first touch point of a new touch sequence also drives `hikari`'s own focus, raise, move, and resize behavior — the same as a left mouse click — so windows can be managed by tapping and dragging directly on a touchscreen. Additional simultaneous touch points are left for the client to interpret (e.g. pinch-to-zoom in a PDF viewer).
+
+Trackpad swipe, pinch, and hold gestures (via `wlr_pointer_gestures_v1`) can be bound to `hikari` actions in the `inputs { gestures { ... } }` block, using keys of the form `swipe-<direction>-<fingers>`, `pinch-<direction>-<fingers>`, or `hold-<fingers>`. A gesture that matches a binding triggers the action instead of being forwarded to the client; unmatched gestures pass through unchanged.
+
+```ucl
+inputs {
+  gestures {
+    "swipe-left-3"  = workspace-cycle-next
+    "swipe-right-3" = workspace-cycle-prev
+    "pinch-in-3"    = view-toggle-maximize-full
+    "hold-3"        = action-terminal
+  }
+}
 ```
 
 ## Building
@@ -276,7 +359,7 @@ make DEBUG=YES ASAN=YES
 
 ## Community
 
-The `hikari` community gears to be inclusive and welcoming to everyone, this is
+The Hikari Sakura community gears to be inclusive and welcoming to everyone, this is
 why we chose to adhere to the [Geekfeminism Code of
 Conduct](https://hikari.acmelabs.space/coc.html).
 

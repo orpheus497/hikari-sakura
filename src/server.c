@@ -4,6 +4,7 @@
 #include <hikari/server.h>
 
 #include <libinput.h>
+#include <signal.h>
 #include <stdint.h>
 // [COMMENT] Action purpose: setgroups() lives in <unistd.h> on FreeBSD and in
 // <grp.h> on glibc; include both so the privilege drop compiles on either.
@@ -47,6 +48,8 @@
 #include <wlr/types/wlr_xdg_activation_v1.h>
 #include <wlr/types/wlr_xdg_output_v1.h>
 #include <wlr/types/wlr_xdg_shell.h>
+#include <wlr/types/wlr_pointer_gestures_v1.h>
+#include <wlr/types/wlr_touch.h>
 #include <wlr/util/log.h>
 
 #ifdef HAVE_LAYERSHELL
@@ -70,6 +73,7 @@
 #include <hikari/configuration.h>
 #include <hikari/decoration.h>
 #include <hikari/exec.h>
+#include <hikari/indicator_frame.h>
 #include <hikari/keyboard.h>
 #include <hikari/layout.h>
 #include <hikari/mark.h>
@@ -79,6 +83,7 @@
 #include <hikari/pointer_config.h>
 #include <hikari/sheet.h>
 #include <hikari/switch.h>
+#include <hikari/touch.h>
 #include <hikari/workspace.h>
 #include <hikari/xdg_view.h>
 
@@ -140,6 +145,48 @@ add_switch(struct hikari_server *server, struct wlr_input_device *device)
   }
 }
 
+// [COMMENT] Function purpose: Resolve the hikari_output whose wlr_output
+// name matches a touch device's reported fused-panel output name, so
+// wlr_cursor_absolute_to_layout_coords confines the device to that output
+// instead of the whole layout on multi-output setups.
+static struct hikari_output *
+find_output_by_name(struct hikari_server *server, const char *name)
+{
+  struct hikari_output *output;
+
+  wl_list_for_each (output, &server->outputs, server_outputs) {
+    if (!strcmp(output->wlr_output->name, name)) {
+      return output;
+    }
+  }
+
+  return NULL;
+}
+
+static void
+add_touch(struct hikari_server *server, struct wlr_input_device *device)
+{
+  struct hikari_touch *touch = hikari_malloc(sizeof(struct hikari_touch));
+
+  hikari_touch_init(touch, device);
+
+  wlr_cursor_attach_input_device(server->cursor.wlr_cursor, device);
+
+  struct wlr_touch *wlr_touch = wlr_touch_from_input_device(device);
+  struct wlr_output *mapped_output = NULL;
+
+  if (wlr_touch->output_name != NULL) {
+    struct hikari_output *output =
+        find_output_by_name(server, wlr_touch->output_name);
+
+    if (output != NULL) {
+      mapped_output = output->wlr_output;
+    }
+  }
+
+  wlr_cursor_map_input_to_output(server->cursor.wlr_cursor, device, mapped_output);
+}
+
 static void
 add_input(struct hikari_server *server, struct wlr_input_device *device)
 {
@@ -157,6 +204,10 @@ add_input(struct hikari_server *server, struct wlr_input_device *device)
       add_switch(server, device);
       break;
 
+    case WLR_INPUT_DEVICE_TOUCH:
+      add_touch(server, device);
+      break;
+
     default:
       break;
   }
@@ -164,6 +215,9 @@ add_input(struct hikari_server *server, struct wlr_input_device *device)
   uint32_t caps = WL_SEAT_CAPABILITY_POINTER;
   if (!wl_list_empty(&server->keyboards)) {
     caps |= WL_SEAT_CAPABILITY_KEYBOARD;
+  }
+  if (!wl_list_empty(&server->touches)) {
+    caps |= WL_SEAT_CAPABILITY_TOUCH;
   }
   wlr_seat_set_capabilities(server->seat, caps);
 
@@ -1297,6 +1351,8 @@ server_init(struct hikari_server *server, char *config_path)
   setup_virtual_pointer(server);
 #endif
   setup_decorations(server);
+  server->pointer_gestures =
+      wlr_pointer_gestures_v1_create(server->display);
   setup_selection(server);
   setup_xdg_shell(server);
   setup_xdg_activation(server);
@@ -1308,7 +1364,8 @@ server_init(struct hikari_server *server, char *config_path)
   wl_list_init(&server->pointers);
   wl_list_init(&server->keyboards);
   wl_list_init(&server->switches);
-
+  wl_list_init(&server->touches);
+  wl_list_init(&server->outputs);
   wl_list_init(&server->groups);
   wl_list_init(&server->visible_groups);
   wl_list_init(&server->visible_views);
@@ -1355,10 +1412,20 @@ server_init(struct hikari_server *server, char *config_path)
   }
 }
 
-static void
-sig_handler(int signal)
+// [COMMENT] Function purpose: wl_event_loop_add_signal callback for SIGTERM
+// and SIGINT. Unlike a raw signal(3) handler, this runs as an ordinary event
+// loop callback dispatched between poll cycles -- never reentering the main
+// thread's own code at an arbitrary instruction, which matters because
+// hikari_server_terminate() walks wl_lists and calls into per-view virtual
+// dispatch, none of which is async-signal-safe. This is the same mechanism
+// other wlroots compositors (Wayfire, labwc) use for graceful signal-driven
+// shutdown. See DECISIONS_LOG Phase 42 Finding 2.
+static int
+terminate_signal_handler(int signal_number, void *data)
 {
   hikari_server_terminate(NULL);
+
+  return 0;
 }
 
 static void
@@ -1375,7 +1442,18 @@ void
 hikari_server_start(char *config_path, char *autostart)
 {
   server_init(&hikari_server, config_path);
-  signal(SIGTERM, sig_handler);
+
+  // [COMMENT] Action purpose: Register SIGTERM and SIGINT through the
+  // Wayland event loop instead of raw signal(3). SIGINT was previously
+  // unhandled entirely -- Ctrl+C took the default disposition and skipped
+  // every cleanup step (client quit requests, wl_display_destroy,
+  // hikari_server_stop()'s teardown chain). Both now route through the same
+  // existing, already-correct hikari_server_terminate() graceful-shutdown
+  // sequence.
+  hikari_server.sigterm_source = wl_event_loop_add_signal(
+      hikari_server.event_loop, SIGTERM, terminate_signal_handler, NULL);
+  hikari_server.sigint_source = wl_event_loop_add_signal(
+      hikari_server.event_loop, SIGINT, terminate_signal_handler, NULL);
 
   // [COMMENT] Action purpose: Verify the backend actually started before
   // entering the event loop. wlr_backend_start() returns false when the
@@ -1461,6 +1539,15 @@ void
 hikari_server_stop(void)
 {
   struct hikari_server *server = &hikari_server;
+
+  if (server->sigterm_source != NULL) {
+    wl_event_source_remove(server->sigterm_source);
+    server->sigterm_source = NULL;
+  }
+  if (server->sigint_source != NULL) {
+    wl_event_source_remove(server->sigint_source);
+    server->sigint_source = NULL;
+  }
 
   wl_list_remove(&server->new_output.link);
   wl_list_remove(&server->new_input.link);
@@ -2118,13 +2205,29 @@ hikari_server_create_argb8888_buffer(int width, int height, unsigned char *data,
     return NULL;
   }
 
+  // [COMMENT] Action purpose: Graceful-degradation allocation. This helper's
+  // contract is already "return NULL on failure" (see the geometry/overflow
+  // guards above), and every caller (hikari_bar_refresh, hikari_indicator_bar_
+  // update) already handles a NULL return by skipping that one UI element's
+  // repaint rather than crashing -- aborting here would have defeated that
+  // contract for the one failure mode that actually matters. See
+  // DECISIONS_LOG Finding 4.
   struct hikari_argb8888_buffer *buffer =
-      hikari_malloc(sizeof(struct hikari_argb8888_buffer));
+      hikari_try_malloc(sizeof(struct hikari_argb8888_buffer));
+  if (buffer == NULL) {
+    return NULL;
+  }
+
+  unsigned char *buffer_data = hikari_try_malloc(byte_count);
+  if (buffer_data == NULL) {
+    hikari_free(buffer);
+    return NULL;
+  }
 
   wlr_buffer_init(&buffer->base, &argb8888_buffer_impl, width, height);
   buffer->format = DRM_FORMAT_ARGB8888;
   buffer->stride = (size_t)stride;
-  buffer->data = hikari_malloc(byte_count);
+  buffer->data = buffer_data;
   memcpy(buffer->data, data, byte_count);
 
   return &buffer->base;

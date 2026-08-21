@@ -1,6 +1,4 @@
-.ifmake clean
 WITH_ALL = YES
-.endif
 
 .ifdef WITH_ALL
 WITH_XWAYLAND = YES
@@ -32,6 +30,7 @@ OBJS = \
 	exec.o \
 	font.o \
 	geometry.o \
+	gesture_config.o \
 	group.o \
 	group_assign_mode.o \
 	indicator.o \
@@ -68,6 +67,7 @@ OBJS = \
 	switch.o \
 	switch_config.o \
 	tile.o \
+	touch.o \
 	view.o \
 	view_config.o \
 	workspace.o \

@@ -157,16 +157,36 @@ hikari_output_load_background(struct hikari_output *output,
     goto done;
   }
 
+  // [COMMENT] Action purpose: Graceful-degradation allocation. A background
+  // image is cosmetic -- the function already has a solid-color scene-rect
+  // fallback for when wlr_scene_buffer_create() fails below; an allocation
+  // failure for the buffer itself now falls through to that same fallback
+  // instead of aborting the compositor to display a wallpaper. See
+  // DECISIONS_LOG Finding 4.
   struct hikari_background_buffer *bg_buffer =
-      hikari_malloc(sizeof(struct hikari_background_buffer));
-  wlr_buffer_init(&bg_buffer->base, &bg_buffer_impl, output_width, output_height);
-  bg_buffer->format = DRM_FORMAT_ARGB8888;
-  bg_buffer->stride = stride;
-  bg_buffer->data = hikari_malloc(byte_count);
-  memcpy(bg_buffer->data, data, byte_count);
+      hikari_try_malloc(sizeof(struct hikari_background_buffer));
+  unsigned char *bg_data = NULL;
 
-  struct wlr_scene_buffer *scene_buffer =
-      wlr_scene_buffer_create(&hikari_server.scene->tree, &bg_buffer->base);
+  if (bg_buffer != NULL) {
+    bg_data = hikari_try_malloc(byte_count);
+    if (bg_data == NULL) {
+      hikari_free(bg_buffer);
+      bg_buffer = NULL;
+    }
+  }
+
+  struct wlr_scene_buffer *scene_buffer = NULL;
+
+  if (bg_buffer != NULL) {
+    wlr_buffer_init(&bg_buffer->base, &bg_buffer_impl, output_width, output_height);
+    bg_buffer->format = DRM_FORMAT_ARGB8888;
+    bg_buffer->stride = stride;
+    bg_buffer->data = bg_data;
+    memcpy(bg_buffer->data, data, byte_count);
+
+    scene_buffer =
+        wlr_scene_buffer_create(&hikari_server.scene->tree, &bg_buffer->base);
+  }
 
   if (scene_buffer != NULL) {
     output->background = &scene_buffer->node;
@@ -174,9 +194,16 @@ hikari_output_load_background(struct hikari_output *output,
         output->background, output->geometry.x, output->geometry.y);
     wlr_scene_node_lower_to_bottom(output->background);
   } else {
-    fprintf(stderr,
-        "error: could not create scene buffer for background on output \"%s\"\n",
-        output->wlr_output->name);
+    if (bg_buffer != NULL) {
+      fprintf(stderr,
+          "error: could not create scene buffer for background on output \"%s\"\n",
+          output->wlr_output->name);
+    } else {
+      fprintf(stderr,
+          "error: could not allocate background buffer for output \"%s\"; "
+          "falling back to solid color\n",
+          output->wlr_output->name);
+    }
 
     float color[4] = {
       hikari_configuration->clear[0],
@@ -199,7 +226,12 @@ hikari_output_load_background(struct hikari_output *output,
     }
   }
 
-  wlr_buffer_drop(&bg_buffer->base);
+  // [COMMENT] Action purpose: wlr_buffer_drop(NULL) is unsafe (see Phase 38's
+  // hikari_lock_indicator_fini fix); bg_buffer is NULL here whenever
+  // allocation failed above, so guard the call.
+  if (bg_buffer != NULL) {
+    wlr_buffer_drop(&bg_buffer->base);
+  }
 
   cairo_surface_destroy(image);
   cairo_surface_destroy(output_surface);

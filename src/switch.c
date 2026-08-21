@@ -27,6 +27,7 @@ destroy_handler(struct wl_listener *listener, void *data)
   struct hikari_switch *swtch = wl_container_of(listener, swtch, destroy);
 
   hikari_switch_fini(swtch);
+  hikari_free(swtch);
 }
 
 // [COMMENT] Function purpose: Handle hardware switch toggle events (e.g. laptop

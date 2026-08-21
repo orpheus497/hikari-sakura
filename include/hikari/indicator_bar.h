@@ -16,6 +16,13 @@ struct hikari_indicator_bar {
   int offset;
 
   float color[4];
+
+  /* [COMMENT] Action purpose: Identity of the last rendered content, so
+  hikari_indicator_bar_update() can skip the destroy+cairo-render+recreate
+  cycle when called again with unchanged text/color -- mirrors the cache-key
+  short-circuit already proven in hikari_bar_refresh() (src/bar.c). */
+  char *cache_text;
+  float cache_color[4];
 };
 
 void
