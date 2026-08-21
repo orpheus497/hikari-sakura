@@ -66,25 +66,77 @@ move_to_top(struct hikari_view *view)
   wl_list_insert(&view->output->views, &view->output_views);
 }
 
+/* Function purpose: Stacking-order counterpart of move_to_top() -- moves the
+view to the back of the sheet, group and output lists. Paired with
+view_link_visible_at(..., false) by hikari_view_lower(), mirroring how
+move_to_top() pairs with view_link_visible() in raise_view(). */
 static void
-place_visibly_above(
-    struct hikari_view *view, struct hikari_workspace *workspace)
+move_to_bottom(struct hikari_view *view)
+{
+  assert(view != NULL);
+  assert(hikari_view_is_mapped(view));
+
+  wl_list_remove(&view->sheet_views);
+  wl_list_insert(view->sheet->views.prev, &view->sheet_views);
+
+  wl_list_remove(&view->group_views);
+  wl_list_insert(view->group->views.prev, &view->group_views);
+
+  wl_list_remove(&view->output_views);
+  wl_list_insert(view->output->views.prev, &view->output_views);
+}
+
+/* Function purpose: Single writer for the "this view is visible" linkage. Links
+the view into -- or re-links it to either end of -- every list that represents
+visibility: hikari_server.visible_views, its group's visible_views, the group's
+own server-visibility aggregate, and the workspace's views. `front` selects
+raise (true) or lower (false) ordering.
+
+Because each link is removed before being inserted, and every link is kept in a
+valid state by hikari_view_init() and view_unlink_visible(), this is idempotent
+with respect to membership: calling it on an already-visible view merely restacks
+it. That is why one function serves "become visible", "raise" and "lower" without
+separate code paths. Nothing else in this file may link these four lists -- see
+view_unlink_visible() for the inverse, and DECISIONS_LOG Phase 55 for why the
+previously-split entry path (increase_group_visiblity + place_visibly_above) and
+hikari_view_lower()'s separate inline copy were collapsed into this one writer. */
+static void
+view_link_visible_at(struct hikari_view *view,
+    struct hikari_workspace *workspace,
+    bool front)
 {
   assert(hikari_view_is_forced(view) ? hikari_view_is_hidden(view)
                                      : !hikari_view_is_hidden(view));
 
+  struct wl_list *visible_views = &hikari_server.visible_views;
+  struct wl_list *group_visible_views = &view->group->visible_views;
+  struct wl_list *visible_groups = &hikari_server.visible_groups;
+  struct wl_list *workspace_views = &workspace->views;
+
+  /* [COMMENT] Action purpose: Each list's tail anchor is read after that list's
+  own removal, never before -- removing a view that is currently last would
+  otherwise leave the cached `prev` pointing at the view being re-inserted. */
   wl_list_remove(&view->visible_server_views);
-  wl_list_insert(&hikari_server.visible_views, &view->visible_server_views);
+  wl_list_insert(front ? visible_views : visible_views->prev,
+      &view->visible_server_views);
 
   wl_list_remove(&view->visible_group_views);
-  wl_list_insert(&view->group->visible_views, &view->visible_group_views);
+  wl_list_insert(front ? group_visible_views : group_visible_views->prev,
+      &view->visible_group_views);
 
   wl_list_remove(&view->group->visible_server_groups);
-  wl_list_insert(
-      &hikari_server.visible_groups, &view->group->visible_server_groups);
+  wl_list_insert(front ? visible_groups : visible_groups->prev,
+      &view->group->visible_server_groups);
 
   wl_list_remove(&view->workspace_views);
-  wl_list_insert(&workspace->views, &view->workspace_views);
+  wl_list_insert(front ? workspace_views : workspace_views->prev,
+      &view->workspace_views);
+}
+
+static void
+view_link_visible(struct hikari_view *view, struct hikari_workspace *workspace)
+{
+  view_link_visible_at(view, workspace, true);
 }
 
 static void
@@ -93,7 +145,7 @@ raise_view(struct hikari_view *view)
   assert(view != NULL);
 
   move_to_top(view);
-  place_visibly_above(view, view->sheet->workspace);
+  view_link_visible(view, view->sheet->workspace);
 }
 
 static void
@@ -167,38 +219,48 @@ move_view(struct hikari_view *view, struct wlr_box *geometry, int x, int y)
   }
 }
 
+/* Function purpose: Unlink a view from its group's visibility bookkeeping only
+-- its group visible_views membership and, once that group has no visible views
+left, the group's server-visibility aggregate. Deliberately does NOT touch the
+hidden flag or the workspace/server lists, because it serves two different
+callers: view_unlink_visible() below, where it is one step of a full transition,
+and remove_from_group(), which reassigns a view between groups while the view
+remains visible throughout. */
 static void
-increase_group_visiblity(struct hikari_view *view)
-{
-  assert(hikari_view_is_forced(view) ? hikari_view_is_hidden(view)
-                                     : !hikari_view_is_hidden(view));
-
-  struct hikari_group *group = view->group;
-
-  if (wl_list_empty(&group->visible_views)) {
-    wl_list_insert(
-        &hikari_server.visible_groups, &group->visible_server_groups);
-  }
-
-  wl_list_init(&view->visible_group_views);
-}
-
-static void
-decrease_group_visibility(struct hikari_view *view)
+view_unlink_group_visible(struct hikari_view *view)
 {
   struct hikari_group *group = view->group;
 
   wl_list_remove(&view->visible_group_views);
+  wl_list_init(&view->visible_group_views);
 
+  /* [COMMENT] Action purpose: Drop the group's server-visibility aggregate only
+  once this group's last visible view has gone. Checked after the removal above,
+  mirroring how view_link_visible() re-establishes the aggregate on the way in.
+  Re-initialised so hikari_group_fini()'s unconditional removal stays safe. */
   if (wl_list_empty(&group->visible_views)) {
     wl_list_remove(&group->visible_server_groups);
+    wl_list_init(&group->visible_server_groups);
   }
 }
 
+/* Function purpose: Single writer for leaving the visible state -- the exact
+inverse of view_link_visible(). Unlinks the view from all four visibility lists,
+drops the group's server-visibility aggregate once that group has no visible
+views left, and sets the hidden flag. Every link is re-initialised immediately
+after removal so a subsequent removal is a harmless no-op rather than a NULL
+dereference (libwayland's wl_list_remove leaves both pointers NULL).
+
+Nothing else in this file may unlink these lists. The previous arrangement --
+where the hidden flag could be set without performing the unlink -- is what
+allowed a view to be freed while still linked into three lists, and its group to
+be freed while still linked into hikari_server.visible_groups. Because this
+function sets the flag itself, the flag can no longer diverge from the linkage.
+See DECISIONS_LOG Phase 55. */
 static void
-hide(struct hikari_view *view)
+view_unlink_visible(struct hikari_view *view)
 {
-  decrease_group_visibility(view);
+  view_unlink_group_visible(view);
 
   wl_list_remove(&view->workspace_views);
   wl_list_init(&view->workspace_views);
@@ -218,6 +280,15 @@ detach_from_group(struct hikari_view *view)
   wl_list_init(&view->group_views);
 
   if (wl_list_empty(&group->views)) {
+    /* [COMMENT] Action purpose: Make the group-lifetime invariant explicit and
+    checked. A group with no views can have no visible views, so by the time it
+    is freed its visible_views list must already be empty -- otherwise the freed
+    group is still referenced from hikari_server.visible_groups and from the
+    visible_group_views link of whatever view is still listed, which is walked
+    on every focus change. This invariant was previously unwritten and
+    maintained by entirely separate functions. See DECISIONS_LOG Phase 55. */
+    assert(wl_list_empty(&group->visible_views));
+
     hikari_group_fini(group);
     hikari_free(group);
   }
@@ -228,8 +299,16 @@ remove_from_group(struct hikari_view *view)
 {
   assert(!hikari_view_is_hidden(view));
 
+  /* [COMMENT] Action purpose: Drop this view from the old group's visibility
+  bookkeeping before its membership is dropped -- detach_from_group() may free
+  the group, and doing so while this view is still listed in
+  group->visible_views leaves freed memory reachable from
+  hikari_server.visible_groups. Only the group-scoped unlink is used: the view
+  stays visible and keeps its workspace/server list membership and its hidden
+  flag, because the caller (hikari_view_group) is reassigning it to another
+  group, not hiding it. */
   if (!hikari_view_is_hidden(view)) {
-    decrease_group_visibility(view);
+    view_unlink_group_visible(view);
   }
 
   detach_from_group(view);
@@ -458,6 +537,21 @@ hikari_view_init(
   hikari_view_unset_dirty(view);
   view->pending_operation.tile = NULL;
 
+  /* [COMMENT] Action purpose: Initialise every list link this view can ever be
+  linked through, not only children. The containing hikari_xdg_view /
+  hikari_xwayland_view structs are allocated with hikari_malloc, which does not
+  zero, so any link left untouched here holds indeterminate garbage until
+  something first inserts it -- while hikari_view_fini() and the teardown paths
+  call wl_list_remove() on these links unconditionally. Initialising all seven
+  makes every later removal a structural no-op on an unlinked view, instead of
+  depending on an unrelated NULL-pointer guard elsewhere happening to skip it.
+  See DECISIONS_LOG Phase 55. */
+  wl_list_init(&view->output_views);
+  wl_list_init(&view->workspace_views);
+  wl_list_init(&view->sheet_views);
+  wl_list_init(&view->group_views);
+  wl_list_init(&view->visible_group_views);
+  wl_list_init(&view->visible_server_views);
   wl_list_init(&view->children);
 }
 
@@ -947,8 +1041,12 @@ hikari_view_map(struct hikari_view *view, struct wlr_surface *surface)
 
     hikari_server_cursor_focus();
   } else {
+    /* [COMMENT] Action purpose: Under lock mode a non-public view is linked
+    into the visible lists but deliberately left flagged hidden and with its
+    scene node disabled -- "forced". raise_view() performs the linkage through
+    view_link_visible(), which is the same single writer the normal path uses;
+    the flag and the scene node are intentionally not touched here. */
     hikari_view_set_forced(view);
-    increase_group_visiblity(view);
     raise_view(view);
   }
 }
@@ -976,18 +1074,24 @@ hikari_view_unmap(struct hikari_view *view)
     child->fini(child);
   }
 
+  /* [COMMENT] Action purpose: Leave the visible state through the single unlink
+  writer, whichever state the view is in. A forced view (lock mode) is linked
+  into the visibility lists while flagged hidden, so it must still be unlinked;
+  it never holds focus, which is why it does not go through hikari_view_hide().
+
+  This previously branched on the hidden flag and, when a forced view was not
+  flagged hidden, set the flag WITHOUT performing the unlink -- leaving the view
+  linked into workspace->views, hikari_server.visible_views and
+  group->visible_views while execution fell through to detach_from_group()
+  below, which frees the group. That freed a group still reachable from
+  hikari_server.visible_groups and left three lists pointing at a view struct
+  freed moments later by destroy_handler. view_unlink_visible() sets the hidden
+  flag itself, so the flag can no longer diverge from the linkage. See
+  DECISIONS_LOG Phase 55. */
   if (hikari_view_is_forced(view)) {
-    if (hikari_view_is_hidden(view)) {
-      hide(view);
-    } else {
-      hikari_view_damage_whole(view);
-      hikari_view_set_hidden(view);
-    }
-
+    view_unlink_visible(view);
     hikari_view_unset_forced(view);
-  }
-
-  if (!hikari_view_is_hidden(view)) {
+  } else if (!hikari_view_is_hidden(view)) {
     hikari_view_hide(view);
     hikari_server_cursor_focus();
   }
@@ -1053,8 +1157,12 @@ hikari_view_show(struct hikari_view *view)
     wlr_scene_node_set_enabled(view->scene_node, true);
   }
 
-  increase_group_visiblity(view);
-
+  /* [COMMENT] Action purpose: raise_view() performs the visibility linkage
+  through view_link_visible(), the single writer. The separate
+  increase_group_visiblity() call this replaced only re-established the group's
+  server-visibility aggregate, which view_link_visible() now does unconditionally
+  as part of the same transition -- keeping the flag, the scene node and all
+  four lists updated in one place. See DECISIONS_LOG Phase 55. */
   raise_view(view);
 
   hikari_view_damage_whole(view);
@@ -1074,8 +1182,11 @@ hikari_view_hide(struct hikari_view *view)
   printf("HIDE %p\n", view);
 #endif
 
+  /* [COMMENT] Action purpose: clear_focus() must run before the unlink -- it
+  resolves the successor focus by consulting the very lists view_unlink_visible()
+  is about to remove this view from. */
   clear_focus(view);
-  hide(view);
+  view_unlink_visible(view);
 
   // [COMMENT] Action purpose: Guard against missing scene node before disabling it.
   if (view->scene_node != NULL) {
@@ -1112,27 +1223,14 @@ hikari_view_lower(struct hikari_view *view)
     return;
   }
 
-  wl_list_remove(&view->sheet_views);
-  wl_list_insert(view->sheet->views.prev, &view->sheet_views);
-
-  wl_list_remove(&view->group_views);
-  wl_list_insert(view->group->views.prev, &view->group_views);
-
-  wl_list_remove(&view->output_views);
-  wl_list_insert(view->output->views.prev, &view->output_views);
-
-  wl_list_remove(&view->visible_group_views);
-  wl_list_insert(view->group->visible_views.prev, &view->visible_group_views);
-
-  wl_list_remove(&view->group->visible_server_groups);
-  wl_list_insert(
-      hikari_server.visible_groups.prev, &view->group->visible_server_groups);
-
-  wl_list_remove(&view->workspace_views);
-  wl_list_insert(view->sheet->workspace->views.prev, &view->workspace_views);
-
-  wl_list_remove(&view->visible_server_views);
-  wl_list_insert(hikari_server.visible_views.prev, &view->visible_server_views);
+  /* [COMMENT] Action purpose: Lower is the exact mirror of raise_view() --
+  stacking lists to the back via move_to_bottom(), visibility lists to the back
+  via the same single writer used everywhere else. This previously inlined its
+  own remove/insert against all seven lists, a third hand-maintained copy of the
+  linkage that shared no code with move_to_top() or view_link_visible() and had
+  to be kept in agreement with them by hand. See DECISIONS_LOG Phase 55. */
+  move_to_bottom(view);
+  view_link_visible_at(view, view->sheet->workspace, false);
 
   hikari_view_damage_whole(view);
 }
@@ -1571,7 +1669,7 @@ hikari_view_pin_to_sheet(struct hikari_view *view, struct hikari_sheet *sheet)
     }
   } else {
     if (hikari_sheet_is_visible(sheet)) {
-      place_visibly_above(view, sheet->workspace);
+      view_link_visible(view, sheet->workspace);
 
       hikari_view_damage_whole(view);
       hikari_indicator_position(&hikari_server.indicator, view);
@@ -1666,8 +1764,12 @@ hikari_view_group(struct hikari_view *view, struct hikari_group *group)
   remove_from_group(view);
   view->group = group;
 
-  increase_group_visiblity(view);
-
+  /* [COMMENT] Action purpose: raise_view() links the view into the new group's
+  visible_views and re-establishes that group's server-visibility aggregate via
+  view_link_visible(). The separate increase_group_visiblity() call this
+  replaced did only the aggregate half. The view is still flagged visible here
+  -- remove_from_group() detaches group bookkeeping without hiding it -- so the
+  linkage precondition holds. */
   raise_view(view);
 
   hikari_view_damage_whole(view);
@@ -2015,7 +2117,7 @@ hikari_view_migrate(struct hikari_view *view,
 
   // only remove view from lists and do not make it lose focus by calling
   // `hikari_view_hide`.
-  hide(view);
+  view_unlink_visible(view);
 
   hikari_geometry_constrain_relative(
       &view->geometry, &output->usable_area, x, y);

@@ -320,7 +320,13 @@ destroy_handler(struct wl_listener *listener, void *data)
   wl_list_remove(&xdg_view->map.link);
   wl_list_remove(&xdg_view->unmap.link);
   wl_list_remove(&xdg_view->commit.link);
+  /* [COMMENT] Action purpose: Normally already removed and re-initialised by
+  toplevel_destroy_handler, which wlroots runs first; these removals are then
+  harmless no-ops on self-referencing links. They are kept for the case where
+  the xdg_surface is torn down without ever having had a toplevel role object
+  attached. */
   wl_list_remove(&xdg_view->request_fullscreen.link);
+  wl_list_remove(&xdg_view->toplevel_destroy.link);
   wl_list_remove(&xdg_view->destroy.link);
 
   hikari_view_fini(view);
@@ -593,6 +599,42 @@ request_fullscreen_handler(struct wl_listener *listener, void *data)
   apply_requested_fullscreen(xdg_view);
 }
 
+/* [COMMENT] Function purpose: Release every listener hikari holds on the
+xdg_toplevel role object, at the moment wlroots tears that object down.
+
+This must exist because of the wlroots 0.20 destroy ordering: destroy_xdg_surface
+() calls destroy_xdg_surface_role_object() -- which runs destroy_xdg_toplevel()
+-- BEFORE it emits xdg_surface->events.destroy. destroy_xdg_toplevel() emits
+toplevel->events.destroy and then asserts that all ten toplevel-scoped signals
+have empty listener lists, including request_fullscreen. hikari's own
+destroy_handler is bound to the xdg_surface destroy signal and therefore does not
+run until after those assertions have already been evaluated, so removing
+request_fullscreen there was always too late: wlroots aborted (SIGABRT) on every
+XDG toplevel teardown, which is every ordinary window close.
+
+Both links are re-initialised after removal so destroy_handler's later removals
+stay safe no-ops. This listener also removes itself, which
+wl_signal_emit_mutable() explicitly permits, so the
+events.destroy.listener_list assertion is satisfied too. See DECISIONS_LOG
+Phase 57. */
+static void
+toplevel_destroy_handler(struct wl_listener *listener, void *data)
+{
+  struct hikari_xdg_view *xdg_view =
+      wl_container_of(listener, xdg_view, toplevel_destroy);
+
+  wl_list_remove(&xdg_view->request_fullscreen.link);
+  wl_list_init(&xdg_view->request_fullscreen.link);
+
+  wl_list_remove(&xdg_view->toplevel_destroy.link);
+  wl_list_init(&xdg_view->toplevel_destroy.link);
+
+  /* [COMMENT] Action purpose: The toplevel is going away, so the cached pointer
+  must not outlive it -- wlroots frees the struct immediately after these
+  assertions and sets base->toplevel to NULL. */
+  xdg_view->xdg_toplevel = NULL;
+}
+
 static void
 constraints(struct hikari_view *view,
     int *min_width,
@@ -707,6 +749,14 @@ hikari_xdg_view_init(struct hikari_xdg_view *xdg_view,
   xdg_view->request_fullscreen.notify = request_fullscreen_handler;
   wl_signal_add(&xdg_surface->toplevel->events.request_fullscreen,
       &xdg_view->request_fullscreen);
+
+  /* [COMMENT] Action purpose: Release the toplevel-scoped listener above when
+  the toplevel itself is destroyed. wlroots destroys the role object before
+  emitting the xdg_surface destroy signal and asserts every toplevel signal has
+  no listeners left, so this cannot be deferred to destroy_handler. */
+  xdg_view->toplevel_destroy.notify = toplevel_destroy_handler;
+  wl_signal_add(
+      &xdg_surface->toplevel->events.destroy, &xdg_view->toplevel_destroy);
 
   xdg_view->destroy.notify = destroy_handler;
   wl_signal_add(&xdg_surface->events.destroy, &xdg_view->destroy);

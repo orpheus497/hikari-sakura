@@ -1,3 +1,293 @@
+## [2026-08-21] Phase 57: ROOT CAUSE FOUND AND FIXED — wlroots asserts toplevel listeners are gone before hikari removes them
+
+*(Timestamp: date from session context. Live-system inspection was performed at the user's explicit request ("is there anything you can detect"), read-only; code edits remain IDE-tooling-only.)*
+
+**Context:** User was running the compositor live, closed a terminal window, and the whole session died back to SDDM. They asked what could be detected from the running system. This phase found the actual defect that ~50 prior phases had been circling.
+
+### The bug
+
+`src/xdg_view.c` registers `request_fullscreen` on **`xdg_surface->toplevel->events.request_fullscreen`** in `hikari_xdg_view_init()`, and removes it in `destroy_handler`, which is bound to **`xdg_surface->events.destroy`**.
+
+Those are two different objects with two different lifetimes, and wlroots 0.20 destroys them in this order (`wlr_xdg_surface.c:528-538`):
+
+```c
+void destroy_xdg_surface(struct wlr_xdg_surface *surface) {
+    destroy_xdg_surface_role_object(surface);   // -> destroy_xdg_toplevel()
+    reset_xdg_surface(surface);
+    wl_signal_emit_mutable(&surface->events.destroy, NULL);   // hikari's destroy_handler, TOO LATE
+    ...
+```
+
+and `destroy_xdg_toplevel()` (`wlr_xdg_toplevel.c:543-557`) ends with ten assertions, one per toplevel-scoped signal:
+
+```c
+wl_signal_emit_mutable(&toplevel->events.destroy, NULL);
+assert(wl_list_empty(&toplevel->events.destroy.listener_list));
+assert(wl_list_empty(&toplevel->events.request_maximize.listener_list));
+assert(wl_list_empty(&toplevel->events.request_fullscreen.listener_list));   // <-- FIRES
+...
+```
+
+hikari's `request_fullscreen` listener is still registered when that assertion is evaluated, because the code that removes it does not run until three lines later. **wlroots calls `abort()` — SIGABRT — on every XDG toplevel teardown, i.e. every ordinary window close.** Clicking a button in a popup that dismisses its parent reaches the same path, which is why both reported triggers behaved identically.
+
+### Why this went undetected for so long
+
+* **hikari's own assertions are compiled out.** The installed binary contains *zero* assert expression strings and none of the `#if !defined(NDEBUG)` `printf` markers (`SHOW %p`, `XDG MAP %p`, …), so it is a release (`-DNDEBUG`) build. **This corrects Phase 53, which inferred a `DEBUG=YES` build from `file` reporting "with debug_info, not stripped" and concluded hikari's assertions were live. That inference was wrong**, and it mattered: it kept attention on hikari-side assertions and on jemalloc, when the aborting assertion was in `libwlroots-0.20.so` — which *is* built with assertions enabled (confirmed: its assert expression strings are present, including the `listener_list` ones).
+* The abort therefore produced no hikari diagnostic, and `/var/coredumps` does not exist, so no core was ever written.
+
+### Timeline evidence (this is also why the Phase 56 refactor did not help)
+
+| Time | Event |
+|---|---|
+| 12:27 / 12:33 | Phase 56 refactor edits to `src/group.c` / `src/view.c` |
+| 13:46:10 | user rebuilds and installs — binary **does** contain the refactor (`view_unlink_visible` present; `place_visibly_above` / `increase_group_visiblity` absent) |
+| 13:46:31 | session starts (PID 37767) on the **new** binary |
+| 13:46:57 | user closes a terminal → `pid 37767 (hikari) ... exited on signal 6` |
+| 13:47:03 | current session (PID 38920), still healthy |
+
+**The Phase 56 refactor was in the binary that crashed.** It fixed a real and separate latent defect class (see Phase 55/56) but it was never the cause of this crash, and this must not be presented as if it were.
+
+### Fix applied
+
+* **`include/hikari/xdg_view.h`:** added `struct wl_listener toplevel_destroy` to `struct hikari_xdg_view`.
+* **`src/xdg_view.c`:** added `toplevel_destroy_handler()`, registered on `xdg_surface->toplevel->events.destroy` in `hikari_xdg_view_init()`. It removes `request_fullscreen`, removes itself (permitted during `wl_signal_emit_mutable`, and required so the `events.destroy.listener_list` assertion also passes), re-initialises both links, and NULLs the now-dangling `xdg_toplevel` pointer.
+* **`src/xdg_view.c` › `destroy_handler`:** retains both removals as harmless no-ops on the re-initialised links, covering the case where an xdg_surface is torn down having never had a toplevel role object.
+
+### Audit of the remaining assertions on the same paths (checked, no further gaps)
+
+* `toplevel->events.set_title` — hikari registers this in `map()` and removes it in `unmap()`. Safe because `destroy_xdg_toplevel()` calls `wlr_surface_unmap()` *first*, which drives hikari's `unmap_handler` before the assertions run.
+* `surface->events.new_popup` — registered in `map()`, removed in `unmap()`; `destroy_handler` calls `unmap()` while the xdg_surface destroy signal is still being emitted, i.e. before that assertion. Safe.
+* Never-mapped views never register `set_title`/`new_popup` at all, so those lists are empty. Safe.
+* No other hikari listener is bound to a `wlr_xdg_toplevel` signal.
+
+### Status
+
+Fix applied, **not compiled and not run** — the user's build is the next step. If a crash survives this, `/var/coredumps` should be created first (`sudo mkdir -p /var/coredumps && sudo chmod 1777 /var/coredumps`) so a core is finally captured; note also that SDDM writes session stderr to `~/.local/share/sddm/wayland-session.log` but **truncates it on next login**, so it must be copied before logging back in.
+
+---
+
+## [2026-08-21] Phase 56: Execution — Single-Writer Visibility Transitions Implemented (Steps 0-2; Steps 3-4 outstanding)
+
+*(Timestamp: date from session context; time-of-day omitted rather than fabricated — IDE-tooling-only directive in force, so `date` could not be executed. Phase 38 precedent.)*
+
+**Context:** User approved the Phase 55 refactor with "proceed". Implemented Steps 0, 1 and 2 of `PLANS.md` item -6. **No build was run** — the IDE-tooling-only directive remains in force, so `sudo make clean && sudo make install` is the user's step, as in prior phases. Correctness was checked by re-reading each edit and by the IDE's live diagnostics, which proved decisive (see "Regression caught mid-refactor" below).
+
+### Step 0 — prerequisites (applied)
+
+* **`src/view.c` › `hikari_view_init()`:** now `wl_list_init()`s all seven links (`output_views`, `workspace_views`, `sheet_views`, `group_views`, `visible_group_views`, `visible_server_views`, `children`) instead of only `children`. Removes the window in which four links held `hikari_malloc` garbage between init and map.
+* **`src/group.c` › `hikari_group_init()`:** added `wl_list_init(&group->visible_server_groups)`. **This was not in the plan** — discovered while implementing Step 0c: the aggregate link was *also* never initialised, so a group that is never shown carried garbage in it for its whole lifetime. Adding the `fini` removal below without this would itself have been a crash.
+* **`src/group.c` › `hikari_group_fini()`:** added `wl_list_remove(&group->visible_server_groups)` before the free, converting a would-be silent use-after-free into a no-op.
+* **`src/view.c` › group-visibility unlink:** every removal is now followed by `wl_list_init()`, matching the file's existing remove-then-init convention. Required for the `hikari_group_fini()` removal above to be safe in both states (libwayland's `wl_list_remove` leaves both pointers NULL, so a second removal without an intervening init dereferences NULL).
+* **Step 0b decision — no change made.** The two now-redundant `wl_list_init` calls in `hikari_view_configure()` were left in place. They are harmless (the links are already self-referencing after Step 0a) and `hikari_view_configure()` is only reached once per view, from `first_map()` under an `is_unmanaged` guard, so they cannot orphan a linked view. Deleting them without the ability to build was judged needless risk for zero benefit. Deliberately **not** annotated in-code, per AGENTS.md's prohibition on retroactively commenting untouched code — recorded here instead.
+
+### Step 1 — the single writers (applied, `src/view.c`)
+
+* **`view_link_visible_at(view, workspace, front)`** — replaces `place_visibly_above()`. The sole writer that links a view into the four visibility lists (`hikari_server.visible_views`, `group->visible_views`, the group's `visible_server_groups` aggregate, `workspace->views`). Idempotent w.r.t. membership, so one function now serves "become visible", "raise" *and* "lower". Each list's tail anchor is read only after that list's own removal, so re-inserting a currently-last view cannot cache a stale `prev`.
+* **`view_link_visible(view, workspace)`** — thin front-insert wrapper, so existing raise/show callers read unchanged.
+* **`view_unlink_group_visible(view)`** — group-scoped unlink only (group `visible_views` + aggregate). Deliberately does not touch the hidden flag or the workspace/server lists.
+* **`view_unlink_visible(view)`** — replaces `hide()`. The sole writer for leaving the visible state: group-scoped unlink, then workspace/server lists, then sets the hidden flag. **Because it sets the flag itself, the flag can no longer diverge from the linkage** — which is the actual root-cause fix.
+* **`move_to_bottom(view)`** — new stacking-order mirror of `move_to_top()`.
+* **Deleted:** `increase_group_visiblity()`, `decrease_group_visibility()`, `hide()`, `place_visibly_above()`.
+* **Deferred: `view_assert_visible_consistent()` (plan item 1c).** Deliberately not added this phase. The user's installed binary is a `DEBUG=YES` build with assertions live and is *already* aborting; introducing a new, untested six-way consistency assert into that build risks converting a working path into a fresh abort and confusing the very diagnosis in progress. It should land after the user confirms this refactor builds and runs. The one narrowly-scoped assert that *was* added (below) is sound by inspection.
+
+### Step 2 — call sites rewired (applied, `src/view.c`)
+
+| Site | Change |
+|---|---|
+| `raise_view()` | now `move_to_top()` + `view_link_visible()` |
+| `hikari_view_show()` | dropped the separate `increase_group_visiblity()` call; `raise_view()` does the whole linkage |
+| `hikari_view_hide()` | `hide()` → `view_unlink_visible()`; documented that `clear_focus()` **must** precede it |
+| **`hikari_view_unmap()`** | **the root-cause fix** — the `forced`/`!hidden` branch that set the hidden flag *without* unlinking is deleted; a forced view now always leaves through `view_unlink_visible()` |
+| `hikari_view_lower()` | seven inline remove/insert pairs replaced by `move_to_bottom()` + `view_link_visible_at(..., false)`; the third hand-maintained copy of the linkage is gone |
+| `hikari_view_map()` (lock branch) | `increase_group_visiblity()` + `raise_view()` → `raise_view()` |
+| `hikari_view_group()` | dropped `increase_group_visiblity()`; `raise_view()` links into the new group |
+| `hikari_view_pin_to_sheet()` | `place_visibly_above()` → `view_link_visible()` |
+| `hikari_view_migrate()` | `hide()` → `view_unlink_visible()` |
+| `remove_from_group()` | now uses `view_unlink_group_visible()` — see below |
+| `detach_from_group()` | added `assert(wl_list_empty(&group->visible_views))` before the free, making the previously-unwritten group-lifetime invariant explicit and checked |
+
+### Regression caught mid-refactor (worth recording as a method note)
+
+The first version of `remove_from_group()` called the full `view_unlink_visible()`. That was **wrong**: `remove_from_group()` reassigns a view between groups while the view stays visible, but `view_unlink_visible()` sets the hidden flag — which would then have tripped `view_link_visible_at()`'s `forced ? hidden : !hidden` precondition assert on the immediately following `raise_view()` in `hikari_view_group()`. Resolved by splitting the unlink into `view_unlink_group_visible()` (group-scoped, flag-preserving) and `view_unlink_visible()` (full transition, sets the flag).
+
+**This was surfaced by the IDE's live diagnostics**, which flagged four stale call sites (`hide` in `hikari_view_migrate`, `place_visibly_above` in `hikari_view_pin_to_sheet`, `increase_group_visiblity` in `hikari_view_group`, and one transient) as implicit-function-declaration errors immediately after the deletions. Reading alone had missed all four — they live far from the functions being edited. Recorded because it is direct evidence for the Phase 53/54 conclusion that this codebase's quality gate cannot be "an agent reads it carefully."
+
+### Status
+
+Steps 0-2 complete and internally consistent. **Not yet done:** plan item 1c (consistency checker, deliberately deferred — see above), Step 3 (`BLUEPRINT.md` "View Visibility State" section), Step 4 (headless smoke test under `MALLOC_CONF=junk:true`). **Not yet verified:** nothing has been compiled or run. The next action is the user's build + runtime test.
+
+---
+
+## [2026-08-21] Phase 55: Root-Cause Architecture Analysis — Visibility State Is Represented Six Times With No Single Writer (ANALYSIS + REFACTOR PLAN, no code changes)
+
+*(Timestamp: date from session context. Time-of-day omitted rather than fabricated — the user directed IDE-tooling-only for this phase, so `date '+%Y-%m-%d %H:%M'` could not be executed per AGENTS.md COMMAND LAWS. Same precedent as Phase 38. Last system-sourced time this session was 12:11.)*
+
+**Context:** User asked whether the architecture itself is causing the crashing — specifically whether the "garbage / use-after-free" pattern is what has produced the long history of random crashes through normal compositor use — and for a remediation plan, not merely a hardening plan; a refactor if a refactor is genuinely the most effective fix, and if so with complete file-by-file, function-by-function wiring. Investigation conducted entirely with IDE tooling (Read only; no shell, no Grep/Glob available in this environment, so search was by direct full-file reads — same method as Phase 42).
+
+**Files read in full or in substantial part this phase:** `src/view.c` (lines 1-198, 198-514, 514-830, 820-1036, 1065-1200, 1200-1499, 1690-1890, 1890-2034), `src/group.c` (complete), `src/sheet.c` (complete), `src/tile.c` (complete), `src/mark.c` (complete), `src/workspace.c` (120-320), `src/cursor.c` (1-140, 140-300, 265-680), `src/configuration.c` (1750-2010), `include/hikari/view.h`, `include/hikari/configuration.h`, `include/hikari/server.h` (100-210), `include/hikari/node.h`, `include/hikari/layer_shell.h`, plus wlroots 0.20 reference (`wlr_compositor.c`, `wlr_xdg_surface.c`, `wlr_xdg_popup.c`, `wlr_xdg_toplevel.c`, `wlr_layer_shell_v1.c`).
+
+### Answer to the question: yes — but the flaw is a specific, nameable one, not "the memory management is bad"
+
+The defect is **redundant state with no single writer.** The single fact *"is this view currently visible"* is stored in **six** independent places that must be mutated together, by hand, on every transition:
+
+| # | Representation | Owner |
+|---|---|---|
+| 1 | `hikari_view_is_hidden()` flag (bit 0 of `view->flags`) | the view |
+| 2 | membership in `workspace->views` (via `view->workspace_views`) | the workspace |
+| 3 | membership in `hikari_server.visible_views` (via `view->visible_server_views`) | the server |
+| 4 | membership in `group->visible_views` (via `view->visible_group_views`) | the group |
+| 5 | whether `group->visible_server_groups` is linked into `hikari_server.visible_groups` | the server — **a derived aggregate** ("does this group have ≥1 visible view") |
+| 6 | `wlr_scene_node_set_enabled()` on `view->scene_node` | wlroots |
+
+Nothing computes any of these from any other. Correctness is a *global agreement property* across roughly fifteen functions, enforced nowhere.
+
+**And the entry and exit paths are asymmetric.** Exit is one function — `hide()` (`src/view.c:198`) updates #1, #2, #3 and (via `decrease_group_visibility`) #4 and #5. Entry has no equivalent: the work is split between `increase_group_visiblity()` (`:170` — updates #5, and `wl_list_init`s #4's link) and `place_visibly_above()` (`:69` — updates #2, #3, #4), which are separate calls that every caller must remember to issue in the correct order. `hikari_view_show()` (`:1039`) issues both; `hikari_view_map()`'s lock-mode branch (`:949`) issues both; `raise_view()` (`:90`) issues only the second. There is no function named "make this view visible" that owns the transition.
+
+**Worse, the same linkage is hand-written a third time.** `hikari_view_lower()` (`:1105-1138`) inlines remove+insert against **all seven** lists itself — an inverted copy of `move_to_top()` + `place_visibly_above()` that shares no code with them. Any future change to the linkage set must be made in three places that do not reference each other.
+
+**Representation #5 is the most dangerous, because it is a hand-maintained refcount implemented as an emptiness probe.** `increase_group_visiblity` inserts the group into `hikari_server.visible_groups` *if `group->visible_views` is empty before this view is added*; `decrease_group_visibility` removes it *if `group->visible_views` is empty after this view is removed*. These are correct only as an exactly-matched pair, and only if every visibility transition routes through both.
+
+### The ownership consequence: a group can be freed while still linked
+
+`detach_from_group()` (`src/view.c:212`) **frees the group** when `group->views` becomes empty:
+
+```c
+wl_list_remove(&view->group_views);
+wl_list_init(&view->group_views);
+if (wl_list_empty(&group->views)) {
+  hikari_group_fini(group);
+  hikari_free(group);
+}
+```
+
+It unlinks `group_views` (list #of-all-views) but **not** `visible_group_views` (#4). And `hikari_group_fini()` (`src/group.c:24`) unlinks `group->server_groups` but **not** `group->visible_server_groups` (#5). So freeing a group is memory-safe *only* if the unwritten invariant **"`group->views` empty ⟹ `group->visible_views` empty ⟹ `visible_server_groups` unlinked"** holds — an invariant established by entirely different functions (`hide`/`decrease_group_visibility`) and asserted nowhere. If it is ever violated, `hikari_server.visible_groups` retains a node inside freed heap, and the next iteration of that list — which happens on essentially every focus change and every indicator update — walks freed memory. **That is precisely the "delayed corruption surfaces somewhere unrelated" signature, and it matches the observed SIGABRT-with-no-core far better than a plain NULL dereference would.**
+
+### A path that violates that invariant already exists in the tree
+
+`hikari_view_unmap()` (`src/view.c:979-988`):
+
+```c
+if (hikari_view_is_forced(view)) {
+  if (hikari_view_is_hidden(view)) {
+    hide(view);                        // correct: full exit, updates #1-#5
+  } else {
+    hikari_view_damage_whole(view);
+    hikari_view_set_hidden(view);      // sets #1 ONLY — bypasses #2,#3,#4,#5
+  }
+  hikari_view_unset_forced(view);
+}
+if (!hikari_view_is_hidden(view)) { ... }   // now #1 says hidden, so this is skipped
+```
+
+The `else` branch sets the hidden *flag* without performing the *transition*. Execution then continues to `detach_from_group(view)` while the view is still linked into `workspace->views`, `hikari_server.visible_views`, and `group->visible_views` — so the group is freed with a live `visible_server_groups` link and a `visible_views` list containing a view that is itself freed moments later by `destroy_handler`. That is a simultaneous three-list use-after-free plus a freed-group UAF.
+
+**Reachability:** `forced` is set only in `hikari_view_map()`'s lock-mode branch, where the view is also hidden, and `hikari_view_show()` asserts `!forced` — so the intended invariant is "forced ⟹ hidden", which would make this `else` branch dead. It is not asserted anywhere, and `place_visibly_above()` encodes it only as a debug-build `assert`. **So this is either dead code or a guaranteed multi-list UAF, and the codebase contains nothing that decides which.** That ambiguity — in the exact function the user is crashing in — is itself the finding.
+
+### Two further asymmetries found, same root cause
+
+* `decrease_group_visibility()` removes `view->visible_group_views` but never re-`wl_list_init`s it, while every other unlink in `hide()` does `remove` + `init`. A second unlink without an intervening `wl_list_init` therefore dereferences the pointers libwayland's `wl_list_remove` left behind, rather than being the harmless no-op the file's own convention elsewhere guarantees.
+* `hikari_view_init()` (`:417-462`) `wl_list_init`s only `children` — 1 of 7 links. `workspace_views`/`visible_server_views` are initialised much later in `hikari_view_configure()` (`:2080-2081`); `sheet_views`, `output_views`, `group_views`, `visible_group_views` are never explicitly initialised at all. The containing structs come from `hikari_malloc` (non-zeroing), so those four hold indeterminate garbage between `init` and `map`. (First recorded in Phase 54; re-confirmed here.)
+
+### Ruled out this phase (recorded so they are not re-investigated)
+
+* **Popup/subsurface `fini` dispatch (Phase 42/45 fix):** re-traced against real wlroots signal order; sound. See Phase 53.
+* **`hikari_server.pointer_gestures` NULL on gesture replay:** created at `src/server.c:1370-1380` *with* an explicit NULL guard that exits. Not reachable.
+* **`gesture_binding_configs` iterated before init:** `hikari_configuration_init()` (`src/configuration.c:1876`) initialises it unconditionally, so a config with no `gestures {}` block is safe.
+* **Double `wl_list_remove` of `sheet_views`/`output_views` (unmap then fini):** benign — `unmap` re-`init`s them first.
+* **`activate()`/`resize()` touching a destroyed `xdg_toplevel` during teardown:** both guard on `xdg_surface->initialized`, and wlroots' `reset_xdg_surface()` clears that flag *before* emitting `events.destroy`, so both correctly no-op.
+
+### Verdict: a bounded refactor is warranted — and it is not the rejected DOD rewrite
+
+The Phase 44 decision against a data-oriented SoA/object-pool rewrite **stands** and is not revisited: that fights `wlr_scene`'s object-ownership model and was already reverted once. This is a different and much smaller change with a different target — **not** how objects are allocated, but **who is allowed to write the visibility state.**
+
+The refactor collapses six hand-synchronised representations into one authoritative transition pair, so that the invariant which currently must be maintained by fifteen cooperating functions is instead enforced by two. It is confined almost entirely to `src/view.c`, touches ~15 functions, adds no new allocation strategy, and every step is independently revertible. Full wiring in `PLANS.md` item -6.
+
+---
+
+## [2026-08-21 12:11] Phase 54: View-Teardown Ownership Graph — Fragility Analysis and Remediation Plan (PLAN ONLY, no code changes, awaiting approval)
+
+**Context:** Arising directly from Phase 53's verdict. The user asked for a plan addressing a specific structural problem, stated as: *"A view's teardown has to correctly sequence through group, tile, sheet, workspace, output, mark, decoration, and the children list — a wide, deeply cross-referenced ownership graph — entirely by hand, in the right order, every time, with zero automated verification that a future edit doesn't break one of those orderings."* This entry records the measured basis for that claim and the resulting plan. **Per AGENTS.md Zero Unapproved Action, nothing here is implemented — this is the Ask/Explain/Justify step.**
+
+### Measured scope of the problem (not estimated — counted from the tree)
+
+* `struct hikari_view` (`include/hikari/view.h:41-88`) carries **seven** `wl_list` membership links, each into a *different* owner's list: `output_views`, `workspace_views`, `sheet_views`, `group_views`, `visible_group_views`, `visible_server_views`, `children`. Combined reference count across `src/`: 65 link/unlink/iterate sites.
+* Plus **six** owning-pointer relationships that must be detached in a compatible order: `sheet`, `group`, `mark`, `output`, `tile` (+ `pending_operation.tile`), `decoration`, and `maximized_state`.
+* Teardown is entered from **five** distinct call sites across three view types — `src/xdg_view.c:255` (unmap) / `:326` (fini) / `:663` + `:676` (init-failure), `src/xwayland_view.c:234` / `:267` / `:491` — converging on two hand-sequenced functions, `hikari_view_unmap()` (`src/view.c:961`) and `hikari_view_fini()` (`src/view.c:465`).
+* There are **14** independent manual `malloc` → register-listeners → `free` object lifecycles across 11 headers. This is the standard wlroots-compositor idiom (sway/wayfire/labwc do the same) and is *not itself* the defect — the defect is that hikari's largest object graph has no mechanical check on it.
+
+### Concrete fragility found while analysing this (new, not previously recorded)
+
+* **`hikari_view_init()` initialises only one of the seven list links.** `src/view.c:417-462` calls `wl_list_init(&view->children)` and nothing else. `workspace_views` and `visible_server_views` are initialised much later, in `hikari_view_configure()` (`src/view.c:2080-2081`); `sheet_views`, `output_views`, `group_views`, `visible_group_views` are *never* explicitly initialised at all — they only become valid when `hikari_view_map()` `wl_list_insert()`s them. The containing `hikari_xdg_view`/`hikari_xwayland_view` structs come from `hikari_malloc`, which does **not** zero memory, so between `init` and `map` those four links hold indeterminate garbage.
+* **Why this is not crashing today (and why that is precisely the problem):** `hikari_view_fini()`'s `if (view->sheet != NULL)` guard happens to skip `wl_list_remove(&view->sheet_views)` on the init-failure paths, because `view->sheet` is still NULL there. The invariant that actually keeps this safe is *"`sheet != NULL` implies all six links were initialised and inserted"* — which holds only because `hikari_view_configure()` (which sets `sheet`) and `hikari_view_map()` (which inserts the links) are called back-to-back inside `map_handler`. **That is an unwritten, unchecked, two-function-adjacency invariant guarding a `wl_list_remove()` through garbage pointers.** It is safe by coincidence of guard placement, not by construction. Any future edit that sets `sheet` earlier, or destroys a configured-but-unmapped view, turns it into an immediate arbitrary write. This is exactly the class of latent defect the user is describing, found in the first hour of looking for it.
+* Recorded so it is not re-derived: the apparent double `wl_list_remove()` of `sheet_views`/`output_views` (once in `hikari_view_unmap()`, again in `hikari_view_fini()`) is **benign** — `unmap` re-`wl_list_init()`s them, and removing a self-referencing empty node is a no-op. Confusing, not a bug.
+
+### Why the existing safety mechanisms do not cover this
+
+* `assert()` is used heavily (`hikari_view_fini` opens with three), but every one asserts a *scalar flag* (`is_hidden`, `is_mapped`, `is_forced`) — **none** assert anything about the seven list links or the six owning pointers, which is where the actual ownership graph lives.
+* Asserts are additionally compiled out under `NDEBUG` in release builds (`Makefile:104`), so in a release build these degrade to nothing. (Note: the binary the user is currently crashing on is a `DEBUG=YES` build, so its asserts *are* live — see Phase 53.)
+* `test.mk` is a two-line stub that only echoes whether `ASAN=YES` was passed. There is **no test suite, no CI, no static-analysis config** in the tree. Every one of the ~50 crash-fix phases in this log was verified by reading, never by execution.
+
+### Plan (four workstreams, ordered by risk-reduction per unit of effort)
+
+Full step detail in `PLANS.md` item -5. Summary and justification:
+
+1. **W1 — Write the ownership graph down (docs only, zero risk).** A `BLUEPRINT.md` section defining, for each of the seven links and six pointers: who owns it, when it is valid, and which lifecycle phase establishes/tears it down. Justification: every subsequent workstream needs a definition of "correct" to check against, and no such definition currently exists anywhere. Also the only workstream with zero chance of introducing a regression.
+2. **W2 — Close the `wl_list_init` gap (small, mechanical, high value).** Initialise all seven links in `hikari_view_init()`. Justification: makes `wl_list_remove()` unconditionally safe on every link at every point in the lifecycle, converting the unwritten adjacency invariant above into a structural guarantee. Removes a live latent arbitrary-write. ~7 lines, independently revertible, no behaviour change on any currently-working path.
+3. **W3 — An explicit lifecycle state + one invariant checker (the actual "automated verification").** Add `enum hikari_view_lifecycle { INITIALISED, CONFIGURED, MAPPED, UNMAPPED, FINALISED }` as a field, and a single `hikari_view_check_invariants(view, expected_phase)` that asserts the *full* expected shape of the ownership graph for that phase (which links must be linked/empty, which pointers must be NULL/non-NULL), called at each teardown boundary. Justification: this is what makes a future incorrect edit *fail loudly at the point of the mistake* instead of silently corrupting the heap and surfacing as an unrelated abort later — the exact failure mode of Phase 53. Deliberately additive: existing accessors (`hikari_view_is_mapped`, etc.) keep working unchanged, so this cannot regress current behaviour. **Open question for the user (see below).**
+4. **W4 — Make it executable: a headless teardown smoke test + routine sanitiser run.** Confirmed feasible this phase: hikari already builds with `HAVE_VIRTUAL_INPUT=1` (`Makefile:141` — virtual pointer/keyboard protocols) and already runs nested (`hikari.log` shows both headless and X11 backends initialising), so a test client can bind `zwlr_virtual_pointer_v1` and synthesise the precise open → popup → click → close sequences that are crashing, against a nested instance, unattended. Run under `MALLOC_CONF=junk:true` (and ASan where the DMA-BUF interception issue documented at `Makefile:92-97` allows). Wire to a `make` target since there is no CI. Justification: W3 detects a broken ordering only if the code actually *runs*; W4 is what makes it run on every change instead of once when a human remembers.
+
+### Sequencing note
+
+W1→W2 are safe to do immediately and independently. W3 depends on W1's definitions. W4 is independently valuable and can proceed in parallel with W3 — and notably, **W4 is also the fastest route to resolving the still-open Phase 53 crash**, since a scripted reproduction under `junk:true` is exactly the empirical step Phase 53 concluded was needed.
+
+---
+
+## [2026-08-21 11:53] Phase 53: "Close Window / Popup Button Crash" — Read-Only Investigation, Live-System Forensics, No Fix Yet (root cause NOT isolated to a single line; see "Verdict" below)
+
+**Context:** User reports the compositor crashes unconditionally ("as soon as") on two actions: closing a window, and clicking a button inside a popup. Asked for deep investigation into memory handling, UAF, thrashing, and segfaults, explicitly per AGENTS.md and the project's FreeBSD-only design (no Linuxisms), and explicitly *not* to get stuck in a build-and-guess loop. This session had Bash/shell access (permitted — AGENTS.md's COMMAND LAWS carve-out for "inside a CLI or directly permitted by the user" applies), which is a deviation from the IDE-only-tooling convention several recent phases operated under, and it is what ultimately produced the decisive evidence below; pure static reading alone (the method every prior phase from 38 through 45 used) did not.
+
+**Method:** Two tracks, run together: (1) a line-by-line re-audit of the exact code Phase 42/44/45 already touched (the `hikari_view_child.fini` dispatch fix, `hikari_view_unmap`, layer-shell popup teardown, XWayland unmanaged-view lifecycle), cross-referenced against the actual wlroots 0.20 source (vendored read-only copy in `wlroots-0.20.0/`, confirmed to match the installed `wlroots-0.20` pkg-config version) to determine the *real* signal-emission order rather than assuming it; and (2) live forensics against the actual FreeBSD target — `ps`, `dmesg`, `/var/log/messages`, binary comparison, and `file`/`strings` on the installed executable. Track 2 is new; no prior phase had shell access to a live system and all were explicitly investigation-only static reads.
+
+### Track 1 finding: the Phase 45 popup/subsurface `fini` dispatch fix is present, installed, and — as far as static tracing can show — structurally correct
+
+* Confirmed the fix (`void (*fini)(struct hikari_view_child *)` on `struct hikari_view_child`, `include/hikari/view.h:106`) is committed at current `HEAD` (`da582a7`), originally landed in `05c95ff`.
+* Traced the real wlroots 0.20 signal order for both teardown paths a user actually triggers:
+  * **Client-initiated unmap** (closing a window normally — a `wl_surface.commit` with a NULL buffer): `wlroots-0.20.0/types/wlr_compositor.c:517-519` (`surface_commit_state`) calls `wlr_surface_unmap(surface)` — which fires `surface->events.unmap`, hikari's `unmap_handler` → `hikari_view_unmap()` → the `child->fini()` loop over `view->children` — **before** `surface->role->commit()` runs at line 562-564, which is what eventually calls `reset_xdg_surface()` (`wlr_xdg_surface.c:319-321`) and destroys any open popups via `wlr_xdg_popup_destroy()`. So hikari's own teardown always runs first and cleanly unlinks+frees each popup/subsurface (removing its own listeners as it goes), leaving wlroots' later, redundant popup-destroy signal firing into an already-empty listener list — safe by construction, not by luck.
+  * **Full destroy** (window closes and the whole `xdg_surface` goes away): `wlr_xdg_surface.c:528-532` (`destroy_xdg_surface`) destroys child popups (`reset_xdg_surface`) **before** emitting `surface->events.destroy` — so hikari's `destroy_handler` sees an already-empty `view->children` for any popups (though subsurfaces, which aren't touched by `reset_xdg_surface`, may still be present and are correctly handled by the same generic loop).
+  * Both orderings are safe under the current fix regardless of which one fires first, because both hikari's own path and wlroots' own path fully unlink+remove-listeners+free before doing anything else — whichever runs first "wins" and the second becomes a no-op. This was not previously verified; Phase 42/45 asserted the fix was correct but never traced the actual signal ordering against wlroots source, and no phase had a build to test it against. It holds up.
+* Applied the same trace to `src/layer_shell.c`'s independent `hikari_layer_popup` (used by layer-shell clients — bars, launchers, on-screen menus): `wlr_layer_shell_v1.c:48-52` (`layer_surface_destroy`) unmaps, resets (destroys popups), *then* emits its own destroy — same safe ordering, and `hikari_layer_popup` was never linked into a shared list with another struct kind in the first place (Phase 42 already established this), so the original type-confusion bug class cannot occur there.
+* Re-verified `hikari_view_unmap()`'s tail (`src/view.c:1005-1030`): `view->sheet_views`/`view->output_views` get `wl_list_remove()` + `wl_list_init()`'d here, and `hikari_view_fini()` (called later, from `destroy_handler`) unconditionally calls `wl_list_remove()` on the same two fields again since `view->sheet` is never nulled between the two calls. This *looks* like a double-remove bug but is not one: `wl_list_remove()` on a node already reset to a self-referencing empty list via `wl_list_init()` is a no-op by construction (`elm->prev == elm->next == elm`), so this is redundant/confusing but memory-safe. Logged so it isn't re-flagged as a false lead in a future phase.
+* Re-verified focus-clearing ordering: `hikari_view_hide()` calls `clear_focus(view)` (reassigns `hikari_server.workspace->focus_view`, ends the seat's keyboard grab, clears seat pointer/keyboard focus) *before* `hide()` unlinks the view from `workspace_views`/`visible_server_views`, and `hikari_view_unmap()` calls `detach_from_group()`/tile-detach *after* hiding — so nothing in the hide→cursor-refocus→group/tile-detach sequence touches a list the view has already been removed from, or a group/tile pointer that's already been cleared. Sound.
+* Checked `src/xwayland_unmanaged_view.c` (override-redirect X11 popups/menus — the other thing "a popup" could mean for an XWayland client) end to end: associate/dissociate pre-init map/unmap listener links with `wl_list_init()` so `destroy_handler`'s unconditional `wl_list_remove()` calls are always safe even if the surface was never associated. No gap found.
+
+**Conclusion of Track 1:** static tracing, done properly this time against the real wlroots signal order instead of assumption, does not find a remaining bug in the specific mechanism Phase 42/44/45 targeted. That fix appears genuinely correct. The crash the user is hitting right now is therefore either a different bug not yet identified by static reading, or something outside hikari's own source entirely.
+
+### Track 2 finding (new, decisive): this is SIGABRT, not SIGSEGV — four times today, on the current binary
+
+* `ps aux` at investigation time: **no `hikari` process running** — it had already crashed. Two orphaned `hikari-topbar` helper processes (PIDs 57626, 57116, started 11:37/11:38) were still alive, consistent with an abrupt parent termination rather than a clean shutdown (clean shutdown's `hikari_server_terminate()` path sends children a signal; a crash doesn't run that code at all).
+* `/var/log/messages` / `dmesg`:
+  ```
+  Aug 21 10:45:33 kernel: pid 4049  (hikari), jid 0, uid 1001: exited on signal 6 (no core dump - other error)
+  Aug 21 11:36:54 kernel: pid 54744 (hikari), jid 0, uid 1001: exited on signal 6 (no core dump - other error)
+  Aug 21 11:38:23 kernel: pid 57115 (hikari), jid 0, uid 1001: exited on signal 6 (no core dump - other error)
+  Aug 21 11:39:14 kernel: pid 57617 (hikari), jid 0, uid 1001: exited on signal 6 (no core dump - other error)
+  ```
+  **Signal 6 is SIGABRT — `abort()` — not SIGSEGV.** The 11:36/11:38/11:39 crashes (roughly 90 seconds apart, consistent with launch→click→crash→relaunch→click→crash) are all *after* the 11:35 rebuild that installed the current `HEAD` (`da582a7`), confirmed identical byte-for-byte to `/usr/local/bin/hikari` (`cmp` match). **The user is crashing on the exact binary that contains every fix through Phase 52, and it is aborting, not segfaulting.**
+* `file /usr/local/bin/hikari` (via the repo-root copy, which `cmp` confirms is the same file): **`with debug_info, not stripped`** — this binary was built with `DEBUG=YES` (`Makefile:98`, adds `-g -O0`), **not** the plain `-DNDEBUG` release path. This matters a lot: it means every `assert()` in the codebase — and `view.c`/`node.h`/`xdg_view.c` are dense with them, guarding exactly the hidden/mapped/forced-state and role invariants exercised by window-close and popup interaction — is live and will call `abort()` (SIGABRT) on any violation, rather than being compiled out. My working assumption earlier in this same investigation (that a plain-release NDEBUG build was running, so any invariant break would silently degrade into a SIGSEGV instead) was wrong for this specific installed binary and is now corrected.
+* No captured stderr/log from any of the four crashes exists: `start-hikari.sh` execs `hikari` directly with no redirection (`exec "$HIKARI_BIN" "$@"`), so whatever `assert()` printed (FreeBSD libc's `__assert()` message: `Assertion failed: (expr), function F, file src/X.c, line N.`) or whatever `hikari_malloc`/`hikari_calloc` logged via `wlr_log(WLR_ERROR, "hikari_malloc of %zu bytes failed", size)` before its own explicit `abort()` (`src/memory.c:26-29`/`:41-44`) went to a terminal that is no longer available to this session.
+* No core dump exists to inspect post-hoc either: `sysctl kern.corefile` → `/var/coredumps/%N.%P.%U.core`, but **`/var/coredumps/` does not exist on this system** — FreeBSD does not auto-create it, so all four dumps silently failed ("no core dump - other error" is the kernel saying it tried and the target directory was missing). This is a pure environment gap, trivially fixable, and has apparently been silently losing every crash's forensic evidence all session.
+
+### Verdict
+
+The crash is real, reproducible, current (today, on the fully-patched binary), and is an `abort()`, not memory corruption manifesting as a raw fault — though an abort can *also* be how memory corruption first becomes visible (FreeBSD's jemalloc has its own internal consistency checks on `malloc`/`free` and will itself `abort()` if it detects a corrupted heap, which would explain a crash surfacing during a *later, unrelated* allocation rather than at the actual bug site — precisely the "delayed UAF" pattern Phase 42 documented for the popup bug it fixed). Three candidate abort sources remain live and indistinguishable from each other *without the actual message*:
+1. A hikari `assert()` firing on a state invariant somewhere in the close/popup-click path that Track 1's static trace didn't cover or got right in isolation but wrong in combination with something else.
+2. `hikari_malloc`/`hikari_calloc`'s deliberate fail-fast `abort()` on OOM (Phase 26 policy) — possible if something in this path allocates in a loop or with a corrupted size.
+3. jemalloc's own heap-corruption abort, one step removed from wherever the actual corrupting write happened — which would mean there is still an undiscovered UAF/OOB write in the codebase, just not the one Track 1 re-audited.
+
+**This is not resolvable by further static reading alone — every static hypothesis from Phase 42 onward has now been either fixed or traced and found sound, and the crash persists.** The next step has to be empirical. See `PLANS.md`/`TODOS.md` for the resulting action list — reproducing once with output captured turns this from a three-way guess into a one-line answer.
+
+---
+
 ## [2026-08-21 10:07] Phase 52: Post-Install Config Load Failure — Investigation, Root Cause, and Fix (updated in place as the investigation progressed; see "RESOLVED" below for the applied code change)
 
 **Context:** After Phase 50's changes, the user ran `make`/`sudo make install` successfully (binary built and installed clean), but the compositor fails to start against their own deployed config file ("a deployed config I had modified slightly for my system"). This entry began as investigation-only — read-only analysis via the Read tool, per the user's explicit correction to stop using Bash/git/shell exploration and use IDE-native tooling only (AGENTS.md COMMAND LAWS) — and was later updated in place once a fix was approved; see "RESOLVED" below for the applied change to `src/binding_config.c`.

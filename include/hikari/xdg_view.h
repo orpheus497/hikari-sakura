@@ -29,6 +29,13 @@ struct hikari_xdg_view {
   struct wl_listener new_popup;
   struct wl_listener set_title;
   struct wl_listener request_fullscreen;
+  /* [COMMENT] Listener on the xdg_toplevel's own destroy signal. wlroots
+  destroys the toplevel role object BEFORE emitting the xdg_surface destroy
+  signal, and destroy_xdg_toplevel() asserts that every toplevel-scoped signal
+  has no listeners left. Anything registered on xdg_toplevel->events.* must
+  therefore be released here, not in the xdg_surface destroy handler, which runs
+  too late. See DECISIONS_LOG Phase 57. */
+  struct wl_listener toplevel_destroy;
 };
 
 void
