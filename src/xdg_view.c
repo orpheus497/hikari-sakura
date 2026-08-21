@@ -412,6 +412,9 @@ popup_child_fini(struct hikari_view_child *view_child)
   xdg_popup_destroy(popup);
 }
 
+static void
+popup_unconstrain(struct hikari_xdg_popup *popup);
+
 // [COMMENT] Function purpose: Handle wlroots 0.20 popup initial_commit lifecycle.
 // When an xdg_popup performs its first commit, the compositor must reply
 // with a configure so the popup can map. See tinywl xdg_popup_commit.
@@ -421,10 +424,25 @@ popup_commit_handler(struct wl_listener *listener, void *data)
   struct hikari_xdg_popup *popup =
       wl_container_of(listener, popup, commit);
 
-  // [COMMENT] Action purpose: Only handle the initial commit; subsequent commits
-// are managed by the scene graph automatically.
+  /* [COMMENT] Action purpose: Only handle the initial commit; subsequent commits
+  are managed by the scene graph automatically.
+
+  Unconstraining MUST happen here and not at popup-creation time.
+  wlr_xdg_popup_unconstrain_from_box() ends with
+  wlr_xdg_surface_schedule_configure() (wlr_xdg_popup.c:534), which asserts
+  surface->initialized (wlr_xdg_surface.c:168). wlroots emits new_popup from
+  create_xdg_popup() (wlr_xdg_popup.c:431) in response to the client's
+  get_popup request -- before the popup surface has ever been committed -- so
+  initialized is always false at that point. Calling it there aborted the
+  compositor on EVERY xdg_popup, which is every GTK menu, combo box and
+  tooltip. Confirmed from a core dump; see DECISIONS_LOG Phase 61. This is the
+  same wlroots 0.20 constraint that already forced wlr_xdg_surface_ping to be
+  removed from hikari_xdg_view_init below.
+
+  Unconstraining here also schedules the configure the popup needs, so no
+  separate schedule_configure call is required. */
   if (popup->popup->base->initial_commit) {
-    wlr_xdg_surface_schedule_configure(popup->popup->base);
+    popup_unconstrain(popup);
   }
 }
 
@@ -555,7 +573,10 @@ xdg_popup_create(struct wlr_xdg_popup *wlr_popup, struct hikari_view *parent)
       wlr_popup->base->surface,
       popup_child_fini);
 
-  popup_unconstrain(popup);
+  /* [COMMENT] Action purpose: Unconstraining deliberately does NOT happen here.
+  It is deferred to popup_commit_handler's initial_commit branch, because the
+  popup surface is not yet initialized at new_popup time and wlroots asserts on
+  that. See the full explanation there. */
 }
 
 // [COMMENT] Function purpose: Apply the toplevel's currently requested

@@ -1,3 +1,48 @@
+## [2026-08-21 15:05] Phase 62: SECOND ROOT CAUSE — popup unconstrained before initialisation, proven by core dump
+
+**Status:** SIGABRT ROOT-CAUSED AND FIXED. Second core dump captured (`hikari.52741.1001.core`, 15:01:11, signal 6). This is the *other* crash signature, and it is a completely separate defect from Phase 61's NULL dereference.
+
+### Evidence
+
+User built and installed the Phase 61 fix, then confirmed: VT switching survived and Firefox was fine, but **pavucontrol crashed the compositor immediately**. `gdb bt`:
+
+```
+#3  __assert
+#4  wlr_xdg_surface_schedule_configure ()   <- libwlroots
+#5  wlr_xdg_popup_unconstrain_from_box ()   <- libwlroots
+#6  xdg_popup_create ()                     <- hikari, src/xdg_view.c
+#7  wl_signal_emit_mutable ()               <- new_popup
+```
+
+### Root cause
+
+`xdg_popup_create()` called `popup_unconstrain()` at popup-creation time. The chain:
+
+* `wlr_xdg_popup_unconstrain_from_box()` ends with `wlr_xdg_surface_schedule_configure(popup->base)` — `wlr_xdg_popup.c:534`.
+* `wlr_xdg_surface_schedule_configure()` opens with `assert(surface->initialized)` — `wlr_xdg_surface.c:168`.
+* wlroots emits `new_popup` from `create_xdg_popup()` (`wlr_xdg_popup.c:429/431`) in direct response to the client's `xdg_surface.get_popup` request — **before the popup surface has ever been committed**, so `initialized` is always false at that moment.
+
+Therefore hikari aborted on **every xdg_popup ever created**: every GTK menu, combo box, dropdown and tooltip. Deterministic, not a race.
+
+**Why this looked like "apps with lots of children":** the correlation was never child processes. It was **native-Wayland clients that open popups**. pavucontrol (GTK3, opens a popup on launch) died instantly. Firefox under XWayland never creates an xdg_popup, so it survived — which is exactly what the user observed after the Phase 61 fix landed.
+
+### The same mistake existed twice, and had already been fixed once elsewhere
+
+`hikari_xdg_view_init` carries a comment explaining that `wlr_xdg_surface_ping` was removed from it because *"Calling ping triggers schedule_configure, which asserts initialized... See wlr_xdg_surface.c line 168."* The identical constraint was understood for toplevels and never applied to popups. `layer_shell.c` had the same defect at `init_popup()`.
+
+**Fix (both files):** move the `popup_unconstrain()` call into the existing `initial_commit` branch of the popup's commit handler. `wlr_xdg_popup_unconstrain_from_box()` schedules the configure itself, so it replaces the bare `wlr_xdg_surface_schedule_configure()` that was there rather than adding to it.
+
+* `src/xdg_view.c` — `popup_commit_handler()` now unconstrains; forward declaration of `popup_unconstrain` added since it is defined later in the file.
+* `src/layer_shell.c` — `commit_popup_handler()` now unconstrains; `init_popup()`'s stale "and unconstrain it to the owning output" comment corrected.
+
+Swept the rest of the tree for the same class: every remaining `wlr_xdg_toplevel_set_size` / `set_activated` / `set_fullscreen` / `wlr_layer_surface_v1_configure` call site is already guarded on `initialized`.
+
+### Note
+
+14 `firefox.*.core` files (~8 GB) were also written to `/var/coredumps` at 15:01. Those are Firefox's own child processes dying, consistent with the ZFS `posix_fallocate()` limitation, not a hikari fault. Worth pruning.
+
+---
+
 ## [2026-08-21 14:56] Phase 61: ROOT CAUSE — NULL dereference in `session_active_handler`, proven by core dump
 
 **Status:** CRASH ROOT-CAUSED AND FIXED. First core dump ever captured in this project. Steps 1-2 of the approved four-step plan implemented; Steps 3-4 outstanding.

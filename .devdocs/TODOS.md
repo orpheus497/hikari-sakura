@@ -1,8 +1,22 @@
 # Granular Task List
 
-*Last Updated:* 2026-08-21 14:56
+*Last Updated:* 2026-08-21 15:05
 
 ## Active List
+
+### Phase 62: SECOND ROOT CAUSE — popup unconstrained before initialisation (see DECISIONS_LOG Phase 62)
+
+- [x] **Second core dump captured** (`hikari.52741.1001.core`, 15:01:11, **signal 6 / SIGABRT**) after the user built and installed the Phase 61 fix. VT switching now survives and Firefox is fine; **pavucontrol crashed immediately**.
+- [x] **ROOT CAUSE:** `xdg_popup_create()` called `popup_unconstrain()` at popup-creation time. `wlr_xdg_popup_unconstrain_from_box()` ends with `wlr_xdg_surface_schedule_configure()` (`wlr_xdg_popup.c:534`), which asserts `surface->initialized` (`wlr_xdg_surface.c:168`). wlroots emits `new_popup` from the client's `get_popup` request (`wlr_xdg_popup.c:429/431`), **before the popup surface is ever committed** — so `initialized` is always false there. Aborted on **every xdg_popup**: every GTK menu, combo box, dropdown, tooltip.
+- [x] **The "lots of children/background processes" correlation was wrong.** The real predictor is *native-Wayland clients that open popups*. Firefox-on-XWayland never creates an xdg_popup, which is why it survived; pavucontrol opens one on launch, which is why it died instantly.
+- [x] **FIXED in `src/xdg_view.c`:** `popup_unconstrain()` moved into `popup_commit_handler()`'s `initial_commit` branch, replacing the bare `schedule_configure` (unconstrain schedules it itself). Forward declaration added.
+- [x] **FIXED in `src/layer_shell.c`:** identical defect at `init_popup()`; moved into `commit_popup_handler()`'s `initial_commit` branch. Stale `init_popup` comment corrected.
+- [x] **The same constraint was already understood and fixed for toplevels** — `hikari_xdg_view_init` carries a comment citing `wlr_xdg_surface.c` line 168 as the reason `wlr_xdg_surface_ping` was removed. It was never applied to popups, in either file.
+- [x] Swept the tree: every other `wlr_xdg_toplevel_set_size` / `set_activated` / `set_fullscreen` / `wlr_layer_surface_v1_configure` call site is already `initialized`-guarded.
+- [x] Both files pass `cc -fsyntax-only -Wall`.
+- [ ] **P0 — USER-RUN, NEXT ACTION:** `sudo make clean && sudo make install`, then open pavucontrol, then any GTK menu / combo box / right-click context menu.
+- [ ] **Housekeeping:** 14 `firefox.*.core` files (~8 GB) in `/var/coredumps` from 15:01 — Firefox's own children dying (ZFS `posix_fallocate`), not a hikari fault. Safe to delete.
+
 
 ### Phase 61: CRASH ROOT-CAUSED via core dump — NULL deref in `session_active_handler` (see DECISIONS_LOG Phase 61)
 

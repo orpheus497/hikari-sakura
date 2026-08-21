@@ -325,9 +325,10 @@ popup_unconstrain(struct hikari_layer_popup *layer_popup)
 }
 
 // Function purpose: Wire up the listeners shared by every layer-shell popup
-// (parented directly to a layer surface or nested under another popup) and
-// unconstrain it to the owning output. Shared by init_layer_popup and
-// init_popup_popup so both parent kinds set up identically.
+// (parented directly to a layer surface or nested under another popup).
+// Shared by init_layer_popup and init_popup_popup so both parent kinds set up
+// identically. Unconstraining is driven by commit_popup_handler on the popup's
+// initial commit, not from here.
 static void
 init_popup(
     struct hikari_layer_popup *layer_popup, struct wlr_xdg_popup *wlr_popup)
@@ -349,7 +350,10 @@ init_popup(
   layer_popup->new_popup.notify = new_popup_popup_handler;
   wl_signal_add(&wlr_popup->base->events.new_popup, &layer_popup->new_popup);
 
-  popup_unconstrain(layer_popup);
+  /* [COMMENT] Action purpose: Unconstraining deliberately does NOT happen here.
+  It is deferred to commit_popup_handler's initial_commit branch, because the
+  popup surface is not yet initialized at new_popup time and wlroots asserts on
+  that. See the full explanation there. */
 }
 
 static struct hikari_layer *
@@ -737,11 +741,20 @@ commit_popup_handler(struct wl_listener *listener, void *data)
   struct hikari_layer_popup *layer_popup =
       wl_container_of(listener, layer_popup, commit);
 
-  // [COMMENT] Action purpose: Handle wlroots 0.20 initial_commit lifecycle for
-  // layer shell popups (which are XDG popups). The compositor must respond with
-  // a configure on the first commit so the popup can map.
+  /* [COMMENT] Action purpose: Handle wlroots 0.20 initial_commit lifecycle for
+  layer shell popups (which are XDG popups). The compositor must respond with a
+  configure on the first commit so the popup can map.
+
+  Unconstraining happens here rather than in init_popup for the same reason as
+  the xdg_view.c popup path: wlr_xdg_popup_unconstrain_from_box() ends with
+  wlr_xdg_surface_schedule_configure() (wlr_xdg_popup.c:534), which asserts
+  surface->initialized (wlr_xdg_surface.c:168), and wlroots emits new_popup
+  before the popup surface has ever been committed. Doing it at creation time
+  aborted the compositor on every layer-shell popup. Unconstraining also
+  schedules the configure, so no separate call is needed. See DECISIONS_LOG
+  Phase 61. */
   if (layer_popup->popup->base->initial_commit) {
-    wlr_xdg_surface_schedule_configure(layer_popup->popup->base);
+    popup_unconstrain(layer_popup);
     return;
   }
 
