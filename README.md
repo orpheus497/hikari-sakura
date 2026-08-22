@@ -290,6 +290,26 @@ and can be added by setting `WITH_SCREENCOPY`.
 make WITH_SCREENCOPY=YES
 ```
 
+#### Building with ext-image-copy-capture support (opt-in, not recommended yet)
+
+`ext-image-copy-capture-v1` is the successor to `wlr-screencopy`, which wlroots
+documents as deprecated and intends to remove. Hikari Sakura can advertise it,
+but does **not** by default — and it is deliberately excluded from `WITH_ALL`:
+
+```sh
+make WITH_EXT_IMAGE_CAPTURE=YES
+```
+
+The reason is that `xdg-desktop-portal-wlr` switches to this protocol as soon as
+a compositor advertises it (it logs `wayland: using ext_image_copy_capture`), and
+on hybrid-GPU hardware that path has been observed to deliver **black frames**
+while `wlr-screencopy` captures correctly — so advertising it makes screen
+sharing worse on machines where the older protocol works fine. `grim`, which uses
+screencopy, is unaffected either way.
+
+Enable it to re-test once your graphics stack moves on; the implementation lives
+entirely inside wlroots, so nothing in this compositor needs to change.
+
 #### Building with gammacontrol support
 
 Gamma control is needed for tools like `redshift`. This is disabled by default

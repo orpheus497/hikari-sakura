@@ -58,9 +58,11 @@
 #endif
 
 #ifdef HAVE_SCREENCOPY
+#include <wlr/types/wlr_screencopy_v1.h>
+#ifdef HAVE_EXT_IMAGE_CAPTURE
 #include <wlr/types/wlr_ext_image_capture_source_v1.h>
 #include <wlr/types/wlr_ext_image_copy_capture_v1.h>
-#include <wlr/types/wlr_screencopy_v1.h>
+#endif
 #endif
 
 #ifdef HAVE_XWAYLAND
@@ -1552,21 +1554,27 @@ server_init(struct hikari_server *server, char *config_path)
 #endif
 
 #ifdef HAVE_SCREENCOPY
-  /* [COMMENT] Action purpose: Advertise both generations of screen capture.
-
-  wlr-screencopy-v1 is what currently-installed tools bind -- grim, and
-  xdg-desktop-portal-wlr -- but the installed wlroots header states plainly that
-  it "is deprecated and superseded by ext-image-copy-capture-v1" and that "the
-  implementation will be dropped in a future wlroots version". Offering only the
-  old one leaves this compositor losing screen capture on a wlroots update;
-  offering only the new one breaks every tool available today. Both are keyed
-  off the same outputs, so they coexist.
-
-  ext-image-copy-capture needs a capture SOURCE to copy from, which is what the
-  output-source manager provides -- the copy manager alone would advertise a
-  protocol no client could actually name a target for. */
+  /* [COMMENT] Action purpose: wlr-screencopy-v1 is what every screen-capture
+  tool on this platform actually binds today -- grim, and xdg-desktop-portal-wlr
+  in the absence of anything newer. wlroots' own header calls it deprecated and
+  says the implementation "will be dropped in a future wlroots version", so this
+  will need replacing eventually; see the ext-image-copy block below for why the
+  replacement is not enabled yet. */
   wlr_screencopy_manager_v1_create(server->display);
 
+#ifdef HAVE_EXT_IMAGE_CAPTURE
+  /* [COMMENT] Action purpose: ext-image-copy-capture-v1, the successor to
+  wlr-screencopy. Compiled out by default -- see the Makefile block that defines
+  this macro for the full reasoning, and DECISIONS_LOG Phase 80.
+
+  In short: xdg-desktop-portal-wlr switches to this protocol the moment it is
+  advertised, and on this hardware that path yields black frames while
+  wlr-screencopy captures correctly. Advertising it makes screen sharing worse
+  rather than better, because the client silently moves to the broken path.
+
+  The copy manager needs a capture SOURCE to copy from, so both globals are
+  required -- the copy manager alone would advertise a protocol for which no
+  client could name a target. */
   if (wlr_ext_output_image_capture_source_manager_v1_create(
           server->display, 1) == NULL) {
     wlr_log(WLR_ERROR,
@@ -1580,6 +1588,7 @@ server_init(struct hikari_server *server, char *config_path)
         "could not create the ext-image-copy-capture manager; modern screen "
         "capture will be unavailable");
   }
+#endif
 #endif
 
 #ifdef HAVE_XWAYLAND

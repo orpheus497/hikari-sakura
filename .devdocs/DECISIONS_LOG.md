@@ -1,3 +1,101 @@
+## [2026-08-22 14:46] Phase 81: portal-wlr adopted as the supported screen-sharing path; OBS ScreenCast left open
+
+**Status:** DECISION RECORDED. No code changes. Session-end documentation pass.
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
+
+### User decision
+
+**xdg-desktop-portal-wlr is the supported screen-sharing backend for this project.** Alternative capture routes -- an OBS-specific plugin such as wlrobs, or a bespoke capture path -- are explicitly not to be pursued. Recorded so that a future session does not re-open the question or spend effort on a second mechanism.
+
+This is consistent with what is already implemented: Phase 78 made `XDG_CURRENT_DESKTOP` match portal-wlr's `UseIn`, Phase 79 fixed the D-Bus activation environment it depends on, and Phase 80 put it back on the `wlr-screencopy` path it can actually use.
+
+### State of screen sharing at session end
+
+The four-part chain, with evidence for each:
+
+| # | Requirement | State | Evidence |
+|---|---|---|---|
+| 1 | Compositor offers a capture protocol the client can use | **working** | `grim` captured 3840x1200 with 1520/1600 samples non-black, against the live session |
+| 2 | `XDG_CURRENT_DESKTOP` matches a portal backend's `UseIn` | **working** | `Hikari Sakura:wlroots` observed in all four session processes including the running portal |
+| 3 | `WAYLAND_DISPLAY` reaches the D-Bus activation environment | **fixed** | portal-wlr now activates and stays running, having previously never appeared at all |
+| 4 | PipeWire and WirePlumber running | **done by user** | both started from the session |
+
+Everything the compositor is responsible for is in place and independently verified. The portal negotiates, the picker appears, an output can be selected -- and OBS still renders black.
+
+### What remains, and why it is left open
+
+The residual failure is **downstream of the compositor**: portal-wlr feeds captured frames into PipeWire, and OBS consumes that stream. `grim` proves frame production works; the compositor no longer advertises the protocol that was breaking the negotiation. The remaining candidates are portal-wlr's PipeWire export and OBS's `linux-pipewire` consumption, neither of which is this project's code.
+
+**Not asserted as an OBS bug.** The honest position is that the compositor side is verified working and the failure is beyond it; which of portal-wlr or OBS is at fault has not been established, and establishing it would need portal-wlr TRACE output captured *during* an active capture session. The earlier attempt at that could not acquire the D-Bus name because the activated instance already held it (`dbus: failed to acquire service name: File exists`), so the session-time logs were never obtained. Anyone resuming this should start there.
+
+**`grim` is the control.** It isolates the two halves in one command: if `grim` works and OBS does not, the compositor is not implicated.
+
+### Hypothesis worth carrying forward
+
+Hybrid-GPU dmabuf remains the most plausible explanation and connects to **FB-3** (BLUEPRINT section 13). PipeWire negotiates dmabuf with OBS; on Intel+NVIDIA a buffer allocated on one GPU and imported on the other yields exactly this symptom -- a stream that connects and delivers frames that are uniformly black. `force_mod_linear=1` addressed only portal-wlr's own allocation and did not help, but it does not govern the PipeWire-to-OBS handoff. Resolving FB-3 (via the W0 matrix, still unrun) may resolve this as a side effect.
+
+---
+
+## [2026-08-22 14:40] Phase 80: ext-image-copy-capture made opt-in -- my own Phase 78 change was causing the black capture
+
+**Status:** IMPLEMENTED, unbuilt. **Root cause proven from portal-wlr's own TRACE log. The defect was introduced by Phase 78.**
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
+
+### Evidence
+
+Three independent facts, none of them inferred:
+
+1. **`grim` captures correctly.** Run against the live session: 3840x1200, 1520/1600 sampled pixels non-black, mean 55.7. `grim` uses `wlr-screencopy`, so the compositor is producing real frames and the screencopy path works.
+2. **portal-wlr's own TRACE log says `wayland: using ext_image_copy_capture`.** It registered to `ext_output_image_capture_source_manager_v1` and `ext_image_copy_capture_manager_v1` and chose that path over the `zwlr_screencopy_manager_v1` it also saw.
+3. **Hikari only advertises those two globals because Phase 78 added them.**
+
+So Phase 78 moved xdg-desktop-portal-wlr off a path that demonstrably works onto one that renders black. `grim` was unaffected because it binds screencopy directly and never sees the choice.
+
+To be exact about blame: screen sharing did not work *before* Phase 78 either, because no portal backend matched `XDG_CURRENT_DESKTOP` (fixed in the same phase). So this is not a regression from a working state -- but it is a self-inflicted obstacle, and the failure mode was foreseeable: **advertising a protocol changes client behaviour, and a newer protocol is not automatically a better one on a given machine.** That is the generalisable lesson, and it is a close cousin of the Phase 75 one about shipping a change without evidence.
+
+### What was ruled out, and a correction
+
+`force_mod_linear=1` was applied (`config: force_mod_linear: 1` in the DEBUG dump) and **did not help**, which weakens but does not eliminate the hybrid-GPU dmabuf theory.
+
+**A correction to advice I gave the user:** I suggested adding `dmabuf_device=/dev/dri/renderD128` to the portal-wlr config. The log shows it parsed the line and then printed `config: skipping invalid key in config file` -- `dmabuf_device` is an internal variable name inside portal-wlr, not a configuration key. I read it out of a `strings` dump and presented it as a config option without checking. Recorded because it is the third time this session that reading a symbol as if it were an interface has cost something.
+
+The user's manual TRACE run also could not serve a capture session -- `dbus: failed to acquire service name: File exists`, because the D-Bus-activated instance already held the name -- so no capture-time logs were obtained. They were not needed; facts 1-3 are sufficient.
+
+### Decision: opt-in build flag, default off
+
+`ext-image-copy-capture` is now behind `WITH_EXT_IMAGE_CAPTURE`, **deliberately excluded from `WITH_ALL`**, compiled out by default.
+
+Considered and rejected:
+
+* **Delete it.** Loses a capability wlroots will eventually force, and AGENTS.md section 3 discourages removing features. The problem is not the code, it is that this machine's stack cannot use it yet.
+* **Runtime config key.** Would let it be toggled without a rebuild, but it is a compatibility escape hatch for a hardware/driver limitation, not a user preference -- and the four existing protocol toggles (`WITH_SCREENCOPY`, `WITH_GAMMACONTROL`, `WITH_LAYERSHELL`, `WITH_VIRTUAL_INPUT`) are all build flags. Consistency wins.
+* **Fix the ext path in hikari.** Not possible: hikari creates two globals and wlroots implements everything behind them. There is no hikari-side code to correct.
+
+The flag exists rather than a deletion precisely so this can be re-tested with one `make` argument when the graphics stack moves on -- most plausibly once **FB-3** (hybrid Intel+NVIDIA device selection, BLUEPRINT section 13) is resolved, since black dmabuf frames across two GPUs is the same family of problem.
+
+### Screen sharing status after this phase
+
+The four-part chain from Phase 79, now complete:
+
+1. compositor advertises a capture protocol the client can use -- **wlr-screencopy, working (grim-verified)**
+2. `XDG_CURRENT_DESKTOP` matches a portal backend -- **done, Phase 78, verified live**
+3. `WAYLAND_DISPLAY` reaches the D-Bus activation environment -- **fixed Phase 79; confirmed by portal-wlr now running and connecting**
+4. PipeWire and WirePlumber running -- **user session configuration, done by the user**
+
+With this phase, portal-wlr should fall back to `wlr-screencopy`, which grim proves works end to end.
+
+### Validation
+
+0 warnings across **three** configurations -- default, full-feature, and full-feature plus `HAVE_EXT_IMAGE_CAPTURE` -- so the opt-in path still compiles. `make -V` confirms the macro is absent by default, present with `WITH_EXT_IMAGE_CAPTURE=YES`, and **not** pulled in by `WITH_ALL`. Documented in `README.md` beside the other build switches.
+
+### Modified files
+
+`Makefile`, `src/server.c`, `README.md`.
+
+---
+
 ## [2026-08-22 14:10] Phase 79: OBS screen sharing diagnosed -- WAYLAND_DISPLAY never reaches the D-Bus activation environment
 
 **Status:** ONE COMPOSITOR BUG FOUND AND FIXED (unbuilt); one blocker identified as user session configuration, not a code defect. **W8 confirmed working on hardware.**

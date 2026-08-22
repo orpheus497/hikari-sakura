@@ -1,6 +1,6 @@
 # Hikari Project Blueprint
 
-*Last Updated:* 2026-08-22 13:45
+*Last Updated:* 2026-08-22 14:46
 
 ## 1. System Architecture
 
@@ -1039,3 +1039,24 @@ All six run before returning to the event loop, so no frame is ever committed mi
 | **FB-9** | `sysctlbyname("hw.acpi.acline", …)` is FreeBSD-native and unavailable to the Linux-based IDE analysis path | **Introduced by W4** (Q2 power-aware blank timeout) | Idiom already proven at `topbar.c:328-332`; `<sys/sysctl.h>` is new to `lock_mode.c` | Guard as `lock_mode.c:16-18` already guards `explicit_bzero`, so clangd keeps working off-target. No new library. A machine with no battery must fall back to the AC timeout, not to `0` |
 
 **Assessment (Phase 70, updated Phase 73).** Of the nine rows, **FB-2, FB-6 and FB-8 are resolved**, and only **FB-3 / FB-4** remain genuine open platform defects — with FB-3 most likely a *configuration* problem rather than a code one. FB-1 and FB-2 had drifted into being cited as hikari-side FreeBSD hacks and were neither; that record is now corrected both here and in the code comment that originally asserted it. The overall FreeBSD-native debt is therefore **much smaller than the accumulated prose suggested**, and the remaining risk concentrates in one hardware-configuration question that a single environment variable can answer — which `hikari_platform_log()` now names in the log, beside the symptom, whenever more than one GPU is present.
+
+## 14. Screen Sharing & Portal Integration (added 2026-08-22, Phases 78-81)
+
+*Recorded because the failure modes here are silent, span four layers, and cost most of a session to work through. `xdg-desktop-portal-wlr` is the adopted backend (Phase 81); alternative capture routes are deliberately not pursued.*
+
+**The chain. All four must hold, and three are compositor-side.**
+
+| # | Requirement | Where it lives | Failure signature |
+|---|---|---|---|
+| 1 | A capture protocol the client can use | `server.c`, `HAVE_SCREENCOPY` | portal logs `Compositor supports neither ext_image_copy_capture or wlr_screencopy` |
+| 2 | `XDG_CURRENT_DESKTOP` matches a backend's `UseIn` | `start-hikari.sh`, `hikari.desktop` | **no backend resolves at all**; nothing logs why |
+| 3 | `WAYLAND_DISPLAY` in the **D-Bus activation environment** | `export_activation_environment()`, `server.c` | backend activates, cannot connect, exits; **nothing logs why** |
+| 4 | PipeWire + WirePlumber running | user session (`~/.config/hikari/autostart`) | portal negotiates, stream carries no frames |
+
+**Why (3) is not obvious.** `start-hikari.sh` wraps the compositor in `dbus-run-session`, so the session bus starts *before* the compositor creates its Wayland socket. D-Bus hands every service it activates the environment the bus itself was started with, which therefore can never contain `WAYLAND_DISPLAY` -- and `setenv()` inside `server_init()` cannot retroactively change an already-running bus. `export_activation_environment()` republishes it (plus `DISPLAY`, `XDG_CURRENT_DESKTOP`, `XDG_SESSION_TYPE`, `XDG_RUNTIME_DIR`) after `wlr_backend_start()`.
+
+**Why `ext-image-copy-capture` is opt-in.** portal-wlr *prefers* it the moment it is advertised (it logs `wayland: using ext_image_copy_capture`), and on this hybrid-GPU hardware that path delivers black frames while `wlr-screencopy` captures correctly. Advertising it therefore makes screen sharing worse. Behind `WITH_EXT_IMAGE_CAPTURE`, excluded from `WITH_ALL`. The implementation is entirely inside wlroots -- hikari creates two globals and nothing more -- so there is no hikari-side fix. See section 13, FB-3.
+
+**Diagnostic technique that works.** `grim` is the control: it binds `wlr-screencopy` directly and never faces the protocol choice, so **if `grim` captures real content and a portal client does not, the compositor is not implicated.** Verified this way in Phase 80 (3840x1200, 1520/1600 samples non-black). For the portal side, `xdg-desktop-portal-wlr -l TRACE` prints the chosen backend and per-frame errors -- but it must be started *before* the D-Bus-activated instance claims the name, or it exits with `failed to acquire service name: File exists`.
+
+**Still open.** OBS ScreenCast renders black with every compositor-side requirement verified. The residual failure is in portal-wlr -> PipeWire -> OBS. Leading hypothesis is the same hybrid-GPU dmabuf problem as FB-3: PipeWire negotiates dmabuf with OBS, and a buffer allocated on one GPU and imported on the other yields a connected stream of uniformly black frames. portal-wlr's `force_mod_linear=1` governs only its own allocation, not that handoff, which is consistent with it not helping.

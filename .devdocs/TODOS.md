@@ -1,8 +1,27 @@
 # Granular Task List
 
-*Last Updated:* 2026-08-22 14:10
+*Last Updated:* 2026-08-22 14:46
 
 ## Active List
+
+### Phase 81: portal-wlr adopted; OBS ScreenCast left open (see DECISIONS_LOG Phase 81)
+
+- [x] **USER DECISION: xdg-desktop-portal-wlr is the supported screen-sharing backend.** Alternative capture routes (wlrobs, a bespoke path) are explicitly not to be pursued. Recorded so a future session does not re-open it.
+- [x] **Everything the compositor is responsible for is verified working:** (1) capture protocol usable — `grim` captured 3840×1200, 1520/1600 samples non-black; (2) `XDG_CURRENT_DESKTOP` matches — observed in all four session processes; (3) `WAYLAND_DISPLAY` in the D-Bus activation env — portal-wlr now runs and connects, having previously never appeared; (4) PipeWire running — done by user.
+- [ ] **OPEN, NOT this project's code: OBS ScreenCast renders black.** Portal negotiates, picker appears, output selectable — frames arrive black. Residual failure is in **portal-wlr → PipeWire → OBS**. **Not asserted as an OBS bug**: which of the two is at fault has not been established. Establishing it needs portal-wlr TRACE captured *during* an active session; the earlier attempt failed with `dbus: failed to acquire service name: File exists` because the activated instance held the name. **Start there if resuming.** `grim` is the control — if grim works and OBS does not, the compositor is not implicated.
+- [ ] **Hypothesis to carry forward: hybrid-GPU dmabuf, i.e. FB-3.** PipeWire negotiates dmabuf with OBS; on Intel+NVIDIA a buffer allocated on one GPU and imported on the other gives exactly this symptom — a stream that connects and delivers uniformly black frames. `force_mod_linear=1` governs only portal-wlr's own allocation, not the PipeWire→OBS handoff, which is consistent with it not helping. **Resolving FB-3 via the W0 matrix may fix this as a side effect.**
+
+### Phase 80: ext-image-copy-capture made opt-in — Phase 78 was causing the black capture (see DECISIONS_LOG Phase 80)
+
+- [x] **ROOT CAUSE PROVEN, and it was mine.** Three facts: (1) `grim` captures correctly against the live session (3840×1200, 1520/1600 samples non-black) so `wlr-screencopy` works; (2) portal-wlr's own TRACE log says **`wayland: using ext_image_copy_capture`**; (3) hikari advertises those globals only because Phase 78 added them. **Phase 78 moved portal-wlr off a working path onto a black one.** `grim` was unaffected because it binds screencopy directly.
+- [x] **`ext-image-copy-capture` is now behind `WITH_EXT_IMAGE_CAPTURE`, default OFF, deliberately excluded from `WITH_ALL`.** Rejected alternatives: deleting it (loses a capability wlroots will eventually force; AGENTS.md §3), a runtime config key (this is a hardware/driver escape hatch, not a preference — and the four existing protocol toggles are all build flags), and fixing the ext path in hikari (impossible — hikari creates two globals, wlroots implements everything behind them).
+- [x] **`force_mod_linear=1` ruled out** — parsed and applied per the DEBUG dump, did not help.
+- [x] **CORRECTION to advice I gave:** I suggested `dmabuf_device=/dev/dri/renderD128` in the portal-wlr config. The log shows `config: skipping invalid key` — it is an *internal variable name* inside portal-wlr, not a config key. I read it from a `strings` dump and presented it as an interface without checking. Third time this session that reading a symbol as an interface has cost something.
+- [x] **Validated across three configs** (default / full / full+ext) at 0 warnings, so the opt-in path still builds. `make -V` confirms OFF by default, ON with the flag, and not pulled in by `WITH_ALL`. Documented in `README.md`.
+- [ ] **REBUILD AND RETEST OBS.** portal-wlr should now fall back to `wlr-screencopy`, which `grim` proves works end to end. If it still fails, the remaining suspect is PipeWire↔OBS rather than the compositor — and `grim` remains the control that isolates the two.
+- [ ] **Re-test `WITH_EXT_IMAGE_CAPTURE=YES` when FB-3 is resolved** — black dmabuf frames across two GPUs is the same family of problem as the hybrid-graphics device selection tracked in BLUEPRINT §13.
+
+**Screen-sharing chain, now complete:** (1) capture protocol the client can use — wlr-screencopy, grim-verified ✅ (2) `XDG_CURRENT_DESKTOP` matches a backend — Phase 78 ✅ (3) `WAYLAND_DISPLAY` in the D-Bus activation env — Phase 79 ✅ (4) PipeWire running — user ✅
 
 ### Phase 79: OBS screen sharing diagnosed — not an OBS issue (see DECISIONS_LOG Phase 79)
 

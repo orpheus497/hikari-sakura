@@ -2,6 +2,40 @@
 
 *Note: Most recent entries are listed at the top.*
 
+## Session Date: 2026-08-22 14:46 -- Phases 79-81: screen sharing diagnosed, ext-capture made opt-in, portal-wlr adopted
+
+**Timestamp:** 2026-08-22 14:46
+**Current Status:** **W0-W8 complete except W7b.** Everything the compositor owns for screen sharing is verified working; OBS ScreenCast remains black for reasons downstream of this project. Session-end documentation pass.
+
+**Accomplishments:**
+
+* **Phase 79 -- found the real screen-sharing blocker, and it was a compositor bug.** The user reported it as "likely an OBS issue"; it was not. `start-hikari.sh` wraps the compositor in `dbus-run-session`, so the session bus starts **before** the compositor creates its Wayland socket -- and D-Bus hands every activated service the environment the bus itself started with, which therefore can never contain `WAYLAND_DISPLAY`. `xdg-desktop-portal-wlr` activated with no idea which compositor to connect to, failed, and the portal reported no provider, **with nothing logging why**. Verified absent in `dbus-run-session`, the session `dbus-daemon` and the running portal. Fixed with `export_activation_environment()`. **Confirmed working: portal-wlr now activates and stays running.**
+* **Phase 80 -- the black capture was caused by my own Phase 78 change.** Proven from three facts: `grim` captures correctly (3840x1200, 1520/1600 samples non-black), portal-wlr's TRACE log says `wayland: using ext_image_copy_capture`, and hikari advertises that protocol only because Phase 78 added it. Phase 78 moved portal-wlr off a working path onto a black one. Now behind `WITH_EXT_IMAGE_CAPTURE`, default off, excluded from `WITH_ALL`, documented in `README.md`. **Confirmed installed and running (binary 14:43, ext compiled out).**
+* **Phase 81 -- user decision recorded:** portal-wlr is the supported backend; alternative capture routes are not to be pursued.
+
+**Three of my own errors this session, all recorded rather than quietly fixed:**
+1. **Phase 78's protocol addition caused the black capture.** Generalisable lesson: *advertising a protocol changes client behaviour, and a newer protocol is not automatically better on a given machine.*
+2. **A diagnostic artifact read as a real bug.** `procstat -e` prints a space-separated environment; piping through `tr ' ' '\n'` split `"Hikari Sakura:wlroots"` at its space, showing `XDG_CURRENT_DESKTOP=Hikari` and costing ~10 minutes of false hypotheses about stale sessions and SDDM overrides. **A value containing a space broke the parser, not the system.**
+3. **`dmabuf_device` presented as a config key.** It is an internal variable inside portal-wlr; I read it from a `strings` dump and handed it over as an interface without checking. The user's log showed `config: skipping invalid key`. Third instance this session of reading a symbol as though it were an API -- the same shape as the two `wlr_drm_format` crashes.
+
+**Screen sharing at session end -- all four links, with evidence:**
+1. capture protocol usable -- **working** (`grim`, 3840x1200, 95% non-black)
+2. `XDG_CURRENT_DESKTOP` matches a backend -- **working** (observed in all four session processes)
+3. `WAYLAND_DISPLAY` in the activation environment -- **fixed** (portal-wlr now runs)
+4. PipeWire + WirePlumber -- **done by the user**
+
+The portal negotiates, the picker appears, an output can be selected, and OBS still renders black. **Not asserted as an OBS bug** -- which of portal-wlr or OBS is at fault has not been established. Doing so needs portal-wlr TRACE captured *during* an active capture; the attempt failed with `dbus: failed to acquire service name: File exists` because the activated instance held the name. **Start there if resuming.**
+
+**Hypothesis to carry forward:** hybrid-GPU dmabuf, i.e. **FB-3**. PipeWire negotiates dmabuf with OBS; on Intel+NVIDIA a buffer allocated on one GPU and imported on the other yields exactly this -- a connected stream of uniformly black frames. `force_mod_linear=1` governs only portal-wlr's own allocation, not that handoff, consistent with it not helping. **Resolving FB-3 may fix this as a side effect.**
+
+**Modified files:** `src/server.c` (Phases 79-80), `Makefile`, `README.md` (Phase 80). Trackers: `DECISIONS_LOG.md` (79, 80, 81), `TODOS.md`, `PROGRESS.md`, `BRIEFING.md` (**Remaining Work fully refreshed**), `PLANS.md` (**workstream table refreshed**), `BLUEPRINT.md` (**new section 14, Screen Sharing & Portal Integration**), `SESSION_HANDOFF.md`.
+
+**Next steps -- decisions needed:** W7b (`ext-foreign-toplevel-list-v1`, the only undelivered workstream) · the deferred `forced`-flag removal · man-page documentation of `ui { lock { ... } }` · libdrm as an explicit dependency · a configurable lock-screen clock offset.
+
+**Next steps -- user-run, highest value first:** **W0-1 (`WLR_DRM_DEVICES=/dev/dri/card0`)** is now the single most valuable command outstanding -- it tests FB-3, which may close *both* the eDP-1 blocker open since Phase 19 **and** the residual OBS black-frame problem, since both are hybrid-GPU dmabuf in origin. Then **W0-6** (gates F4/P2-14), and PAM unlocker live verification.
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
+
 ## Session Date: 2026-08-22 13:57 -- Phase 78: W7a + W8 (modern capture, portal fix, XWayland renders)
 
 **Timestamp:** 2026-08-22 13:57

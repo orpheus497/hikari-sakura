@@ -1,24 +1,31 @@
 # Forward Strategy & Plans
 
-*Last Updated:* 2026-08-22 13:43
+*Last Updated:* 2026-08-22 14:46
 
 ## Implementations to be Fully Implemented
 
--13. **Phase 70 workstream programme -- STATUS as of 2026-08-22 13:43.**
+-13. **Phase 70 workstream programme -- STATUS as of 2026-08-22 14:46.**
 
    | WS | State |
    |---|---|
-   | **W0** | **OPEN, user-run.** 7 read-only commands. W0-1 tests FB-3 and may close the eDP-1 blocker; W0-6 gates F4. |
+   | **W0** | **OPEN, user-run.** 7 read-only commands. W0-1 tests FB-3 and may close the eDP-1 blocker *and* the residual OBS dmabuf problem; W0-6 gates F4. **Now the single highest-value outstanding item.** |
    | **W1** | Delivered (Phase 72) -- platform capability layer, buffer consolidation, FB-8. |
    | **W2** | Delivered (Phase 73), **confirmed on hardware** -- scene layer trees; F1 and F2 fixed. |
-   | **W3** | Delivered (Phases 74-76), **confirmed on hardware** -- capture + blur. Format spike resolved. |
+   | **W3** | Delivered (Phases 74-76), **confirmed on hardware** -- capture + blur. |
    | **W4** | Delivered (Phases 74-77), **confirmed on hardware** -- backdrop, clock, power-aware blanking. |
    | **W5** | Delivered (Phase 71) -- F3, F5. **F4 still held on W0-6.** |
    | **W6** | Delivered (Phase 71) -- C1, C2, C3. |
-   | **W7** | **NOT STARTED, needs approval.** ext-image-copy-capture-v1, ext_foreign_toplevel_list_v1, portal `XDG_CURRENT_DESKTOP` fix. |
-   | **W8** | **NOT STARTED, needs approval.** XWayland scene integration -- X11 windows still render no content. Its "must not precede W2" constraint is now satisfied. |
+   | **W7a** | Delivered (Phases 78-80), **confirmed on hardware** -- portal fix + capture protocols. `ext-image-copy-capture` made opt-in in Phase 80 after it was proven to cause black frames. |
+   | **W7b** | **NOT STARTED, needs approval.** `ext-foreign-toplevel-list-v1`. Not required for screen sharing; serves taskbars and future window-selection. Six touch points in `src/view.c`, so it wants its own build cycle. |
+   | **W8** | Delivered (Phase 78), **confirmed on hardware** -- XWayland renders content, managed and override-redirect. |
 
-   Also deferred and needing approval: the **`forced` flag removal** (W2 step 3, declared deviation in Phase 73) and the **man-page documentation** of `ui { lock { ... } }`.
+   **Also outstanding, each needing approval:**
+   * The **`forced` flag removal** (W2 step 3; declared deviation in Phase 73). 15 sites, several provably unreachable, in `src/view.c`. Pure cleanup -- F1/F2 are already fixed by the layer trees.
+   * **Man-page documentation** of the `ui { lock { ... } }` block. `etc/hikari/hikari.conf` documents it; `share/man/man1/hikari.md` does not.
+   * **libdrm as an explicit dependency**, to name the driver (`i915` vs `nvidia-drm`) in the startup log instead of an inferred device path -- better FB-3 evidence.
+   * **A configurable clock offset** for the lock screen, so visual tweaks do not each cost a rebuild.
+
+   **Left open deliberately (Phase 81):** OBS ScreenCast renders black although the compositor side is verified working end to end. portal-wlr is the adopted backend; the residual failure is in the portal-wlr -> PipeWire -> OBS path, not this project's code. `grim` is the control that isolates the two halves.
 
 -12. **Phase 70: Lock-Screen Overhaul (Option B) + FreeBSD Native-Compatibility Track -- APPROVED IN PRINCIPLE, no step yet approved for execution.** Derives from the Phase 70 investigation; see DECISIONS_LOG Phase 70 for the findings (F1-F5, C1-C3, N1-N5), the four architectural decisions (D1-D4) and the user's four rulings (Q1-Q4). Nine workstreams.
 

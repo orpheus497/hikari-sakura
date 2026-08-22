@@ -138,6 +138,28 @@ CFLAGS += -DHAVE_GAMMACONTROL=1
 CFLAGS += -DHAVE_SCREENCOPY=1
 .endif
 
+# [COMMENT] Action purpose: ext-image-copy-capture-v1 is OPT-IN and deliberately
+# excluded from WITH_ALL, which is why it is tested here rather than being set
+# above with the others.
+#
+# It is the modern replacement for wlr-screencopy and wlroots' own header says
+# screencopy "will be dropped in a future wlroots version", so hikari wants it
+# eventually. But xdg-desktop-portal-wlr PREFERS it the moment a compositor
+# advertises it (it logs "wayland: using ext_image_copy_capture"), and on this
+# hardware that path produces black frames while wlr-screencopy captures
+# correctly -- verified by `grim`, which uses screencopy and works. Advertising
+# it therefore makes screen sharing WORSE on a machine where the older protocol
+# is fine, because the client silently switches to the broken path.
+#
+# The implementation is entirely inside wlroots; hikari only creates the two
+# globals, so there is nothing here to fix. Enable with
+# `make WITH_EXT_IMAGE_CAPTURE=YES` to re-test when wlroots or the graphics
+# stack moves on -- most likely once the hybrid-GPU dmabuf issue tracked as
+# FB-3 in BLUEPRINT.md section 13 is resolved.
+.if defined(WITH_EXT_IMAGE_CAPTURE) && ${WITH_EXT_IMAGE_CAPTURE:tu} != "NO"
+CFLAGS += -DHAVE_EXT_IMAGE_CAPTURE=1
+.endif
+
 .if defined(WITH_LAYERSHELL) && ${WITH_LAYERSHELL:tu} != "NO"
 CFLAGS += -DHAVE_LAYERSHELL=1
 .endif
