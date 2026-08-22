@@ -5,6 +5,7 @@
 
 #include <wlr/types/wlr_cursor.h>
 #include <wlr/types/wlr_compositor.h>
+#include <wlr/types/wlr_scene.h>
 #include <wlr/types/wlr_subcompositor.h>
 
 #include <hikari/color.h>
@@ -146,6 +147,18 @@ raise_view(struct hikari_view *view)
 
   move_to_top(view);
   view_link_visible(view, view->sheet->workspace);
+
+  /* [COMMENT] Action purpose: Restack the view in the scene graph too.
+  move_to_top() and view_link_visible() only reorder hikari's own lists, which
+  drive focus and cycling; until this call existed nothing ever reordered the
+  scene node, so window stacking was fixed at map time and hikari_view_raise()
+  had no visual effect at all -- clicking a partially covered window raised it
+  for focus purposes while it stayed drawn underneath. Scoped to the view's
+  parent tree, so a raise cannot lift a window out of its layer: while locked,
+  public views live in the lock layer and raise among themselves there. */
+  if (view->scene_node != NULL) {
+    wlr_scene_node_raise_to_top(view->scene_node);
+  }
 }
 
 static void
@@ -1032,6 +1045,26 @@ hikari_view_map(struct hikari_view *view, struct wlr_surface *surface)
   wl_list_insert(&group->views, &view->group_views);
   wl_list_insert(&output->views, &view->output_views);
 
+  /* [COMMENT] Action purpose: Decide the view's layer before anything shows or
+  raises it, and do so unconditionally rather than only in the lock-mode case.
+
+  A view's scene tree outlives an unmap -- it is destroyed in the shell's
+  destroy_handler, not here -- so a view can carry a stale parent across a
+  map/unmap cycle. A public view that unmapped while the screen was locked
+  would otherwise still be parented to the lock layer when it remapped after
+  the unlock, and stay invisible forever because that layer is disabled.
+  Deriving the parent here on every map makes the layer a property of the
+  view's current state rather than of whatever happened to be true when it was
+  first constructed. */
+  if (view->scene_node != NULL) {
+    struct wlr_scene_tree *layer =
+        (hikari_server_in_lock_mode() && hikari_view_is_public(view))
+            ? hikari_server.layers.lock
+            : hikari_server.layers.views;
+
+    wlr_scene_node_reparent(view->scene_node, layer);
+  }
+
   if (!hikari_server_in_lock_mode() || hikari_view_is_public(view)) {
     hikari_view_show(view);
 
@@ -1041,11 +1074,17 @@ hikari_view_map(struct hikari_view *view, struct wlr_surface *surface)
 
     hikari_server_cursor_focus();
   } else {
-    /* [COMMENT] Action purpose: Under lock mode a non-public view is linked
-    into the visible lists but deliberately left flagged hidden and with its
-    scene node disabled -- "forced". raise_view() performs the linkage through
-    view_link_visible(), which is the same single writer the normal path uses;
-    the flag and the scene node are intentionally not touched here. */
+    /* [COMMENT] Action purpose: A non-public view mapping while the screen is
+    locked. It is linked into the visible lists and flagged hidden/forced, which
+    is what the rest of view.c expects, but its invisibility comes from the
+    scene graph: the tree it was parented to at construction is the view layer,
+    which override_visibility() has disabled, and wlr_scene disables every child
+    of a disabled node.
+
+    This used to claim the scene node was disabled here. It was not -- nothing
+    in this path ever touched it, and raise_view() only reorders hikari's own
+    lists -- so a window mapping while locked drew itself straight onto the lock
+    screen. See DECISIONS_LOG Phase 70 F2. */
     hikari_view_set_forced(view);
     raise_view(view);
   }
@@ -1231,6 +1270,15 @@ hikari_view_lower(struct hikari_view *view)
   to be kept in agreement with them by hand. See DECISIONS_LOG Phase 55. */
   move_to_bottom(view);
   view_link_visible_at(view, view->sheet->workspace, false);
+
+  /* [COMMENT] Action purpose: The scene-graph half of the mirror. Counterpart
+  to the raise in raise_view(); without it lowering reordered hikari's lists
+  while the window stayed drawn exactly where it was. Scoped to the view's
+  parent tree, so this can only reorder among views, never sink one below the
+  wallpaper or out of the lock layer. */
+  if (view->scene_node != NULL) {
+    wlr_scene_node_lower_to_bottom(view->scene_node);
+  }
 
   hikari_view_damage_whole(view);
 }

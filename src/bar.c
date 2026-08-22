@@ -848,7 +848,7 @@ hikari_bar_refresh(struct hikari_bar *bar)
     bool newly_created = bar->scene_buffer == NULL;
     if (newly_created) {
       bar->scene_buffer =
-          wlr_scene_buffer_create(&hikari_server.scene->tree, buffer);
+          wlr_scene_buffer_create(hikari_server.layers.top, buffer);
     } else {
       wlr_scene_buffer_set_buffer(bar->scene_buffer, buffer);
     }
@@ -863,10 +863,12 @@ hikari_bar_refresh(struct hikari_bar *bar)
       (pixel_width x pixel_height) but the scene node must occupy logical
       output space; dest_size tells wlr_scene to scale it down accordingly. */
       wlr_scene_buffer_set_dest_size(bar->scene_buffer, width, height);
-      /* [COMMENT] Action purpose: Raise only once, at creation. Raising on
-      every refresh (which happens multiple times a second) would repeatedly
-      pull the bar above the lock indicator and other overlays that are
-      raised less often, fighting their own raise_to_top calls. */
+      /* [COMMENT] Action purpose: Raise only once, at creation, and now only
+      within the top layer -- the bar sits above any layer-shell TOP surface on
+      the same output. This can no longer reach the lock indicator or the
+      indicator bars, which live in higher layers of their own; before the
+      scene was split into layers this raise competed with theirs on a shared
+      root, which is why it had to be rationed to creation time. */
       if (newly_created) {
         wlr_scene_node_raise_to_top(&bar->scene_buffer->node);
       }

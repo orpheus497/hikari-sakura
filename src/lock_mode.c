@@ -620,13 +620,29 @@ button_handler(
     struct hikari_cursor *cursor, struct wlr_pointer_button_event *event)
 {}
 
+// [COMMENT] Function purpose: Hand the desktop back after a successful unlock,
+// undoing everything override_visibility() did.
 static void
 reset_visibility(void)
 {
+  /* [COMMENT] Action purpose: Bring the desktop layers back before touching any
+  view, so no frame can be committed with views already reparented out of the
+  lock layer while the view layer is still dark. */
+  wlr_scene_node_set_enabled(&hikari_server.layers.lock->node, false);
+  wlr_scene_node_set_enabled(&hikari_server.layers.bottom->node, true);
+  wlr_scene_node_set_enabled(&hikari_server.layers.views->node, true);
+  wlr_scene_node_set_enabled(&hikari_server.layers.top->node, true);
+  wlr_scene_node_set_enabled(&hikari_server.layers.overlay->node, true);
+
   struct hikari_output *output;
   wl_list_for_each (output, &hikari_server.outputs, server_outputs) {
     struct hikari_view *view;
-    wl_list_for_each (view, &output->views, output_views) {
+
+    /* [COMMENT] Action purpose: Reverse order matters. output->views is the
+    stacking list with the front-most view first, and reparenting appends, so
+    walking it backwards rebuilds the view layer bottom-up and restores the
+    stacking the user had. Walking it forwards would invert the desktop. */
+    wl_list_for_each_reverse (view, &output->views, output_views) {
       if (hikari_view_is_forced(view)) {
         hikari_view_unset_forced(view);
 
@@ -635,6 +651,20 @@ reset_visibility(void)
         } else {
           hikari_view_set_hidden(view);
         }
+      }
+
+      /* [COMMENT] Action purpose: Put every view back under the view layer and
+      re-derive its scene node from the hidden flag the block above has just
+      restored. This cannot be limited to forced views: public views that were
+      already visible were reparented onto the lock layer without ever being
+      forced. Outside lock mode the node's enabled bit and the hidden flag
+      always agree, because hikari_view_show()/hide() are the only writers of
+      either -- so deriving one from the other reproduces the pre-lock state
+      exactly. */
+      if (view->scene_node != NULL) {
+        wlr_scene_node_reparent(view->scene_node, hikari_server.layers.views);
+        wlr_scene_node_set_enabled(
+            view->scene_node, !hikari_view_is_hidden(view));
       }
     }
   }
@@ -753,17 +783,43 @@ hikari_lock_mode_fini(struct hikari_lock_mode *lock_mode)
   munlock(input_buffer, BUFFER_SIZE);
 }
 
+/* [COMMENT] Function purpose: Take the screen away from the desktop and give it
+to the lock layer, leaving only views the user marked `public` on it.
+
+The flag bookkeeping below is unchanged and still drives the rest of view.c; the
+scene work is what makes it real. Before this, override_visibility() flipped
+only the hidden/forced bits -- and nothing in hikari carries those bits onto the
+scene graph except hikari_view_show()/hide(), which lock mode cannot call
+because both assert !forced. Upstream got away with the same flags because it
+composited the lock screen itself (hikari_renderer_lock_mode() consulted the
+hidden flag directly); the wlroots-0.20 port dropped that renderer without ever
+writing a scene-graph equivalent, so the flags stopped meaning anything visible
+and the lock screen showed the live desktop. See DECISIONS_LOG Phase 70 F1. */
 static void
 override_visibility(void)
 {
   struct hikari_output *output;
   wl_list_for_each (output, &hikari_server.outputs, server_outputs) {
     struct hikari_view *view;
-    wl_list_for_each (view, &output->views, output_views) {
+
+    // [COMMENT] Action purpose: Reverse order, for the same reason as in
+    // reset_visibility() -- reparenting appends, so walking the stacking list
+    // backwards preserves the relative order of the public views.
+    wl_list_for_each_reverse (view, &output->views, output_views) {
       if (hikari_view_is_public(view)) {
         if (hikari_view_is_hidden(view)) {
           hikari_view_set_forced(view);
           hikari_view_unset_hidden(view);
+        }
+
+        /* [COMMENT] Action purpose: Move the view onto the lock layer and turn
+        its node on. Enabling is not redundant with the flag flip above: a
+        public view that was hidden -- parked on another sheet, say -- has a
+        disabled scene node, and clearing the flag does not touch it. That is
+        precisely why a public clock never appeared on the lock screen. */
+        if (view->scene_node != NULL) {
+          wlr_scene_node_reparent(view->scene_node, hikari_server.layers.lock);
+          wlr_scene_node_set_enabled(view->scene_node, true);
         }
       } else {
         if (!hikari_view_is_hidden(view)) {
@@ -773,6 +829,23 @@ override_visibility(void)
       }
     }
   }
+
+  /* [COMMENT] Action purpose: The privacy boundary itself. Non-public views are
+  not hidden one by one -- the whole view layer goes dark, and with it the top
+  bar, the indicator overlays and every layer-shell surface, because wlr_scene
+  disables every child of a disabled node. Nothing a client does afterwards can
+  put a window back on screen: a newly mapped window parents into the view layer
+  and is invisible for the same reason, which is the other half of the fix
+  (Phase 70 F2).
+
+  The background layer is deliberately left enabled, so the wallpaper still
+  shows behind the lock screen -- matching the dimmed background upstream drew.
+  W4 decides whether the blurred backdrop replaces it or sits above it. */
+  wlr_scene_node_set_enabled(&hikari_server.layers.bottom->node, false);
+  wlr_scene_node_set_enabled(&hikari_server.layers.views->node, false);
+  wlr_scene_node_set_enabled(&hikari_server.layers.top->node, false);
+  wlr_scene_node_set_enabled(&hikari_server.layers.overlay->node, false);
+  wlr_scene_node_set_enabled(&hikari_server.layers.lock->node, true);
 }
 
 void

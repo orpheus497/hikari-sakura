@@ -157,7 +157,7 @@ hikari_output_load_background(struct hikari_output *output,
 
   if (bg_buffer != NULL) {
     scene_buffer =
-        wlr_scene_buffer_create(&hikari_server.scene->tree, bg_buffer);
+        wlr_scene_buffer_create(hikari_server.layers.background, bg_buffer);
   }
 
   if (scene_buffer != NULL) {
@@ -185,7 +185,7 @@ hikari_output_load_background(struct hikari_output *output,
     hikari_color_premultiply(color, hikari_configuration->clear);
 
     struct wlr_scene_rect *rect = wlr_scene_rect_create(
-        &hikari_server.scene->tree, output_width, output_height, color);
+        hikari_server.layers.background, output_width, output_height, color);
     if (rect != NULL) {
       output->background = &rect->node;
       wlr_scene_node_set_position(

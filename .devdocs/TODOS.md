@@ -1,8 +1,29 @@
 # Granular Task List
 
-*Last Updated:* 2026-08-22 11:43
+*Last Updated:* 2026-08-22 11:59
 
 ## Active List
+
+### Phase 73: FB-6 retired + W2 implemented — F1 and F2 FIXED (see DECISIONS_LOG Phase 73)
+
+- [x] **FB-6 retired per the user's Option 1 ruling.** `WITH_POSIX_C_SOURCE` gone, plus the two comment blocks referencing it. No reference remains outside `.devdocs/`; default build unchanged. **Closes TODOS P3.**
+- [x] **W2 — six scene layer trees** (`background`/`bottom`/`views`/`top`/`overlay`/`lock`) in `struct hikari_server.layers`, created in `setup_scene_graph()`. All 7 attachment sites repointed; **zero** scene-root attachments remain outside `server.c`. Order established by raising each in turn rather than trusting insertion order, since that could not be tested at runtime.
+- [x] **F1 (CRITICAL) FIXED structurally.** The boundary is four `set_enabled(false)` calls on the desktop layers — wlroots disables every child of a disabled node, so views, bar, indicator overlays and all layer-shell surfaces go dark together. Public views are reparented onto the lock layer **and explicitly enabled**, which is not redundant with the flag flip: a public view parked on another sheet has a *disabled* node that clearing the hidden flag never touched. **That is exactly why a `public` clock never appeared.**
+- [x] **F2 (HIGH) FIXED structurally**, and the false comment replaced with one naming the real mechanism.
+- [x] **Bug in this phase's own work, caught before shipping.** A view's scene tree outlives unmap (destroyed in `destroy_handler`, not `hikari_view_unmap`), so a public view unmapping while locked and remapping after unlock would keep a stale parent under the disabled lock layer — **invisible forever**, and `reset_visibility()` could not catch it because unmap removes the view from the very list that loop iterates. Fixed by deriving the parent unconditionally on every map.
+- [x] **Stacking preserved across lock/unlock.** `output->views` is top-first and `reparent` appends, so forward iteration would have **inverted the desktop** on every unlock; both loops use `wl_list_for_each_reverse`.
+- [x] **Layer-shell ordering is now structural** via `layer_scene_tree()`; both ad-hoc raise/lower pairs deleted, and `set_layer` is a **reparent**. Fixes a latent bug where `BACKGROUND` surfaces sank *below* the wallpaper because both called `lower_to_bottom()`.
+- [x] **NEW BUG found and fixed (not in the plan): views never restacked in the scene at all.** Nothing anywhere called `raise_to_top` on `view->scene_node`; `hikari_view_raise()` reordered only hikari's lists, so window stacking was **fixed at map time** and raising a partially covered window focused it while it stayed drawn underneath. Scene half added to `raise_view()` and `hikari_view_lower()`, scoped to the parent tree.
+- [ ] **DEVIATION — the `forced` flag was NOT deleted, contrary to `PLANS.md` W2 step 3.** It is **15 sites**, not the handful the plan assumed, including six in `commit_pending_operation()` / `hikari_view_migrate_to_sheet()` where branches are **provably unreachable** given `view.c:108`'s invariant — i.e. dead code in the subsystem behind eight crash phases (42/44/45/55/56/57/61/63). F1 and F2 are fixed by the trees alone, so this is pure cleanup, not a prerequisite. **Tracked as its own follow-up; do not bundle it into another large change.**
+- [ ] **RUNTIME VERIFICATION — the highest-priority test in the project's history (USER-RUN).** This change is unbuilt and unrun. Exercise, in order:
+  1. **Lock with a terminal showing text.** Only wallpaper + indicator should be visible. Nothing else. *(F1)*
+  2. **Map a window while locked** (`sleep 5; xterm &` then lock). It must stay invisible. *(F2)*
+  3. **Mark a clock `public` (`L+p`), lock.** It must now appear — this never worked before.
+  4. **Unlock and check stacking is not inverted** — several overlapping windows before locking, same order after.
+  5. **Public view unmap/remap across a lock cycle** — the stale-parent bug above.
+  6. **Raise a partially covered window by clicking it.** It should now actually come to the front.
+  7. **Layer clients:** waybar submenus above windows; a wallpaper daemon (`swaybg`) above the wallpaper, not below it.
+  8. **Top bar** visible normally, invisible while locked.
 
 ### Phase 72: W1 implemented (see DECISIONS_LOG Phase 72)
 
@@ -40,8 +61,8 @@
 
 **Findings to fix.** Severity as assessed in DECISIONS_LOG Phase 70 Part A.
 
-- [ ] **F1 (CRITICAL) -- the lock screen hides nothing.** `override_visibility()` (`lock_mode.c:749-768`) flips flags only; the flag reaches the scene graph solely via `view.c:1157`/`:1193`, both of which assert `!is_forced` -- the exact state lock mode establishes. Private window contents, the top bar and every layer surface stay rendered for the ~1 s before blank and for a fresh 10 s after each keystroke. **Fixed by W2 (user ruled Q1: hold for the proper fix, no interim patch).**
-- [ ] **F2 (HIGH) -- a window mapping while locked appears on the lock screen.** `view.c:1035-1051`'s comment claims the scene node is disabled; `raise_view()` (`view.c:143-149`) never calls `wlr_scene_node_set_enabled`, and the tree was created enabled. Comment is wrong and must be corrected with the fix. **Fixed by W2.**
+- [x] **F1 (CRITICAL) -- the lock screen hides nothing. FIXED, Phase 73 (W2).** `override_visibility()` (`lock_mode.c:749-768`) flips flags only; the flag reaches the scene graph solely via `view.c:1157`/`:1193`, both of which assert `!is_forced` -- the exact state lock mode establishes. Private window contents, the top bar and every layer surface stay rendered for the ~1 s before blank and for a fresh 10 s after each keystroke. **Fixed by W2 (user ruled Q1: hold for the proper fix, no interim patch).**
+- [x] **F2 (HIGH) -- a window mapping while locked appears on the lock screen. FIXED, Phase 73 (W2).** The false comment is replaced with one naming the real mechanism (the view layer is disabled, and wlr_scene disables every child of a disabled node). Implementation additionally uncovered the stale-parent case across an unmap/remap lock cycle — see Phase 73.
 - [x] **F3 (MEDIUM) -- unguarded timer pointer. FIXED, Phase 71 (W5).** Turned out to be **two** sites, not one -- `disable_outputs()` (`:507`) is reachable unguarded via `key_handler`'s Ctrl+C branch. Phase 68's sweep covered `wlr_*_create*` only, which is why the `wl_event_loop_*` sites were missed.
 - [ ] **F4 (MEDIUM) -- output re-enabled without a mode.** `hikari_output_enable` (`output.c:323-354`) omits `wlr_output_state_set_mode()`, unlike `hikari_output_init` (`:553-556`). **Conditional on W0-6. Same item as P2-14 -- do not track twice. W5.**
 - [x] **F5 (LOW) -- unlocker fatal-PAM path writes no result. FIXED, Phase 71 (W5).** The "silently consumes one attempt" framing above was **wrong** and is corrected in DECISIONS_LOG Phase 71: `locker_result_handler` already recovered via the hangup. The real gain is that deny is now immediate rather than waiting on process teardown.
@@ -53,7 +74,7 @@
 **Workstream status.** **W5 and W6 are IMPLEMENTED (Phase 71)**, except F4, which is held pending W0-6. Remaining, in the recommended order:
 
 - [x] **W1** platform capability layer + buffer consolidation + **FB-8** — implemented Phase 72. **FB-6 held pending a user decision** (see Phase 72 section above).
-- [ ] **W2** scene layer trees (D1); 8 root-attachment sites across 7 files; delete the `forced` flag.
+- [x] **W2** scene layer trees (D1) -- implemented Phase 73. **The `forced` flag deletion was deferred**, see the Phase 73 deviation note.
 - [ ] **W3** capture + blur. **CPU baseline first, GPU second (Q3 ruling).** Carries one open **SPIKE**: no public render-format query exists in 0.20.2, so the swapchain format needs a logged escalation ladder (implicit XRGB8888 -> LINEAR -> ARGB8888 -> abort to solid `clear`).
 - [ ] **W4** backdrop + cairo/Pango clock + **power-aware blank timeout (Q2 ruling: 180 s AC / 60 s battery, configurable, `0` = never)**. Read `hw.acpi.acline` via `sysctlbyname()` at arm time, never cached.
 - [ ] **W7** `ext-image-copy-capture-v1` + `ext_foreign_toplevel_list_v1`; fix `XDG_CURRENT_DESKTOP` to `"Hikari Sakura:wlroots"` (`start-hikari.sh:26` + `hikari.desktop`) so `xdg-desktop-portal-wlr` matches at all.
@@ -88,7 +109,7 @@
 - [ ] **P1 -- Phase 64 XWayland render gap: re-evaluate ONLY after B is confirmed.** `xwayland_view.c` attaches no surface content to its scene tree. This has been untestable all along because XWayland never started.
 - [ ] **P2 -- 234 dead `assert()` calls across 32 files** (`view.c`: 101). All compiled out by `-DNDEBUG`. Phase 61 approved the `wlr_log(WLR_ERROR)` + safe-bail replacement policy but it has only been applied at a handful of sites. Needs scoping as its own project.
 - [ ] **P2 -- TC-FORMAT-01 is loadable but still must not be run casually.** The configured style (8-wide tabs, Allman) does not describe the tree (2-space, tabless, attached control braces); `src/server.c` alone measures a ~4050-line diff. `SortIncludes: true` also orphans the `Action purpose:` comment above `wlr/interfaces/wlr_buffer.h`. User has elected to keep the style as configured -- decide separately whether the run ever happens.
-- [ ] **P3 -- `WITH_POSIX_C_SOURCE=YES` is a broken build configuration.** Never set by `WITH_ALL`, so unused by default; enabling it yields 3 implicit-function-declaration warnings and, with `DEBUG=YES` (`-Werror`), fails the build. Two are security-relevant: `explicit_bzero` (`lock_mode.c:70`, wipes the password buffer) and `setgroups` (`server.c:1087`, privilege dropping); `usleep` (`bar.c:385`) is cosmetic.
+- [x] **P3 -- `WITH_POSIX_C_SOURCE=YES` was a broken build configuration. CLOSED Phase 73: flag retired** (user ruling, Option 1). Never set by `WITH_ALL`, so unused by default; enabling it yields 3 implicit-function-declaration warnings and, with `DEBUG=YES` (`-Werror`), fails the build. Two are security-relevant: `explicit_bzero` (`lock_mode.c:70`, wipes the password buffer) and `setgroups` (`server.c:1087`, privilege dropping); `usleep` (`bar.c:385`) is cosmetic.
 
 ### Phase 67: External review round 3 (see DECISIONS_LOG Phase 67)
 

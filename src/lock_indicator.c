@@ -213,7 +213,7 @@ hikari_lock_indicator_damage(struct hikari_lock_indicator *lock_indicator)
       // [COMMENT] Action purpose: Create new scene buffer node if none exists.
       if (output->lock_indicator_node == NULL) {
         output->lock_indicator_node = wlr_scene_buffer_create(
-            &hikari_server.scene->tree, lock_indicator->current);
+            hikari_server.layers.lock, lock_indicator->current);
       } else {
         wlr_scene_buffer_set_buffer(
             output->lock_indicator_node, lock_indicator->current);

@@ -527,7 +527,7 @@ hikari_xwayland_view_init(struct hikari_xwayland_view *xwayland_view,
   border and indicator frame nodes. Creation only fails on OOM; bail out via
   the same cleanup the destroy path uses (hikari_view_fini + hikari_free)
   before any listeners are registered, leaving no dangling state behind. */
-  xwayland_view->scene_tree = wlr_scene_tree_create(&hikari_server.scene->tree);
+  xwayland_view->scene_tree = wlr_scene_tree_create(hikari_server.layers.views);
   if (xwayland_view->scene_tree == NULL) {
     fprintf(stderr, "error: could not create scene tree for xwayland view\n");
     hikari_view_fini(&xwayland_view->view);

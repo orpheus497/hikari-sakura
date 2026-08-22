@@ -191,7 +191,7 @@ hikari_indicator_bar_update(struct hikari_indicator_bar *indicator_bar,
 
   if (buffer != NULL) {
     indicator_bar->scene_buffer =
-        wlr_scene_buffer_create(&hikari_server.scene->tree, buffer);
+        wlr_scene_buffer_create(hikari_server.layers.overlay, buffer);
     wlr_buffer_drop(buffer);
 
     /* [COMMENT] Action purpose: Re-apply the recorded visibility to the newly

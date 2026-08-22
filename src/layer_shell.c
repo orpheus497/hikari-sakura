@@ -69,6 +69,36 @@ commit_popup_handler(struct wl_listener *listener, void *data);
 static void
 destroy_popup_handler(struct wl_listener *listener, void *data);
 
+/* [COMMENT] Function purpose: Map a layer-shell layer onto the scene tree that
+represents it.
+
+The protocol's four layers straddle the view layer -- BACKGROUND and BOTTOM
+below it, TOP and OVERLAY above -- so they cannot share one tree. Routing every
+attachment and every set_layer through this one function is what keeps the
+protocol's ordering guarantee structural instead of restating it at each call
+site, which is how the two sites previously drifted into competing with the bar
+and the lock indicator over the shared scene root. */
+static struct wlr_scene_tree *
+layer_scene_tree(enum zwlr_layer_shell_v1_layer layer)
+{
+  switch (layer) {
+    case ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND:
+      return hikari_server.layers.background;
+    case ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM:
+      return hikari_server.layers.bottom;
+    case ZWLR_LAYER_SHELL_V1_LAYER_TOP:
+      return hikari_server.layers.top;
+    case ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY:
+      return hikari_server.layers.overlay;
+  }
+
+  /* [COMMENT] Action purpose: wlroots validates the layer before the surface
+  reaches hikari, so this is unreachable; returning the bottom layer rather
+  than NULL keeps an unexpected value from faulting the compositor at the
+  attachment site. */
+  return hikari_server.layers.bottom;
+}
+
 static void
 map_popup_handler(struct wl_listener *listener, void *data);
 
@@ -220,7 +250,7 @@ hikari_layer_init(
   for this layer surface; all rendering, subsurface parenting, and popup
   attachment is managed by wlroots from this point. */
   layer->scene_layer_surface = wlr_scene_layer_surface_v1_create(
-      &hikari_server.scene->tree, wlr_layer_surface);
+      layer_scene_tree(layer->layer), wlr_layer_surface);
 
   /* [COMMENT] Action purpose: Scene tree allocation only fails on OOM. Reject
   the client surface and bail out before listeners are registered; the destroy
@@ -232,17 +262,14 @@ hikari_layer_init(
     return;
   }
 
-  /* [COMMENT] Action purpose: Establish stacking order per layer: overlay/top
-  render above views, bottom/background below views. The node starts disabled;
-  map() enables it once the surface has content. */
-  struct wlr_scene_node *scene_node = &layer->scene_layer_surface->tree->node;
-  if (layer->layer == ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY ||
-      layer->layer == ZWLR_LAYER_SHELL_V1_LAYER_TOP) {
-    wlr_scene_node_raise_to_top(scene_node);
-  } else {
-    wlr_scene_node_lower_to_bottom(scene_node);
-  }
-  wlr_scene_node_set_enabled(scene_node, false);
+  /* [COMMENT] Action purpose: Stacking is now a property of which tree the
+  surface was parented to above, so the raise/lower that used to run here is
+  gone -- with every sibling in the same layer there is nothing left for it to
+  order against, and across layers it was actively wrong (it competed with the
+  bar's and the lock indicator's own raises on the shared root). The node still
+  starts disabled; map() enables it once the surface has content. */
+  wlr_scene_node_set_enabled(
+      &layer->scene_layer_surface->tree->node, false);
 
   layer->commit.notify = commit_handler;
   wl_signal_add(&wlr_layer_surface->surface->events.commit, &layer->commit);
@@ -593,13 +620,12 @@ commit_handler(struct wl_listener *listener, void *data)
     wl_list_insert(&output->layers[current_layer], &layer->layer_surfaces);
     layer->layer = current_layer;
 
-    struct wlr_scene_node *scene_node = &layer->scene_layer_surface->tree->node;
-    if (current_layer == ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY ||
-        current_layer == ZWLR_LAYER_SHELL_V1_LAYER_TOP) {
-      wlr_scene_node_raise_to_top(scene_node);
-    } else {
-      wlr_scene_node_lower_to_bottom(scene_node);
-    }
+    /* [COMMENT] Action purpose: Move the surface into the tree for its new
+    layer. This is a reparent rather than the raise/lower it replaces: with one
+    tree per layer, changing layer IS changing parent, and a raise within the
+    old tree would have left the surface stacked among the wrong neighbours. */
+    wlr_scene_node_reparent(&layer->scene_layer_surface->tree->node,
+        layer_scene_tree(current_layer));
   }
 
   arrange_layers(output);

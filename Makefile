@@ -116,15 +116,11 @@ CFLAGS += -DNDEBUG
 .endif
 
 # [COMMENT] Action purpose: Snapshot the shared DEBUG/ASAN/warning/hardening
-# flags for hikari-topbar before WITH_POSIX_C_SOURCE is applied below.
-# topbar.c deliberately requires __BSD_VISIBLE to stay set (u_int, IFF_UP,
-# usleep at 200809L) -- see the comment atop src/topbar.c -- so it must not
-# inherit -D_POSIX_C_SOURCE the way the compositor's own CFLAGS does.
+# flags for hikari-topbar here, before the feature macros and the pkg-config
+# include paths are appended to CFLAGS below. The `:=` is load-bearing: with a
+# deferred `=` this would expand at use time and the topbar build would inherit
+# every -DHAVE_* and every wlroots/pango include it has no use for.
 TOPBAR_CFLAGS := ${CFLAGS} -std=gnu11 -Wall
-
-.if defined(WITH_POSIX_C_SOURCE) && ${WITH_POSIX_C_SOURCE:tu} != "NO"
-CFLAGS += -D_POSIX_C_SOURCE=200809L
-.endif
 
 .if defined(WITH_XWAYLAND) && ${WITH_XWAYLAND:tu} != "NO"
 CFLAGS += -DHAVE_XWAYLAND=1
@@ -247,11 +243,11 @@ hikari-unlocker: hikari_unlocker.c
 # binary. It is deliberately NOT linked into the compositor: it samples sensors
 # with blocking popen() calls, which would stall the Wayland event loop if run
 # in-process. hikari reads its swaybar-protocol output over a non-blocking pipe.
-# It shares the project's DEBUG/ASAN/warning/hardening/GNU11 settings but has
-# its own feature-test-macro handling: topbar.c explicitly relies on
-# __BSD_VISIBLE (u_int, IFF_UP) staying set, which _POSIX_C_SOURCE clears, so
-# WITH_POSIX_C_SOURCE is deliberately NOT inherited here (see the comment atop
-# src/topbar.c).
+# It shares the project's DEBUG/ASAN/warning/hardening/GNU11 settings via the
+# TOPBAR_CFLAGS snapshot above, but none of the compositor's feature macros or
+# wlroots include paths. Note that topbar.c relies on __BSD_VISIBLE staying set
+# for u_int, IFF_UP and usleep -- no feature-test macro may be defined for this
+# target (see the comment atop src/topbar.c).
 hikari-topbar: src/topbar.c
 	${CC} ${LDFLAGS} ${TOPBAR_CFLAGS} -o hikari-topbar src/topbar.c
 

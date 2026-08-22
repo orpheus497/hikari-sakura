@@ -989,6 +989,48 @@ setup_scene_graph(struct hikari_server *server)
     wl_display_destroy(server->display);
     exit(EXIT_FAILURE);
   }
+
+  /* [COMMENT] Action purpose: Create the six stacking layers everything else
+  attaches to. Nothing may parent itself to server->scene->tree directly after
+  this point -- that is what reintroduces the flat list these replace. */
+  struct wlr_scene_tree **layers[] = {
+    &server->layers.background,
+    &server->layers.bottom,
+    &server->layers.views,
+    &server->layers.top,
+    &server->layers.overlay,
+    &server->layers.lock,
+  };
+  const size_t layer_count = sizeof(layers) / sizeof(layers[0]);
+
+  for (size_t i = 0; i < layer_count; i++) {
+    *layers[i] = wlr_scene_tree_create(&server->scene->tree);
+
+    // [COMMENT] Action purpose: Fatal rather than degraded. Every subsequent
+    // scene attachment dereferences one of these, so a NULL here would surface
+    // much later as a crash in unrelated code. Matches the fatal-exit pattern
+    // used for the seat, layer shell and pointer gestures.
+    if (*layers[i] == NULL) {
+      fprintf(stderr, "error: could not create scene layer %zu\n", i);
+      wl_display_destroy(server->display);
+      exit(EXIT_FAILURE);
+    }
+  }
+
+  /* [COMMENT] Action purpose: Establish the stacking order explicitly rather
+  than relying on the order wlr_scene_tree_create() happens to insert in.
+  Raising each layer in turn, bottom first, leaves them in exactly this order
+  whichever end insertion uses -- so the ordering is a property of this loop and
+  stays correct if wlroots ever changes that detail. */
+  for (size_t i = 0; i < layer_count; i++) {
+    wlr_scene_node_raise_to_top(&(*layers[i])->node);
+  }
+
+  /* [COMMENT] Action purpose: The lock layer stays disabled for the whole of a
+  normal session; hikari_lock_mode_enter() swaps it in. Creating it up front
+  rather than on demand means lock mode never has to allocate at the moment it
+  is asked to hide the screen. */
+  wlr_scene_node_set_enabled(&server->layers.lock->node, false);
 }
 
 static void
