@@ -1,3 +1,60 @@
+## [2026-08-22 14:10] Phase 79: OBS screen sharing diagnosed -- WAYLAND_DISPLAY never reaches the D-Bus activation environment
+
+**Status:** ONE COMPOSITOR BUG FOUND AND FIXED (unbuilt); one blocker identified as user session configuration, not a code defect. **W8 confirmed working on hardware.**
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
+
+### Origin
+
+User reported W7a/W8 working ("seems to work"), but that screen sharing with OBS still did not, adding "that might be an OBS issue". It is not. Diagnosed against the live session rather than accepted.
+
+### Confirmed working: the Phase 78 portal fix
+
+`XDG_CURRENT_DESKTOP=Hikari Sakura:wlroots` is present in `dbus-run-session`, the compositor, the session `dbus-daemon` and the running `xdg-desktop-portal`. The Phase 78 change is live and correct.
+
+**A diagnostic error of mine nearly recorded the opposite, and is worth logging.** The first reading appeared to show `XDG_CURRENT_DESKTOP=Hikari` -- neither the old value nor the new one -- and roughly ten minutes went into hypothesising a stale session, an SDDM override and a competing session file. The cause was the diagnostic itself: `procstat -e` prints a space-separated environment, and piping it through `tr ' ' '\n'` split `"Hikari Sakura:wlroots"` at its space, leaving `XDG_CURRENT_DESKTOP=Hikari` as an apparently complete line. **A value containing a space broke the parser, not the system.** Re-checked with a parse that tolerates spaces, all four processes are correct. Recorded because the failure mode -- a measurement artifact presenting as a plausible bug, in the same investigation as a genuine one -- is the same shape as Phase 75's speculative change, and cost real time.
+
+### Blocker 1 (COMPOSITOR BUG, fixed): WAYLAND_DISPLAY is absent from the activation environment
+
+Verified live: **`WAYLAND_DISPLAY` is present in neither `dbus-run-session`, nor the session `dbus-daemon`, nor the running `xdg-desktop-portal`.**
+
+The ordering makes this inevitable. `start-hikari.sh` wraps the compositor in `dbus-run-session`, so the session bus starts **before** the compositor creates its Wayland socket. D-Bus hands every service it activates the environment the bus itself was started with -- which therefore can never contain `WAYLAND_DISPLAY`. `setenv()` inside `server_init()` fixes the compositor's own environment and that of children it forks, but cannot retroactively change an already-running bus.
+
+The consequence is silent and total: `xdg-desktop-portal-wlr` D-Bus-activates with no idea which compositor to connect to, fails, and the portal reports no ScreenCast provider. It was not in the process list at all, which is consistent. **Nothing logs this**, which is why it presents as "screen sharing just doesn't work" and gets attributed to the client.
+
+**Fixed** with `export_activation_environment()` in `src/server.c`, run after the backend starts and before `run_autostart()`, publishing `WAYLAND_DISPLAY`, `XDG_CURRENT_DESKTOP`, `DISPLAY`, `XDG_SESSION_TYPE` and `XDG_RUNTIME_DIR` via `dbus-update-activation-environment`.
+
+* Placed after `wlr_backend_start()` so `DISPLAY` (exported by `setup_xwayland`) is already set and gets published too.
+* Deliberately best-effort: guarded by `command -v` and routed through `hikari_command_execute()`, the same detached helper autostart entries use. `dbus-update-activation-environment` ships in the dbus package, which a minimal install may lack, and a compositor must not refuse to start over an optional integration -- its absence costs only this feature.
+* `XDG_CURRENT_DESKTOP` is republished even though it is currently correct, because the same staleness applies to it: a bus started before an updated `start-hikari.sh` keeps whatever the display manager set, and that value is what selects a portal backend.
+
+### Blocker 2 (NOT a code defect): PipeWire is not running
+
+`pipewire` and `wireplumber` are installed (1.6.8 / 0.5.15) but **neither is running**. The portal's ScreenCast interface delivers frames over PipeWire, so OBS cannot capture regardless of how well the portal negotiates.
+
+*(An earlier count of "2" for these processes was another artifact -- it matched the grep's own subshells. Corrected by matching on the actual argv.)*
+
+There is also **no `~/.config/hikari/autostart`**, which is where hikari looks (`main.c:get_user_autostart()` -> `$XDG_CONFIG_HOME/hikari/autostart`, else `$HOME/.config/hikari/autostart`; the file must be executable).
+
+**Deliberately not fixed in code.** Starting a sound and media daemon is a session policy decision belonging to the user, not something a compositor should hardcode -- hikari already provides the autostart mechanism for exactly this. Documented instead, and raised with the user.
+
+### The full chain, for future reference
+
+For portal screen sharing to work on this platform, all four must hold:
+
+1. compositor advertises capture protocols -- **done, Phase 78**
+2. `XDG_CURRENT_DESKTOP` matches a portal backend's `UseIn` -- **done, Phase 78; verified live**
+3. `WAYLAND_DISPLAY` reaches the D-Bus activation environment -- **fixed this phase**
+4. PipeWire and WirePlumber are running -- **user session configuration**
+
+Three of the four are compositor-side and are now handled. Only (4) is outside the project.
+
+### Validation
+
+0 warnings across 64 files in both configurations. The shell guard was executed directly to confirm it parses and resolves. Unbuilt.
+
+---
+
 ## [2026-08-22 13:57] Phase 78: W7a + W8 -- modern capture, the portal fix, and XWayland finally renders
 
 **Status:** IMPLEMENTED, unbuilt. 0 warnings across 64 files in both configurations. **W7's foreign-toplevel half (W7b) is deliberately sequenced to the next cycle -- see the reasoning below.**

@@ -1732,6 +1732,40 @@ terminate_signal_handler(int signal_number, void *data)
   return 0;
 }
 
+/* [COMMENT] Function purpose: Publish the session's display variables into the
+D-Bus activation environment.
+
+Without this, xdg-desktop-portal-wlr cannot work at all -- and the failure is
+completely silent. start-hikari.sh wraps the compositor in dbus-run-session, so
+the session bus is started BEFORE the compositor creates its Wayland socket;
+D-Bus hands each service it activates the environment the bus itself was started
+with, which therefore never contains WAYLAND_DISPLAY. The portal backend then
+launches with no idea which compositor to connect to, fails, and screen sharing
+reports no provider -- with nothing in any log to say why. Verified on this
+machine: the session dbus-daemon and the running xdg-desktop-portal both had no
+WAYLAND_DISPLAY in their environment at all.
+
+XDG_CURRENT_DESKTOP is included because the same staleness applies to it: a
+session started before an updated start-hikari.sh keeps whatever the display
+manager set, and that is what selects a portal backend. DISPLAY is included so
+X11 helpers activated over D-Bus reach our Xwayland rather than a foreign
+server -- it is exported by setup_xwayland() well before this runs.
+
+Deliberately best-effort. dbus-update-activation-environment lives in the
+dbus package, which a minimal install may not have, and a compositor must not
+refuse to start over an optional integration -- so the command is run through
+the same detached helper as autostart entries and its absence costs only this
+feature. */
+static void
+export_activation_environment(void)
+{
+  hikari_command_execute("command -v dbus-update-activation-environment "
+                         "> /dev/null 2>&1 && "
+                         "dbus-update-activation-environment "
+                         "WAYLAND_DISPLAY XDG_CURRENT_DESKTOP DISPLAY "
+                         "XDG_SESSION_TYPE XDG_RUNTIME_DIR");
+}
+
 static void
 run_autostart(char *autostart)
 {
@@ -1775,6 +1809,8 @@ hikari_server_start(char *config_path, char *autostart)
     wl_display_destroy(hikari_server.display);
     exit(EXIT_FAILURE);
   }
+
+  export_activation_environment();
 
   if (autostart != NULL) {
     run_autostart(autostart);

@@ -1,8 +1,23 @@
 # Granular Task List
 
-*Last Updated:* 2026-08-22 13:57
+*Last Updated:* 2026-08-22 14:10
 
 ## Active List
+
+### Phase 79: OBS screen sharing diagnosed — not an OBS issue (see DECISIONS_LOG Phase 79)
+
+- [x] **W8 confirmed working on hardware** — XWayland renders content.
+- [x] **Phase 78's portal fix verified live:** `XDG_CURRENT_DESKTOP=Hikari Sakura:wlroots` present in `dbus-run-session`, the compositor, the session `dbus-daemon` and the running `xdg-desktop-portal`.
+- [x] **BLOCKER 1 (compositor bug) FOUND AND FIXED: `WAYLAND_DISPLAY` never reaches the D-Bus activation environment.** `start-hikari.sh` runs `dbus-run-session` *before* the compositor creates its socket, and D-Bus hands activated services the environment the bus started with — so `xdg-desktop-portal-wlr` activates with no idea which compositor to connect to, fails, and the portal reports no ScreenCast provider. **Nothing logs this**, which is why it looks like a client problem. Verified absent in all three processes. Fixed via `export_activation_environment()` (`server.c`), run after `wlr_backend_start()` so `DISPLAY` is published too; guarded by `command -v` and routed through the detached autostart helper, so a missing dbus package costs only this feature.
+- [ ] **BLOCKER 2 (NOT a code defect, USER ACTION): PipeWire and WirePlumber are not running.** Installed (1.6.8 / 0.5.15) but neither process exists. The portal's ScreenCast delivers frames over PipeWire, so OBS cannot capture regardless of portal negotiation. There is also **no `~/.config/hikari/autostart`** — hikari looks at `$XDG_CONFIG_HOME/hikari/autostart` (else `~/.config/hikari/autostart`) and the file must be **executable**. Deliberately not hardcoded: starting a media daemon is session policy, and hikari already provides autostart for it.
+- [x] **Diagnostic error recorded.** An initial reading appeared to show `XDG_CURRENT_DESKTOP=Hikari` and cost ~10 minutes of false hypotheses. Cause: `procstat -e` prints a space-separated environment and `tr ' ' '\n'` split `"Hikari Sakura:wlroots"` at its space. **A value containing a space broke the parser, not the system.** Same shape as Phase 75's speculative change — a measurement artifact presenting as a plausible bug alongside a genuine one.
+- [ ] **REBUILD + FULL LOGOUT/LOGIN, then start PipeWire.** The activation-environment fix only takes effect for a session started after it; and `dbus-update-activation-environment` affects the bus for services activated *afterwards*.
+
+**The full chain for portal screen sharing — 3 of 4 are now compositor-side and handled:**
+1. compositor advertises capture protocols — done (Phase 78)
+2. `XDG_CURRENT_DESKTOP` matches a backend's `UseIn` — done (Phase 78), verified live
+3. `WAYLAND_DISPLAY` reaches the D-Bus activation environment — fixed (Phase 79)
+4. PipeWire + WirePlumber running — **user session configuration**
 
 ### Phase 78: W7a + W8 implemented (see DECISIONS_LOG Phase 78)
 
