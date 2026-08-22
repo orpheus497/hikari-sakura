@@ -1,3 +1,57 @@
+## [2026-08-22 13:43] Phase 77: The lock screen works -- confirmed on hardware; clock raised by a centimetre
+
+**Status:** **W3 + W4 CONFIRMED WORKING ON HARDWARE by the user.** One cosmetic change made on request. Syntax-clean; the clock change is unbuilt.
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
+
+### The feature is delivered
+
+The user rebuilt after Phase 76 and reported it working. The native blurred lock screen with a compositor-drawn clock -- the thing originally asked for four phases ago and mis-scoped in Phase 70 as a `public`-view workaround -- is live:
+
+* the workspace is captured at lock time and blurred behind the lock screen,
+* the clock and date are drawn by the compositor, needing no client,
+* the password indicator and public views layer over it,
+* blanking is power-aware.
+
+That closes **W3** and **W4**, and with them the original request from Phase 70.
+
+### Clock position
+
+**Requested:** the clock, date and time about 1 cm higher.
+
+**Implemented as a real centimetre, not a pixel guess.** A pixel constant is a different physical distance on every panel -- 40 px is ~10 mm at 96 DPI and roughly half that on a dense laptop display -- so `mm_to_logical_pixels()` derives the offset from the panel's own dimensions: EDID's `phys_height` against the mode's pixel height gives pixels-per-millimetre, divided by the output scale because scene nodes are positioned in logical coordinates rather than physical ones.
+
+Falls back to the Wayland convention that logical space is nominally 96 DPI (10 mm = 37 logical px) when EDID reports no physical size, which virtual machines and some displays do.
+
+The existing 40 px indicator clearance is left alone; the centimetre is added to it, so this is literally "1 cm higher than it was" rather than a re-derivation of the whole layout.
+
+**Not done, and offered instead:** making the offset configurable. It was not requested, and AGENTS.md gates unapproved additions -- but given each visual tweak currently costs a full rebuild and re-login, a `clock-offset` key in the `lock` block would let this be tuned without one. Raised for the user rather than added.
+
+### Where the four-phase crash sequence leaves things
+
+Worth recording as a unit, because the shape is instructive. The feature took three build cycles to land, and the two failures were both mine:
+
+| Phase | Outcome |
+|---|---|
+| 74 | Implemented. Two bugs caught **before** shipping by re-reading (damage early-out, blur stride overflow). Two shipped. |
+| 75 | Crash 1 root-caused from a core dump in minutes. Fix correct. **A second, speculative change shipped alongside it was backwards.** |
+| 76 | Crash 2 root-caused. Root cause was *the same struct* -- the real defect was hand-building it at all. Phase 75's speculation reverted. |
+| 77 | Confirmed working. |
+
+Three lessons already recorded in their own phases, restated here because together they are the actual takeaway:
+
+1. **A fallback ladder is only as safe as its first rung** -- an assertion in a dependency is not a recoverable failure.
+2. **Do not hand-construct a library's structs when it ships a constructor**, especially one whose fields are documented "do not use".
+3. **Do not ship speculation in the same commit as an evidence-backed fix** -- the fix lends the guess credibility it has not earned, and Phase 75's `transformed_resolution` change survived a whole cycle because of it.
+
+The diagnostics infrastructure is what made this cheap: each crash went from report to named assertion in a few minutes, using core dumps and `HIKARI_LOG` from Phase 68 and the `strings`-over-a-stripped-library technique found in Phase 76.
+
+### Validation
+
+0 warnings across 64 files in both build configurations. The clock offset itself is a one-line arithmetic change and is unbuilt.
+
+---
+
 ## [2026-08-22 13:39] Phase 76: Second crash root-caused -- stop hand-building wlr_drm_format, and a correction to Phase 75
 
 **Status:** FIXED, unbuilt. `src/screen_capture.c` rewritten to construct the format through the allocating API instead of by hand. **Includes a correction to a change Phase 75 made in the wrong direction.**

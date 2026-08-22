@@ -85,6 +85,35 @@ draw_centred(cairo_t *cairo,
   g_object_unref(layout);
 }
 
+/* [COMMENT] Function purpose: Convert a physical distance in millimetres into
+logical pixels on this output.
+
+Placement offsets expressed in pixels drift with display density -- the same
+constant is a very different distance on a 96 DPI monitor and a HiDPI laptop
+panel. EDID reports the panel's physical size, so a real millimetre is
+computable: divide the mode's pixel height by the panel height in millimetres
+for pixels-per-millimetre, then by the output scale, because scene nodes are
+positioned in logical coordinates rather than physical ones.
+
+Falls back to the Wayland convention that logical space is nominally 96 DPI
+when EDID reports no physical size, which virtual machines and some displays
+do. */
+static int
+mm_to_logical_pixels(struct hikari_output *output, double mm)
+{
+  struct wlr_output *wlr_output = output->wlr_output;
+
+  double scale = wlr_output->scale > 0 ? wlr_output->scale : 1.0;
+
+  if (wlr_output->phys_height > 0 && wlr_output->height > 0) {
+    double px_per_mm = (double)wlr_output->height / (double)wlr_output->phys_height;
+
+    return (int)(mm * px_per_mm / scale);
+  }
+
+  return (int)(mm * 96.0 / 25.4);
+}
+
 /* [COMMENT] Function purpose: Render the clock for one output and attach it to
 that output's lock layer, replacing whatever was there. */
 static void
@@ -184,9 +213,14 @@ refresh_output(struct hikari_output *output, const struct tm *now)
   /* [COMMENT] Action purpose: Centre horizontally, and sit above the vertical
   centre so the password indicator has room beneath it without the two
   colliding. Coordinates are layout-absolute because the lock layer is parented
-  to the scene root, not to a per-output tree. */
+  to the scene root, not to a per-output tree.
+
+  The 40px clears the indicator; the additional centimetre is a deliberate
+  raise, and is expressed in millimetres rather than pixels so it stays a
+  centimetre on a HiDPI panel instead of shrinking with the pixel density. */
   int x = output->geometry.x + (output->geometry.width - width) / 2;
-  int y = output->geometry.y + output->geometry.height / 2 - height - 40;
+  int y = output->geometry.y + output->geometry.height / 2 - height - 40 -
+      mm_to_logical_pixels(output, 10);
 
   if (y < output->geometry.y) {
     y = output->geometry.y;

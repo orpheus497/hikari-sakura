@@ -1,8 +1,15 @@
 # Granular Task List
 
-*Last Updated:* 2026-08-22 13:39
+*Last Updated:* 2026-08-22 13:43
 
 ## Active List
+
+### Phase 77: LOCK SCREEN CONFIRMED WORKING; clock raised 1 cm (see DECISIONS_LOG Phase 77)
+
+- [x] **W3 + W4 CONFIRMED WORKING ON HARDWARE.** The native blurred lock screen with a compositor-drawn clock is live: workspace captured and blurred at lock time, clock and date drawn by the compositor with no client involved, indicator and public views layered above, power-aware blanking. **This closes the original Phase 70 request.**
+- [x] **Clock raised by a real centimetre.** `mm_to_logical_pixels()` derives the offset from EDID's `phys_height` against the mode's pixel height, divided by output scale (scene nodes are positioned in logical coordinates). A pixel constant would be a different physical distance on every panel. Falls back to the 96 DPI convention (10 mm = 37 logical px) when EDID reports no physical size.
+- [ ] **DECISION FOR USER — make the clock offset configurable?** Not added: unrequested, and AGENTS.md gates it. But each visual tweak currently costs a full rebuild + re-login, so a `clock-offset` key in `lock { }` would let it be tuned without one. Say the word.
+- [ ] **Rebuild to see the raised clock.** One-line arithmetic change; nothing else in this phase touches runtime behaviour.
 
 ### Phase 76: Second crash fixed — stop hand-building `wlr_drm_format` (see DECISIONS_LOG Phase 76)
 
@@ -11,7 +18,7 @@
 - [x] **Fixed properly:** format built via `wlr_drm_format_set_add()` → `wlr_drm_format_set_get()` → `wlr_drm_format_set_finish()`. The API keeps `len`/`capacity` consistent, so no invariant is left for this code to violate. `grep` confirms no hand-built `wlr_drm_format` and no `.capacity` assignment remains in `src/`.
 - [x] **CORRECTION to Phase 75:** its change from `wlr_output_transformed_resolution()` to `wlr_output->width/height` was **backwards and is reverted**. The library's assert `buffer->width == resolution_width && ...` uses wlroots' naming for `transformed_resolution`, so rotation *is* baked into the rendered buffer. Phase 75 introduced a latent regression for rotated outputs while claiming to fix one — and shipped it in the same edit as an evidence-backed fix, which lent it unearned credibility.
 - [x] **Method note:** enumerating all asserts up front failed (library stripped, `objdump` cannot read this FreeBSD ELF). **`strings` over the .so does list assertion expressions** even without symbols — that is how the `resolution_width` assert was found, and is the technique to use next time.
-- [ ] **REBUILD AND RETEST (USER-RUN).** If it aborts again, the new core names the next precondition; read it with `gdb -batch -ex 'bt'` then disassemble the frame above `__assert` to recover the expression (registers are clobbered by `raise`/`abort`, but the `lea` operands survive).
+- [x] **REBUILD AND RETEST — DONE, Phase 77: it works.** (If a future abort occurs, the new core names the next precondition; read it with `gdb -batch -ex 'bt'` then disassemble the frame above `__assert` to recover the expression (registers are clobbered by `raise`/`abort`, but the `lea` operands survive).
 
 ### Phase 75: Phase 74 crash root-caused and fixed (see DECISIONS_LOG Phase 75)
 
@@ -36,7 +43,7 @@
 - [x] **W4 blank timeout, per the Q2 ruling** — 180 s AC / 60 s battery, configurable, `0` = never. Both hardcoded values replaced by `arm_blank_timer()`, which reads `hw.acpi.acline` **at every arm** so unplugging mid-lock takes effect on the next keystroke. A missing sysctl (desktop, VM) falls through to the AC timeout deliberately.
 - [x] **New `ui { lock { ... } }` config block**, documented in `etc/hikari/hikari.conf`. `blur` takes a boolean *or* an object so disabling and tuning share one key. Format strings are copied, not borrowed — the `ucl_object_t` dies with the parser.
 - [x] **Validation:** 0 warnings across 64 files in both configs; 11/11 new wlroots symbols exported; config parsed with **real libucl** (all 9 keys); blur unit-tested standalone (edges clamped, gradient monotonic, alpha preserved) and clean under **ASan+UBSan** across 6 geometries including 1×1 and radius 999.
-- [ ] **RUNTIME VERIFICATION (USER-RUN).** The capture path cannot be tested here — it needs a live renderer, a real output and a composited scene.
+- [x] **RUNTIME VERIFICATION — DONE, Phase 77.** Confirmed working on hardware after the Phase 75/76 crash fixes. The remaining sub-items below are optional tuning checks, not blockers.
   1. **Lock.** Expect the workspace blurred, with a large clock and date above centre.
   2. **Check the log for `screen_capture:`** — it names which format rung succeeded, or says the fallback was taken.
   3. **Wait past the blank timeout** (180 s on AC by default; try `blank-timeout-ac = 10` to test quickly), then press a key — screen returns.

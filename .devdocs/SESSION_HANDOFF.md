@@ -2,6 +2,45 @@
 
 *Note: Most recent entries are listed at the top.*
 
+## Session Date: 2026-08-22 13:45 -- Phases 75-77: two crashes root-caused, lock screen CONFIRMED WORKING, clock raised
+
+**Timestamp:** 2026-08-22 13:45
+**Current Status:** **The native blurred lock screen with a compositor-drawn clock is delivered and confirmed working on hardware by the user.** W1-W6 are all complete. One cosmetic change (clock raised 1 cm) is implemented and unbuilt.
+
+**Accomplishments:**
+
+* **Phase 75 -- crash 1 root-caused from a core dump.** `hikari.26797.1001.core` gave a clean backtrace to `render_output_offscreen()`; the assertion strings were recovered by disassembling the call site, since `raise`/`abort` clobber the registers but the `lea` operands survive. **`render/allocator/gbm.c:66: assert(format->len > 0)`** -- Phase 74's format ladder used `len = 0, modifiers = NULL` intending "implicit modifier", which is invalid, so it aborted on the first lock attempt before reaching the well-formed LINEAR rungs. Correct spelling is a one-entry list holding `DRM_FORMAT_MOD_INVALID`.
+* **Phase 76 -- crash 2 root-caused, and the real defect found.** `hikari.4102.1001.core` named **`render/drm_format_set.c:144: assert(src->len <= src->capacity)`**: Phase 75 had set `.len = 1` and left `.capacity = 0`. Two crashes, two invariants of the *same hand-constructed* `struct wlr_drm_format`, whose own header documents `capacity` as **"do not use"**. Patching one field per crash was treating symptoms -- the defect was building the struct at all. Now constructed via `wlr_drm_format_set_add()` / `_get()` / `_finish()`, which maintains the invariants itself; no hand-built format or `.capacity` assignment remains anywhere in `src/`.
+* **Phase 76 also reverted a Phase 75 error.** Phase 75's second change -- `wlr_output_transformed_resolution()` to `wlr_output->width/height` -- was **backwards**. The library's own assert `buffer->width == resolution_width && ...` uses wlroots' naming for the *transformed* resolution, so rotation is baked into the rendered buffer. Phase 75 introduced a latent regression for rotated outputs while claiming to fix one, and the unrotated test panel could never have revealed either version as wrong.
+* **Phase 77 -- confirmed working.** The user rebuilt and reported success. **W3 and W4 close, and with them the original Phase 70 request.**
+* **Clock raised by a real centimetre.** `mm_to_logical_pixels()` derives the offset from EDID's `phys_height` against the mode's pixel height, divided by output scale (scene nodes use logical coordinates). A pixel constant would be a different physical distance on every panel. Falls back to the Wayland 96 DPI convention (10 mm = 37 logical px) where EDID reports no size. The existing 40 px indicator clearance is untouched, so this is literally 1 cm higher rather than a re-derived layout.
+
+**Method notes worth keeping:**
+
+* Enumerating a stripped library's assertions by disassembly **failed** -- the available `objdump` cannot read this FreeBSD ELF. **`strings` over the `.so` does list assertion expressions** without symbols, and is how the `resolution_width` assert was found. Reach for that first next time.
+* Crash-to-named-assertion took a few minutes each time, entirely because of the Phase 68 diagnostics work (core dumps, `HIKARI_LOG`, a trustworthy exit status from Phase 69).
+
+**Three lessons, recorded because together they are the real takeaway:**
+1. **A fallback ladder is only as safe as its first rung** -- an assertion in a dependency is not a recoverable failure; it takes the process down before the caller regains control.
+2. **Do not hand-construct a library's structs when it ships a constructor**, especially one whose fields are documented "do not use".
+3. **Never ship speculation in the same edit as an evidence-backed fix** -- the fix lends the guess credibility it has not earned, which is exactly why Phase 75's error survived a full build cycle.
+
+**Modified files:** `src/screen_capture.c` (Phases 75-76), `src/lock_clock.c` (Phase 77). Trackers: `DECISIONS_LOG.md` (Phases 75, 76, 77), `TODOS.md`, `PROGRESS.md`, `BRIEFING.md` (**Remaining Work fully refreshed**), `PLANS.md` (**new workstream status table at item -13**), `SESSION_HANDOFF.md`.
+
+**Next steps -- decisions needed from the user:**
+1. **Configurable clock offset?** Not added (unrequested, AGENTS.md-gated), but every visual tweak currently costs a rebuild + re-login.
+2. **libdrm as an explicit dependency?** Open since Phase 72. Would name the driver (`i915` vs `nvidia-drm`) in the startup log instead of an inferred path -- better FB-3 evidence.
+3. **Approve W7 and/or W8?** W7 = modern screencopy + foreign-toplevel + the portal fix (screen sharing currently resolves no backend at all). W8 = XWayland scene integration -- **X11 windows still render no content**.
+4. **Approve the deferred `forced`-flag removal?** Pure cleanup; F1/F2 are already fixed by the layer trees.
+
+**Next steps -- user-run:**
+* **W0 diagnostic matrix**, still outstanding. **W0-1 is the highest-value single command available** (tests FB-3, may close the eDP-1 blocker open since Phase 19); **W0-6 gates F4/P2-14**.
+* PAM unlocker live verification; Phase 50 touch/gesture checks.
+
+**Known documentation gap:** `share/man/man1/hikari.md` does not document the new `ui { lock { ... } }` block -- `etc/hikari/hikari.conf` does.
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
+
 ## Session Date: 2026-08-22 13:11 -- Phase 74: W3 + W4 executed (the native blurred lock screen with a clock)
 
 **Timestamp:** 2026-08-22 13:11

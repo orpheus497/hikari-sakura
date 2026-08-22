@@ -1,6 +1,6 @@
 # Hikari Project Blueprint
 
-*Last Updated:* 2026-08-13 19:08
+*Last Updated:* 2026-08-22 13:45
 
 ## 1. System Architecture
 
@@ -38,6 +38,7 @@ Hikari organizes its display logic hierarchically:
 
 Hikari delegates the heavy lifting of rendering and Z-ordering to the `wlr_scene` API.
 - Backgrounds, borders, views, and overlays (like the lock indicator or indicator bar) are represented as `wlr_scene_node`s.
+- **Since Phase 73 the scene root holds six named layer trees** — `background`, `bottom`, `views`, `top`, `overlay`, `lock` (bottom-to-top), in `hikari_server.layers`. Nothing may parent itself to `scene->tree` directly. This replaced a flat sibling list whose z-order was maintained by scattered one-shot `raise_to_top()`/`lower_to_bottom()` calls that competed with each other; a raise can no longer escape its layer, and lock mode became a `set_enabled()` toggle rather than a per-view walk. See §12.25a.
 - `output.c` connects the `wlr_scene` to the physical `wlr_output`.
 - Two distinct node strategies are in use: **solid-colour rects** and **cairo-rendered buffers**.
   - `border.c` and `indicator_frame.c` use `wlr_scene_rect_create` — 4 solid-colour rects per frame, no cairo, no pixel buffer.
@@ -972,7 +973,37 @@ These files implement interactive keystroke buffers where the user presses a mod
 
 **`src/lock_indicator.c` (Locker UI):**
 - `hikari_lock_indicator_init()`: Creates a `wlr_scene_buffer` overlay.
-- `hikari_lock_indicator_damage()`: Re-draws the visual state (`HIKARI_LOCK_INDICATOR_TYPING`, `VERIFYING`, `DENIED`) as concentric circles using CPU-bound `cairo` arcs.
+- `hikari_lock_indicator_damage()`: Re-draws the visual state (`HIKARI_LOCK_INDICATOR_TYPING`, `VERIFYING`, `DENIED`) as concentric circles using CPU-bound `cairo` arcs. Raises itself to the top of the lock layer, which — since Phase 73 — is scoped and no longer competes with the bar.
+
+### 12.25a The Lock Screen (Phases 73–77)
+
+*Added 2026-08-22. The lock screen became a compositor-drawn surface in its own right; this records how the pieces fit, since it now spans six files.*
+
+**The boundary is structural, not a flag.** `override_visibility()` disables the `bottom`/`views`/`top`/`overlay` scene layers (§1, Rendering) and wlr_scene disables every child of a disabled node, so views, the top bar, indicator overlays and every layer-shell surface go dark together. Nothing a client does afterwards can put a window back on screen — a newly mapped window parents into the disabled view layer and is invisible for the same reason. `background` is deliberately left enabled so the wallpaper shows through where no backdrop was captured.
+
+Views marked `public` are reparented onto `layers.lock` **and explicitly enabled**, which is not redundant with the hidden-flag flip: a public view parked on another sheet has a *disabled* scene node the flag never touched. Before Phase 73 that was exactly why a `public` clock never appeared.
+
+**Ordering at lock time is load-bearing** (`hikari_lock_mode_enter`):
+1. capture every output — *before* anything is hidden, or it photographs an empty screen;
+2. blur each capture;
+3. attach backdrops to `layers.lock`, lowered to the bottom;
+4. `override_visibility()` — disable the desktop layers;
+5. reparent public views in;
+6. create the clock.
+
+All six run before returning to the event loop, so no frame is ever committed mid-transition.
+
+**`src/screen_capture.c`** — renders an output off-screen. wlroots has no compositor-facing screenshot call (screencopy serves clients), so this supplies its own swapchain to `wlr_scene_output_build_state()` and never commits the resulting state. Two hard-won constraints:
+- The format **must** be built with `wlr_drm_format_set_add()`, not by filling in a `struct wlr_drm_format`. Hand-construction violated `format->len > 0` (`render/allocator/gbm.c:66`) and then `src->len <= src->capacity` (`render/drm_format_set.c:144`), aborting the compositor twice. `DRM_FORMAT_MOD_INVALID` in a one-entry list is how implicit modifiers are requested; an empty list is simply invalid.
+- The swapchain is sized by `wlr_output_transformed_resolution()`, because rotation is baked into the rendered buffer rather than applied at scanout.
+- `wlr_output_update_needs_frame()` is called first: `build_state()` tracks damage, and an idle desktop has none, so without it the capture works only while something is animating.
+- Readback uses `wlr_texture_read_pixels()` (glReadPixels-backed), which never needs a CPU-mappable buffer — see §13 FB-2. Alpha is forced opaque afterwards, since XRGB captures carry none and a 0 would make the backdrop invisible.
+
+**`src/blur.c`** — three-pass separable box blur with a running sum, so cost is independent of radius. Edges are clamped, not wrapped (bleeds one screen edge into the other) or zero-padded (vignettes). Runs once per lock, not per frame.
+
+**`src/lock_clock.c`** — cairo/Pango per output into the shared `hikari_buffer_create_argb8888()`. Ticks on the **minute boundary** rather than every 60 s, because a fixed interval drifts against the wall clock. Drawn with a soft shadow: it sits over a photograph of the user's own desktop, whose brightness is unknown. Vertical placement uses `mm_to_logical_pixels()` so offsets are physical distances rather than pixel counts that shrink with density.
+
+**`src/lock_config.c`** — the `ui { lock { … } }` block, plus `hikari_lock_config_blank_timeout()`, which reads `hw.acpi.acline` **at every timer arm** so unplugging mains mid-lock takes effect on the next keystroke. A missing sysctl (desktop, VM) falls through to the AC value deliberately.
 
 ### 12.26 Server-Side Decorations (`src/decoration.c`)
 
