@@ -525,7 +525,7 @@
 
 ### Next Steps
 
-1. **Unblock the relink:** `sudo chown orpheus497 /home/orpheus497/Projects/hikari/src/main.o /home/orpheus497/Projects/hikari/hikari` (or clean and rebuild as yourself). Then `make DEBUG=YES` to get a fresh debug binary.
+1. **Unblock the relink:** `sudo chown "$USER" "$PWD/src/main.o" "$PWD/hikari"` (or clean and rebuild as yourself). Then `make DEBUG=YES` to get a fresh debug binary.
 2. **Set the Phase 28 breakpoint and launch (nested config):** Use `hikari (nested, inherits session)` to confirm `request_state_handler` fires with `!event->state->enabled && !output->enabled` and returns early — then continue and verify no `"Failed to disable CRTC"` message appears.
 3. **Native VT test:** Once nested test passes, boot on the bare VT to confirm the eDP-1 swapchain error (if any) now surfaces cleanly from the Phase 25 `fprintf` in `hikari_output_init`.
 
