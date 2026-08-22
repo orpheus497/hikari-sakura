@@ -1,0 +1,92 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "type": "shell",
+            "label": "make: build",
+            "command": "make",
+            "args": [],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": ["$gcc"],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "detail": "Default release build (hikari + hikari-unlocker). NDEBUG set, no debug symbols."
+        },
+        {
+            "type": "shell",
+            "label": "make: build (debug)",
+            "command": "make",
+            "args": ["DEBUG=YES"],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": ["$gcc"],
+            "group": "build",
+            "detail": "Debug build (-g -O0, assertions enabled). ASan excluded — incompatible with wlroots GBM/DRM mmap paths. Used by debugger launch configs."
+        },
+        {
+            "type": "shell",
+            "label": "make: build (debug + ASan)",
+            "command": "make",
+            "args": ["DEBUG=YES", "ASAN=YES"],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": ["$gcc"],
+            "group": "build",
+            "detail": "Debug build with AddressSanitizer. USE ONLY for non-graphics code paths (e.g. config parser, action dispatch). Will crash in DRM/GBM context."
+        },
+        {
+            "type": "shell",
+            "label": "make: build (full feature, debug)",
+            "command": "make",
+            "args": ["WITH_ALL=YES", "DEBUG=YES"],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": ["$gcc"],
+            "group": "build",
+            "detail": "Full-feature debug build: XWayland, screencopy, gamma control, layer shell, virtual input. No ASan."
+        },
+        {
+            "type": "shell",
+            "label": "make: clean",
+            "command": "make",
+            "args": ["clean"],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": [],
+            "group": "build"
+        },
+        {
+            // TC-FORMAT-01: verify source formatting without modifying files.
+            "type": "shell",
+            "label": "clang-format: check",
+            "command": "clang-format",
+            "args": ["--dry-run", "--Werror", "*.c", "src/*.c", "include/hikari/*.h"],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": [],
+            "group": "test",
+            "detail": "TC-FORMAT-01: verify .clang-format compliance without modifying files."
+        },
+        {
+            "type": "shell",
+            "label": "clang-format: apply",
+            "command": "clang-format",
+            "args": ["-i", "*.c", "src/*.c", "include/hikari/*.h"],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": [],
+            "group": "none",
+            "detail": "Reformat all sources and headers in place per .clang-format."
+        }
+    ]
+}

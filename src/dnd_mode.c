@@ -8,7 +8,7 @@
 #include <hikari/binding.h>
 #include <hikari/configuration.h>
 #include <hikari/keyboard.h>
-#include <hikari/renderer.h>
+
 #include <hikari/server.h>
 #include <hikari/view.h>
 
@@ -18,9 +18,10 @@ cancel(void)
   wlr_seat_pointer_clear_focus(hikari_server.seat);
 }
 
+// [COMMENT] Function purpose: Handle keyboard events during drag-and-drop mode.
 static void
 key_handler(
-    struct hikari_keyboard *keyboard, struct wlr_event_keyboard_key *event)
+    struct hikari_keyboard *keyboard, struct wlr_keyboard_key_event *event)
 {
   if (event->state == WL_KEYBOARD_KEY_STATE_RELEASED) {
     hikari_server_enter_normal_mode(NULL);
@@ -53,25 +54,27 @@ cursor_move(uint32_t time_msec)
   }
 }
 
+// [COMMENT] Function purpose: Handle pointer button events during drag-and-drop mode.
 static void
 button_handler(
-    struct hikari_cursor *cursor, struct wlr_event_pointer_button *event)
+    struct hikari_cursor *cursor, struct wlr_pointer_button_event *event)
 {
   wlr_seat_pointer_notify_button(
       hikari_server.seat, event->time_msec, event->button, event->state);
 
-  if (event->state == WLR_BUTTON_RELEASED) {
+  if (event->state == WL_POINTER_BUTTON_STATE_RELEASED) {
     hikari_server_enter_normal_mode(NULL);
   }
 }
 
+// [COMMENT] Function purpose: Initialize drag-and-drop mode state and handlers.
 void
 hikari_dnd_mode_init(struct hikari_dnd_mode *dnd_mode)
 {
   dnd_mode->mode.key_handler = key_handler;
   dnd_mode->mode.button_handler = button_handler;
   dnd_mode->mode.modifiers_handler = modifiers_handler;
-  dnd_mode->mode.render = hikari_renderer_dnd_mode;
+
   dnd_mode->mode.cancel = cancel;
   dnd_mode->mode.cursor_move = cursor_move;
 }

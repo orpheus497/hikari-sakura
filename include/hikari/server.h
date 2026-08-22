@@ -1,5 +1,11 @@
+/* [COMMENT] Script function and purpose: Defines the main hikari_server struct
+ * and lifecycle function prototypes for the Wayland compositor. */
+
 #if !defined(HIKARI_SERVER_H)
 #define HIKARI_SERVER_H
+
+#include <stdbool.h>
+#include <stdint.h>
 
 #include <wayland-server-core.h>
 #include <wayland-util.h>
@@ -9,6 +15,7 @@
 #include <wlr/types/wlr_virtual_pointer_v1.h>
 #endif
 
+#include <hikari/bar.h>
 #include <hikari/configuration.h>
 #include <hikari/cursor.h>
 #include <hikari/dnd_mode.h>
@@ -34,7 +41,10 @@ struct wlr_input_device;
 struct hikari_output;
 struct hikari_group;
 
+/* [COMMENT] Function purpose: Represents the central hikari Wayland compositor
+ * server instance, holding display, backend, mode, and view layout state. */
 struct hikari_server {
+
   bool cycling;
 #ifndef NDEBUG
   bool track_damage;
@@ -44,14 +54,24 @@ struct hikari_server {
   char *config_path;
 
   struct wl_event_source *shutdown_timer;
+  struct wl_event_source *sigterm_source;
+  struct wl_event_source *sigint_source;
 
   struct hikari_indicator indicator;
 
   struct wl_display *display;
   struct wl_event_loop *event_loop;
   struct wlr_backend *backend;
+  struct wlr_session *session;
+  bool session_active;
+  struct wl_listener session_active_listener;
+  /* Telemetry feed for the native top bar. One helper
+  process serves every output's bar. */
+  struct hikari_topbar_source topbar;
   struct wlr_renderer *renderer;
   struct wlr_allocator *allocator;
+  struct wlr_scene *scene;
+  struct wlr_scene_output_layout *scene_layout;
   struct wlr_xdg_output_manager_v1 *output_manager;
   struct wlr_data_device_manager *data_device_manager;
 
@@ -60,7 +80,7 @@ struct hikari_server {
 
   struct wl_listener new_output;
   struct wl_listener new_input;
-  struct wl_listener new_xdg_surface;
+  struct wl_listener new_toplevel;
   struct wl_listener request_set_primary_selection;
   struct wl_listener request_set_selection;
   struct wl_listener output_layout_change;
@@ -75,6 +95,7 @@ struct hikari_server {
 
 #ifdef HAVE_XWAYLAND
   struct wl_listener new_xwayland_surface;
+  struct wl_listener xwayland_ready;
 
   struct wlr_xwayland *xwayland;
 #endif
@@ -90,9 +111,18 @@ struct hikari_server {
   struct wlr_compositor *compositor;
   struct wlr_server_decoration_manager *decoration_manager;
   struct wlr_xdg_decoration_manager_v1 *xdg_decoration_manager;
+  struct wlr_pointer_gestures_v1 *pointer_gestures;
 
   struct wlr_xdg_shell *xdg_shell;
   struct wlr_layer_shell_v1 *layer_shell;
+
+  struct wlr_xdg_activation_v1 *xdg_activation;
+  struct wl_listener request_activate;
+
+  struct wlr_idle_inhibit_manager_v1 *idle_inhibit_manager;
+  struct wlr_idle_notifier_v1 *idle_notifier;
+  struct wl_listener new_idle_inhibitor;
+  int idle_inhibitor_count;
 
   struct wlr_output_layout *output_layout;
   struct wlr_seat *seat;
@@ -104,11 +134,14 @@ struct hikari_server {
   struct wl_list pointers;
   struct wl_list keyboards;
   struct wl_list switches;
+  struct wl_list touches;
   struct wl_list outputs;
 
   struct wl_list groups;
   struct wl_list visible_groups;
   struct wl_list visible_views;
+
+  struct wl_list toplevels;
 
   struct hikari_mode *mode;
 
@@ -133,6 +166,18 @@ struct hikari_server {
 };
 
 extern struct hikari_server hikari_server;
+
+#ifdef HAVE_XWAYLAND
+struct wlr_xwayland_surface;
+
+/* Function purpose: Wrap an X11 surface in the hikari view type matching its
+current override_redirect flag. Called for every new X11 surface, and again by
+either view type's set_override_redirect handler when a client flips the flag
+after creation. */
+void
+hikari_server_adopt_xwayland_surface(
+    struct wlr_xwayland_surface *wlr_xwayland_surface);
+#endif
 
 static inline bool
 hikari_server_is_indicating(void)
@@ -161,6 +206,9 @@ hikari_server_unset_cycling(void)
 void
 hikari_server_migrate_focus_view(
     struct hikari_output *output, double lx, double ly, bool center);
+
+struct wlr_buffer *
+hikari_server_create_argb8888_buffer(int width, int height, unsigned char *data, int stride);
 
 void
 hikari_server_prepare_privileged(void);

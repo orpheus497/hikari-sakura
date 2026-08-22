@@ -1,7 +1,11 @@
+// [COMMENT] Script function and purpose: Virtual desktop sheet structures, visibility rules, and layout application.
 #include <hikari/sheet.h>
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <assert.h>
+#include <stdint.h>
+#include <stdbool.h>
 
 #include <hikari/configuration.h>
 #include <hikari/group.h>
@@ -10,6 +14,7 @@
 #include <hikari/split.h>
 #include <hikari/view.h>
 
+// [COMMENT] Function purpose: Initializes a hikari_sheet structure with its workspace association and index.
 void
 hikari_sheet_init(
     struct hikari_sheet *sheet, int nr, struct hikari_workspace *workspace)
@@ -24,6 +29,7 @@ hikari_sheet_init(
   sheet->layout = NULL;
 }
 
+// [COMMENT] Function purpose: Scans for the next tileable view in the sheet's view list.
 static struct hikari_view *
 scan_next_tileable_view(struct hikari_view *view)
 {
@@ -43,6 +49,7 @@ scan_next_tileable_view(struct hikari_view *view)
   return NULL;
 }
 
+// [COMMENT] Function purpose: Returns the first tileable view in the given sheet, ensuring it is visible.
 struct hikari_view *
 hikari_sheet_first_tileable_view(struct hikari_sheet *sheet)
 {
@@ -65,6 +72,7 @@ hikari_sheet_first_tileable_view(struct hikari_sheet *sheet)
   return NULL;
 }
 
+// [COMMENT] Function purpose: Counts the total number of tileable views starting from the given view.
 static int
 tileable_views(struct hikari_view *view)
 {
@@ -396,6 +404,7 @@ raise_floating(struct hikari_sheet *sheet)
   }
 }
 
+// [COMMENT] Function purpose: Applies a layout split to the given sheet, updating geometry and floating states.
 void
 hikari_sheet_apply_split(struct hikari_sheet *sheet, struct hikari_split *split)
 {
@@ -430,6 +439,7 @@ hikari_sheet_apply_split(struct hikari_sheet *sheet, struct hikari_split *split)
   raise_floating(sheet);
 }
 
+// [COMMENT] Function purpose: Determines if a sheet is currently visible on its workspace.
 bool
 hikari_sheet_is_visible(struct hikari_sheet *sheet)
 {
@@ -453,24 +463,30 @@ hikari_sheet_is_visible(struct hikari_sheet *sheet)
     }                                                                          \
   }
 
+
+
+// [COMMENT] Function purpose: Makes all views in a sheet visible.
 void
 hikari_sheet_show_all(struct hikari_sheet *sheet)
 {
   SHOW_VIEWS(true);
 }
 
+// [COMMENT] Function purpose: Evaluates and makes non-invisible views in a sheet visible.
 void
 hikari_sheet_show(struct hikari_sheet *sheet)
 {
   SHOW_VIEWS(!hikari_view_is_invisible(view));
 }
 
+// [COMMENT] Function purpose: Makes all views belonging to a specific group visible within the sheet.
 void
 hikari_sheet_show_group(struct hikari_sheet *sheet, struct hikari_group *group)
 {
   SHOW_VIEWS(view->group == group);
 }
 
+// [COMMENT] Function purpose: Exposes and makes invisible views visible within the sheet.
 void
 hikari_sheet_show_invisible(struct hikari_sheet *sheet)
 {

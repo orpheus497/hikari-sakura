@@ -1,11 +1,16 @@
+/* [COMMENT] Script function and purpose: Abstract view interface definitions and view management operations for windows and surfaces in hikari. */
+
 #if !defined(HIKARI_VIEW_H)
 #define HIKARI_VIEW_H
 
 #include <assert.h>
 
+#include <stdbool.h>
+#include <stdint.h>
+
 #include <wayland-util.h>
-#include <wlr/types/wlr_output_damage.h>
-#include <wlr/types/wlr_surface.h>
+#include <wlr/types/wlr_compositor.h>
+#include <wlr/types/wlr_output.h>
 #include <wlr/util/box.h>
 
 #include <hikari/border.h>
@@ -21,27 +26,31 @@
 #include <hikari/workspace.h>
 
 struct hikari_mark;
-struct hikari_renderer;
 
 struct hikari_view;
 
+/* Manages client-side vs server-side window decoration bindings for a view. */
 struct hikari_view_decoration {
   struct wlr_server_decoration *wlr_decoration;
   struct hikari_view *view;
   struct wl_listener mode;
+  struct wl_listener destroy;
 };
 
+/* Base representation of a managed window view, encapsulating surface state, geometry, sheet, group, mark, and tile associations. */
 struct hikari_view {
+
   struct hikari_node node;
   struct hikari_sheet *sheet;
   struct hikari_group *group;
   struct hikari_mark *mark;
   struct hikari_output *output;
   struct wlr_surface *surface;
+  struct wlr_scene_node *scene_node;
 
   bool use_csd;
   bool child;
-  unsigned int flags;
+  uint16_t flags;
   char *title;
   char *id;
   struct hikari_border border;
@@ -86,12 +95,22 @@ struct hikari_view_child {
 
   struct wl_listener commit;
   struct wl_listener new_subsurface;
+
+  /* [COMMENT] Action purpose: Concrete-type teardown, set by whichever
+  initializer (hikari_view_subsurface_init, xdg_popup_create) embeds this
+  struct as its first member. hikari_view_unmap() walks every entry in
+  view->children generically through this pointer instead of assuming every
+  entry is a hikari_view_subsurface -- hikari_xdg_popup is also linked into
+  the same list via this shared prefix, and its layout diverges after this
+  point, so a hardcoded cast there was reading/freeing the wrong fields. */
+  void (*fini)(struct hikari_view_child *);
 };
 
 void
 hikari_view_child_init(struct hikari_view_child *view_child,
     struct hikari_view *parent,
-    struct wlr_surface *surface);
+    struct wlr_surface *surface,
+    void (*fini)(struct hikari_view_child *));
 
 void
 hikari_view_child_fini(struct hikari_view_child *view_child);
@@ -113,7 +132,7 @@ void
 hikari_view_subsurface_fini(struct hikari_view_subsurface *view_subsurface);
 
 #define FLAG(name, shift)                                                      \
-  static const unsigned long hikari_view_##name##_flag = 1UL << shift;         \
+  static const uint16_t hikari_view_##name##_flag = (uint16_t)(1U << (shift)); \
                                                                                \
   static inline bool hikari_view_is_##name(struct hikari_view *view)           \
   {                                                                            \
@@ -397,6 +416,10 @@ hikari_view_is_tiling(struct hikari_view *view)
 static inline void
 hikari_view_damage_border(struct hikari_view *view)
 {
+  if (view->output == NULL) {
+    return;
+  }
+
   struct wlr_box *geometry = hikari_view_border_geometry(view);
 
   hikari_output_add_damage(view->output, geometry);

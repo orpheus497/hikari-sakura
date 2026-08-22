@@ -3,27 +3,33 @@
 
 #include <assert.h>
 
+#include <stdbool.h>
+
 #include <wayland-server-core.h>
 #include <wayland-util.h>
 
-#include <wlr/types/wlr_output_damage.h>
-#include <wlr/types/wlr_surface.h>
+#include <wlr/types/wlr_output.h>
+#include <wlr/types/wlr_compositor.h>
+#include <wlr/types/wlr_scene.h>
 
+#include <hikari/bar.h>
+#include <hikari/server.h>
 #include <hikari/output_config.h>
 
-struct hikari_renderer;
+
 
 struct hikari_output {
+  struct hikari_server *server;
   struct wlr_output *wlr_output;
-  struct wlr_output_damage *damage;
+  struct wlr_scene_output *scene_output;
+  struct wlr_scene_buffer *lock_indicator_node;
   struct hikari_workspace *workspace;
 
   bool enabled;
 
-  struct wl_listener damage_frame;
+  struct wl_listener frame;
+  struct wl_listener request_state;
   struct wl_listener destroy;
-  struct wl_listener damage_destroy;
-  /* struct wl_listener mode; */
 
 #ifdef HAVE_LAYERSHELL
   struct wl_list layers[4];
@@ -38,7 +44,11 @@ struct hikari_output {
   struct wlr_box geometry;
   struct wlr_box usable_area;
 
-  struct wlr_texture *background;
+  struct wlr_scene_node *background;
+
+  /* This output's native top bar. Reserves space out
+  of usable_area so tiled views never sit underneath it. */
+  struct hikari_bar bar;
 };
 
 void
@@ -75,39 +85,48 @@ void
 hikari_output_rearrange_xwayland_views(struct hikari_output *output);
 #endif
 
+/* [COMMENT] Function purpose: Schedule a frame for damage on an output.
+Guards instead of asserting: NDEBUG erases asserts, and view->output is
+legitimately NULL before hikari_view_configure. */
 static inline void
 hikari_output_add_damage(struct hikari_output *output, struct wlr_box *region)
 {
-  assert(output != NULL);
-  assert(region != NULL);
+  if (output == NULL || region == NULL) {
+    return;
+  }
 
-  if (output->enabled) {
-    wlr_output_damage_add_box(output->damage, region);
+  if (output->enabled && output->scene_output != NULL) {
+    wlr_output_schedule_frame(output->wlr_output);
   }
 }
 
+/* [COMMENT] Function purpose: Schedule a frame on an output, if it is usable. */
 static inline void
 hikari_output_schedule_frame(struct hikari_output *output)
 {
-  assert(output != NULL);
-  assert(output->enabled);
+  if (output == NULL || !output->enabled || output->scene_output == NULL) {
+    return;
+  }
 
   wlr_output_schedule_frame(output->wlr_output);
 }
 
+// [COMMENT] Function purpose: Request a frame for an output based on surface damage, checking for enablement and transitioning states.
 static inline void
 hikari_output_add_effective_surface_damage(
     struct hikari_output *output, struct wlr_surface *surface, int x, int y)
 {
-  assert(surface != NULL);
-  assert(output->enabled);
+  // [COMMENT] Action purpose: Subsurface commits reach here before the parent
+  // view is configured onto an output, so output may legitimately be NULL.
+  if (output == NULL || surface == NULL) {
+    return;
+  }
 
-  pixman_region32_t damage;
-  pixman_region32_init(&damage);
-  wlr_surface_get_effective_damage(surface, &damage);
-  pixman_region32_translate(&damage, x, y);
-  wlr_output_damage_add(output->damage, &damage);
-  pixman_region32_fini(&damage);
+  if (!output->enabled || output->scene_output == NULL) {
+    return;
+  }
+
+  wlr_output_schedule_frame(output->wlr_output);
 }
 
 #endif

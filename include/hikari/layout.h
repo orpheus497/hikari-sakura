@@ -1,6 +1,8 @@
 #if !defined(HIKARI_LAYOUT_H)
 #define HIKARI_LAYOUT_H
 
+#include <stdbool.h>
+
 #include <wayland-util.h>
 
 struct hikari_split;

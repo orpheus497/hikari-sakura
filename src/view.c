@@ -4,6 +4,8 @@
 #include <string.h>
 
 #include <wlr/types/wlr_cursor.h>
+#include <wlr/types/wlr_compositor.h>
+#include <wlr/types/wlr_subcompositor.h>
 
 #include <hikari/color.h>
 #include <hikari/configuration.h>
@@ -46,6 +48,8 @@ VIEW(first, next)
 VIEW(last, prev)
 #undef VIEW
 
+
+
 static void
 move_to_top(struct hikari_view *view)
 {
@@ -62,25 +66,77 @@ move_to_top(struct hikari_view *view)
   wl_list_insert(&view->output->views, &view->output_views);
 }
 
+/* Function purpose: Stacking-order counterpart of move_to_top() -- moves the
+view to the back of the sheet, group and output lists. Paired with
+view_link_visible_at(..., false) by hikari_view_lower(), mirroring how
+move_to_top() pairs with view_link_visible() in raise_view(). */
 static void
-place_visibly_above(
-    struct hikari_view *view, struct hikari_workspace *workspace)
+move_to_bottom(struct hikari_view *view)
+{
+  assert(view != NULL);
+  assert(hikari_view_is_mapped(view));
+
+  wl_list_remove(&view->sheet_views);
+  wl_list_insert(view->sheet->views.prev, &view->sheet_views);
+
+  wl_list_remove(&view->group_views);
+  wl_list_insert(view->group->views.prev, &view->group_views);
+
+  wl_list_remove(&view->output_views);
+  wl_list_insert(view->output->views.prev, &view->output_views);
+}
+
+/* Function purpose: Single writer for the "this view is visible" linkage. Links
+the view into -- or re-links it to either end of -- every list that represents
+visibility: hikari_server.visible_views, its group's visible_views, the group's
+own server-visibility aggregate, and the workspace's views. `front` selects
+raise (true) or lower (false) ordering.
+
+Because each link is removed before being inserted, and every link is kept in a
+valid state by hikari_view_init() and view_unlink_visible(), this is idempotent
+with respect to membership: calling it on an already-visible view merely restacks
+it. That is why one function serves "become visible", "raise" and "lower" without
+separate code paths. Nothing else in this file may link these four lists -- see
+view_unlink_visible() for the inverse, and DECISIONS_LOG Phase 55 for why the
+previously-split entry path (increase_group_visiblity + place_visibly_above) and
+hikari_view_lower()'s separate inline copy were collapsed into this one writer. */
+static void
+view_link_visible_at(struct hikari_view *view,
+    struct hikari_workspace *workspace,
+    bool front)
 {
   assert(hikari_view_is_forced(view) ? hikari_view_is_hidden(view)
                                      : !hikari_view_is_hidden(view));
 
+  struct wl_list *visible_views = &hikari_server.visible_views;
+  struct wl_list *group_visible_views = &view->group->visible_views;
+  struct wl_list *visible_groups = &hikari_server.visible_groups;
+  struct wl_list *workspace_views = &workspace->views;
+
+  /* [COMMENT] Action purpose: Each list's tail anchor is read after that list's
+  own removal, never before -- removing a view that is currently last would
+  otherwise leave the cached `prev` pointing at the view being re-inserted. */
   wl_list_remove(&view->visible_server_views);
-  wl_list_insert(&hikari_server.visible_views, &view->visible_server_views);
+  wl_list_insert(front ? visible_views : visible_views->prev,
+      &view->visible_server_views);
 
   wl_list_remove(&view->visible_group_views);
-  wl_list_insert(&view->group->visible_views, &view->visible_group_views);
+  wl_list_insert(front ? group_visible_views : group_visible_views->prev,
+      &view->visible_group_views);
 
   wl_list_remove(&view->group->visible_server_groups);
-  wl_list_insert(
-      &hikari_server.visible_groups, &view->group->visible_server_groups);
+  wl_list_insert(front ? visible_groups : visible_groups->prev,
+      &view->group->visible_server_groups);
 
   wl_list_remove(&view->workspace_views);
-  wl_list_insert(&workspace->views, &view->workspace_views);
+  wl_list_insert(front ? workspace_views : workspace_views->prev,
+      &view->workspace_views);
+}
+
+static void
+view_link_visible(struct hikari_view *view, struct hikari_workspace *workspace)
+{
+  view_link_visible_at(view, workspace, true);
 }
 
 static void
@@ -89,7 +145,7 @@ raise_view(struct hikari_view *view)
   assert(view != NULL);
 
   move_to_top(view);
-  place_visibly_above(view, view->sheet->workspace);
+  view_link_visible(view, view->sheet->workspace);
 }
 
 static void
@@ -106,7 +162,7 @@ move_view_constrained(
 {
   if (!hikari_view_is_hidden(view)) {
     hikari_view_damage_whole(view);
-    hikari_indicator_damage(&hikari_server.indicator, view);
+    hikari_indicator_position(&hikari_server.indicator, view);
   }
 
   hikari_geometry_constrain_relative(
@@ -159,42 +215,52 @@ move_view(struct hikari_view *view, struct wlr_box *geometry, int x, int y)
 
   if (!hikari_view_is_hidden(view)) {
     hikari_view_damage_whole(view);
-    hikari_indicator_damage(&hikari_server.indicator, view);
+    hikari_indicator_position(&hikari_server.indicator, view);
   }
 }
 
+/* Function purpose: Unlink a view from its group's visibility bookkeeping only
+-- its group visible_views membership and, once that group has no visible views
+left, the group's server-visibility aggregate. Deliberately does NOT touch the
+hidden flag or the workspace/server lists, because it serves two different
+callers: view_unlink_visible() below, where it is one step of a full transition,
+and remove_from_group(), which reassigns a view between groups while the view
+remains visible throughout. */
 static void
-increase_group_visiblity(struct hikari_view *view)
-{
-  assert(hikari_view_is_forced(view) ? hikari_view_is_hidden(view)
-                                     : !hikari_view_is_hidden(view));
-
-  struct hikari_group *group = view->group;
-
-  if (wl_list_empty(&group->visible_views)) {
-    wl_list_insert(
-        &hikari_server.visible_groups, &group->visible_server_groups);
-  }
-
-  wl_list_init(&view->visible_group_views);
-}
-
-static void
-decrease_group_visibility(struct hikari_view *view)
+view_unlink_group_visible(struct hikari_view *view)
 {
   struct hikari_group *group = view->group;
 
   wl_list_remove(&view->visible_group_views);
+  wl_list_init(&view->visible_group_views);
 
+  /* [COMMENT] Action purpose: Drop the group's server-visibility aggregate only
+  once this group's last visible view has gone. Checked after the removal above,
+  mirroring how view_link_visible() re-establishes the aggregate on the way in.
+  Re-initialised so hikari_group_fini()'s unconditional removal stays safe. */
   if (wl_list_empty(&group->visible_views)) {
     wl_list_remove(&group->visible_server_groups);
+    wl_list_init(&group->visible_server_groups);
   }
 }
 
+/* Function purpose: Single writer for leaving the visible state -- the exact
+inverse of view_link_visible(). Unlinks the view from all four visibility lists,
+drops the group's server-visibility aggregate once that group has no visible
+views left, and sets the hidden flag. Every link is re-initialised immediately
+after removal so a subsequent removal is a harmless no-op rather than a NULL
+dereference (libwayland's wl_list_remove leaves both pointers NULL).
+
+Nothing else in this file may unlink these lists. The previous arrangement --
+where the hidden flag could be set without performing the unlink -- is what
+allowed a view to be freed while still linked into three lists, and its group to
+be freed while still linked into hikari_server.visible_groups. Because this
+function sets the flag itself, the flag can no longer diverge from the linkage.
+See DECISIONS_LOG Phase 55. */
 static void
-hide(struct hikari_view *view)
+view_unlink_visible(struct hikari_view *view)
 {
-  decrease_group_visibility(view);
+  view_unlink_group_visible(view);
 
   wl_list_remove(&view->workspace_views);
   wl_list_init(&view->workspace_views);
@@ -214,6 +280,15 @@ detach_from_group(struct hikari_view *view)
   wl_list_init(&view->group_views);
 
   if (wl_list_empty(&group->views)) {
+    /* [COMMENT] Action purpose: Make the group-lifetime invariant explicit and
+    checked. A group with no views can have no visible views, so by the time it
+    is freed its visible_views list must already be empty -- otherwise the freed
+    group is still referenced from hikari_server.visible_groups and from the
+    visible_group_views link of whatever view is still listed, which is walked
+    on every focus change. This invariant was previously unwritten and
+    maintained by entirely separate functions. See DECISIONS_LOG Phase 55. */
+    assert(wl_list_empty(&group->visible_views));
+
     hikari_group_fini(group);
     hikari_free(group);
   }
@@ -224,8 +299,16 @@ remove_from_group(struct hikari_view *view)
 {
   assert(!hikari_view_is_hidden(view));
 
+  /* [COMMENT] Action purpose: Drop this view from the old group's visibility
+  bookkeeping before its membership is dropped -- detach_from_group() may free
+  the group, and doing so while this view is still listed in
+  group->visible_views leaves freed memory reachable from
+  hikari_server.visible_groups. Only the group-scoped unlink is used: the view
+  stays visible and keeps its workspace/server list membership and its hidden
+  flag, because the caller (hikari_view_group) is reassigning it to another
+  group, not hiding it. */
   if (!hikari_view_is_hidden(view)) {
-    decrease_group_visibility(view);
+    view_unlink_group_visible(view);
   }
 
   detach_from_group(view);
@@ -286,7 +369,7 @@ commit_pending_geometry(
 {
   hikari_view_refresh_geometry(view, pending_geometry);
 
-  hikari_indicator_damage(&hikari_server.indicator, view);
+  hikari_indicator_position(&hikari_server.indicator, view);
   hikari_view_damage_whole(view);
 }
 
@@ -331,10 +414,14 @@ commit_pending_operation(
   }
 }
 
+// [COMMENT] Function purpose: Handle resetting view state operations.
 static void
 commit_reset(struct hikari_view *view, struct hikari_operation *operation)
 {
-  hikari_indicator_damage(&hikari_server.indicator, view);
+  // [COMMENT] Action purpose: Skip indicator repositioning for hidden views.
+  if (!hikari_view_is_hidden(view)) {
+    hikari_indicator_position(&hikari_server.indicator, view);
+  }
 
   if (hikari_view_is_tiled(view)) {
     assert(!hikari_tile_is_attached(view->tile));
@@ -413,17 +500,35 @@ hikari_view_init(
 #if !defined(NDEBUG)
   printf("VIEW INIT %p\n", view);
 #endif
-  view->flags = hikari_view_hidden_flag;
+  view->flags = 0;
+  hikari_view_set_hidden(view);
+  memset(&view->border, 0, sizeof(struct hikari_border));
   view->border.state = HIKARI_BORDER_INACTIVE;
   view->sheet = NULL;
   view->mark = NULL;
   view->surface = NULL;
   view->maximized_state = NULL;
-  view->output = NULL;
+  /* [COMMENT] Action purpose: Seed the output from the workspace the view is
+  being created on, rather than leaving it NULL until hikari_view_configure()
+  runs. Both first_map() paths (xdg and xwayland) call
+  hikari_view_refresh_geometry() BEFORE hikari_view_configure(), and that
+  function positions the scene node against view->output->geometry. Leaving
+  this NULL made every window creation dereference a NULL output. Seeding it
+  here also means the first refresh positions the node correctly instead of
+  being skipped; hikari_view_configure() may still reassign it afterwards when
+  view config rules select a different output. */
+  view->output = workspace != NULL ? workspace->output : NULL;
   view->group = NULL;
   view->title = NULL;
-  view->tile = NULL;
   view->id = NULL;
+  view->tile = NULL;
+  view->decoration.wlr_decoration = NULL;
+  /* [COMMENT] Action purpose: Explicitly null the scene node. The containing
+  hikari_xdg_view / hikari_xwayland_view structs are allocated with
+  hikari_malloc, which does not zero memory, and show/hide/geometry-refresh
+  guard on `scene_node != NULL`. Leaving it indeterminate lets uninitialised
+  garbage pass those guards and be dereferenced as a scene node. */
+  view->scene_node = NULL;
   view->use_csd = false;
   view->child = child;
   view->current_geometry = &view->geometry;
@@ -432,6 +537,21 @@ hikari_view_init(
   hikari_view_unset_dirty(view);
   view->pending_operation.tile = NULL;
 
+  /* [COMMENT] Action purpose: Initialise every list link this view can ever be
+  linked through, not only children. The containing hikari_xdg_view /
+  hikari_xwayland_view structs are allocated with hikari_malloc, which does not
+  zero, so any link left untouched here holds indeterminate garbage until
+  something first inserts it -- while hikari_view_fini() and the teardown paths
+  call wl_list_remove() on these links unconditionally. Initialising all seven
+  makes every later removal a structural no-op on an unlinked view, instead of
+  depending on an unrelated NULL-pointer guard elsewhere happening to skip it.
+  See DECISIONS_LOG Phase 55. */
+  wl_list_init(&view->output_views);
+  wl_list_init(&view->workspace_views);
+  wl_list_init(&view->sheet_views);
+  wl_list_init(&view->group_views);
+  wl_list_init(&view->visible_group_views);
+  wl_list_init(&view->visible_server_views);
   wl_list_init(&view->children);
 }
 
@@ -445,6 +565,11 @@ hikari_view_fini(struct hikari_view *view)
 #if !defined(NDEBUG)
   printf("DESTROY VIEW %p\n", view);
 #endif
+
+  if (view->decoration.wlr_decoration != NULL) {
+    wl_list_remove(&view->decoration.mode.link);
+    wl_list_remove(&view->decoration.destroy.link);
+  }
 
   hikari_free(view->title);
   hikari_free(view->id);
@@ -516,6 +641,8 @@ struct hikari_damage_data {
   bool whole;
 };
 
+// [COMMENT] Function purpose: wlr_surface_for_each_surface callback that
+// damages a single surface (main surface or subsurface) within a view.
 static void
 damage_whole_surface(struct wlr_surface *surface, int sx, int sy, void *data)
 {
@@ -523,7 +650,11 @@ damage_whole_surface(struct wlr_surface *surface, int sx, int sy, void *data)
   struct hikari_output *output = damage_data->output;
   struct hikari_view *view = damage_data->view;
 
-  if (view->surface == surface) {
+  // [COMMENT] Action purpose: SSD views damage the server border box for their main
+  // surface. CSD views carry no server border, so their main surface is damaged
+  // granularly by its own buffer extents -- client-drawn decorations and shadows
+  // live inside that buffer, exactly like subsurfaces handled by the else branch.
+  if (!view->use_csd && view->surface == surface) {
     hikari_view_damage_border(view);
   } else {
     struct wlr_box geometry;
@@ -538,24 +669,27 @@ damage_whole_surface(struct wlr_surface *surface, int sx, int sy, void *data)
   }
 }
 
+// [COMMENT] Function purpose: Damage the entire view region granularly by iterating
+// all (sub)surfaces and computing a damage box per surface (border box for the SSD
+// main surface, buffer extents for CSD and subsurfaces) instead of over-damaging
+// the whole output.
 void
 hikari_view_damage_whole(struct hikari_view *view)
 {
   assert(view != NULL);
 
-  struct hikari_output *output = view->output;
-
-  // TODO I know, this needs to be done A LOT better
-  if (view->use_csd) {
-    hikari_output_damage_whole(output);
+  // [COMMENT] Action purpose: view->output is NULL until hikari_view_configure.
+  if (view->output == NULL) {
     return;
   }
 
   struct hikari_damage_data damage_data;
 
   damage_data.geometry = hikari_view_geometry(view);
-  damage_data.output = output;
+  damage_data.output = view->output;
   damage_data.view = view;
+  damage_data.surface = NULL;
+  damage_data.whole = true;
 
   hikari_node_for_each_surface(
       (struct hikari_node *)view, damage_whole_surface, &damage_data);
@@ -611,6 +745,16 @@ queue_resize(struct hikari_view *view,
     int requested_width,
     int requested_height)
 {
+  // [COMMENT] Action purpose: Guard against a missing output. view->output is
+  // NULL between hikari_view_init and hikari_view_configure (see the matching
+  // guard and explanation in hikari_view_refresh_geometry); a resize queued
+  // in that window would otherwise dereference output->usable_area below on a
+  // NULL output. There is nothing to constrain the resize against yet, so
+  // simply defer it.
+  if (view->output == NULL) {
+    return;
+  }
+
   struct hikari_operation *op = &view->pending_operation;
 
   int min_width;
@@ -732,6 +876,14 @@ hikari_view_move(struct hikari_view *view, int x, int y)
 {
   assert(view != NULL);
 
+  // [COMMENT] Action purpose: Same view->output nullability precondition as
+  // queue_resize (view->output is NULL between hikari_view_init and
+  // hikari_view_configure) — move_view dereferences view->output->usable_area
+  // via move_view_constrained, so defer if there is no output yet.
+  if (view->output == NULL) {
+    return;
+  }
+
   struct wlr_box *geometry = hikari_view_geometry(view);
 
   move_view(view, geometry, geometry->x + x, geometry->y + y);
@@ -742,6 +894,10 @@ hikari_view_move_absolute(struct hikari_view *view, int x, int y)
 {
   assert(view != NULL);
 
+  if (view->output == NULL) {
+    return;
+  }
+
   struct wlr_box *geometry = hikari_view_geometry(view);
 
   move_view(view, geometry, x, y);
@@ -751,6 +907,10 @@ hikari_view_move_absolute(struct hikari_view *view, int x, int y)
   void hikari_view_move_##pos(struct hikari_view *view)                        \
   {                                                                            \
     assert(view != NULL);                                                      \
+                                                                               \
+    if (view->output == NULL) {                                                \
+      return;                                                                  \
+    }                                                                          \
                                                                                \
     struct hikari_output *output = view->output;                               \
     struct wlr_box *usable_area = &output->usable_area;                        \
@@ -775,6 +935,9 @@ MOVE(top_middle)
 MOVE(top_right)
 #undef MOVE
 
+// Function purpose: Track a subsurface newly attached to a mapped view's
+// surface so it participates in hikari's granular damage tracking and
+// teardown loop.
 static void
 new_subsurface_handler(struct wl_listener *listener, void *data)
 {
@@ -782,12 +945,25 @@ new_subsurface_handler(struct wl_listener *listener, void *data)
 
   struct wlr_subsurface *wlr_subsurface = data;
 
+  // [COMMENT] Action purpose: Graceful-degradation allocation. A subsurface
+  // added under memory pressure still renders via wlr_scene (which manages
+  // subsurface scene nodes automatically); skipping hikari's own tracking
+  // wrapper only loses granular damage-tracking for it, not visibility. See
+  // DECISIONS_LOG Finding 4.
   struct hikari_view_subsurface *view_subsurface =
-      hikari_malloc(sizeof(struct hikari_view_subsurface));
+      hikari_try_malloc(sizeof(struct hikari_view_subsurface));
+
+  if (view_subsurface == NULL) {
+    return;
+  }
 
   hikari_view_subsurface_init(view_subsurface, view, wlr_subsurface);
 }
 
+// Function purpose: Map a view for the first time -- adopt its surface,
+// track its existing subsurfaces, resolve its group/mark from view config,
+// link it into its sheet/group/output, and make it visible (or forced-hidden
+// under lock mode).
 void
 hikari_view_map(struct hikari_view *view, struct wlr_surface *surface)
 {
@@ -808,19 +984,25 @@ hikari_view_map(struct hikari_view *view, struct wlr_surface *surface)
   view->new_subsurface.notify = new_subsurface_handler;
   wl_signal_add(&surface->events.new_subsurface, &view->new_subsurface);
 
+  // [COMMENT] Action purpose: Graceful-degradation allocation -- see
+  // new_subsurface_handler above and DECISIONS_LOG Finding 4.
   struct wlr_subsurface *wlr_subsurface;
   wl_list_for_each (
       wlr_subsurface, &surface->current.subsurfaces_below, current.link) {
     struct hikari_view_subsurface *subsurface =
-        (struct hikari_view_subsurface *)malloc(
-            sizeof(struct hikari_view_subsurface));
+        hikari_try_malloc(sizeof(struct hikari_view_subsurface));
+    if (subsurface == NULL) {
+      continue;
+    }
     hikari_view_subsurface_init(subsurface, view, wlr_subsurface);
   }
   wl_list_for_each (
       wlr_subsurface, &surface->current.subsurfaces_above, current.link) {
     struct hikari_view_subsurface *subsurface =
-        (struct hikari_view_subsurface *)malloc(
-            sizeof(struct hikari_view_subsurface));
+        hikari_try_malloc(sizeof(struct hikari_view_subsurface));
+    if (subsurface == NULL) {
+      continue;
+    }
     hikari_view_subsurface_init(subsurface, view, wlr_subsurface);
   }
 
@@ -859,12 +1041,20 @@ hikari_view_map(struct hikari_view *view, struct wlr_surface *surface)
 
     hikari_server_cursor_focus();
   } else {
+    /* [COMMENT] Action purpose: Under lock mode a non-public view is linked
+    into the visible lists but deliberately left flagged hidden and with its
+    scene node disabled -- "forced". raise_view() performs the linkage through
+    view_link_visible(), which is the same single writer the normal path uses;
+    the flag and the scene node are intentionally not touched here. */
     hikari_view_set_forced(view);
-    increase_group_visiblity(view);
     raise_view(view);
   }
 }
 
+// Function purpose: Tear down a view on unmap -- finalise every child
+// (subsurface or popup) via its own fini pointer, detach from group/tile/
+// mark, and unlink from the sheet/output lists, leaving the view struct
+// itself intact for a possible remap.
 void
 hikari_view_unmap(struct hikari_view *view)
 {
@@ -873,26 +1063,35 @@ hikari_view_unmap(struct hikari_view *view)
 
   wl_list_remove(&view->new_subsurface.link);
 
+  // [COMMENT] Action purpose: Dispatch through each child's own fini pointer
+  // instead of assuming every entry is a hikari_view_subsurface. hikari_xdg_popup
+  // is also linked into view->children via the shared hikari_view_child prefix
+  // (xdg_popup_create -> hikari_view_child_init), and its layout diverges past
+  // that prefix -- blindly casting freed the wrong fields and left wlroots
+  // holding live listeners into freed memory. See DECISIONS_LOG Phase 42/44.
   struct hikari_view_child *child, *child_temp;
   wl_list_for_each_safe (child, child_temp, &view->children, link) {
-    struct hikari_view_subsurface *subsurface =
-        (struct hikari_view_subsurface *)child;
-    hikari_view_subsurface_fini(subsurface);
-    hikari_free(subsurface);
+    child->fini(child);
   }
 
+  /* [COMMENT] Action purpose: Leave the visible state through the single unlink
+  writer, whichever state the view is in. A forced view (lock mode) is linked
+  into the visibility lists while flagged hidden, so it must still be unlinked;
+  it never holds focus, which is why it does not go through hikari_view_hide().
+
+  This previously branched on the hidden flag and, when a forced view was not
+  flagged hidden, set the flag WITHOUT performing the unlink -- leaving the view
+  linked into workspace->views, hikari_server.visible_views and
+  group->visible_views while execution fell through to detach_from_group()
+  below, which frees the group. That freed a group still reachable from
+  hikari_server.visible_groups and left three lists pointing at a view struct
+  freed moments later by destroy_handler. view_unlink_visible() sets the hidden
+  flag itself, so the flag can no longer diverge from the linkage. See
+  DECISIONS_LOG Phase 55. */
   if (hikari_view_is_forced(view)) {
-    if (hikari_view_is_hidden(view)) {
-      hide(view);
-    } else {
-      hikari_view_damage_whole(view);
-      hikari_view_set_hidden(view);
-    }
-
+    view_unlink_visible(view);
     hikari_view_unset_forced(view);
-  }
-
-  if (!hikari_view_is_hidden(view)) {
+  } else if (!hikari_view_is_hidden(view)) {
     hikari_view_hide(view);
     hikari_server_cursor_focus();
   }
@@ -940,6 +1139,7 @@ hikari_view_unmap(struct hikari_view *view)
   assert(!hikari_view_is_tiled(view));
 }
 
+// [COMMENT] Function purpose: Show a hidden view and enable its scene node.
 void
 hikari_view_show(struct hikari_view *view)
 {
@@ -952,8 +1152,17 @@ hikari_view_show(struct hikari_view *view)
 #endif
   hikari_view_unset_hidden(view);
 
-  increase_group_visiblity(view);
+  // [COMMENT] Action purpose: Guard against missing scene node before enabling it.
+  if (view->scene_node != NULL) {
+    wlr_scene_node_set_enabled(view->scene_node, true);
+  }
 
+  /* [COMMENT] Action purpose: raise_view() performs the visibility linkage
+  through view_link_visible(), the single writer. The separate
+  increase_group_visiblity() call this replaced only re-established the group's
+  server-visibility aggregate, which view_link_visible() now does unconditionally
+  as part of the same transition -- keeping the flag, the scene node and all
+  four lists updated in one place. See DECISIONS_LOG Phase 55. */
   raise_view(view);
 
   hikari_view_damage_whole(view);
@@ -961,6 +1170,7 @@ hikari_view_show(struct hikari_view *view)
   assert(is_first_view(view));
 }
 
+// [COMMENT] Function purpose: Hide a visible view and disable its scene node.
 void
 hikari_view_hide(struct hikari_view *view)
 {
@@ -972,8 +1182,19 @@ hikari_view_hide(struct hikari_view *view)
   printf("HIDE %p\n", view);
 #endif
 
+  /* [COMMENT] Action purpose: clear_focus() must run before the unlink -- it
+  resolves the successor focus by consulting the very lists view_unlink_visible()
+  is about to remove this view from. */
   clear_focus(view);
-  hide(view);
+  view_unlink_visible(view);
+
+  // [COMMENT] Action purpose: Guard against missing scene node before disabling it.
+  if (view->scene_node != NULL) {
+    wlr_scene_node_set_enabled(view->scene_node, false);
+  }
+
+  // [COMMENT] Action purpose: Hide the indicator frame overlay when the view is hidden.
+  hikari_indicator_frame_hide(&view->indicator_frame);
 
   hikari_view_damage_whole(view);
 }
@@ -1002,27 +1223,14 @@ hikari_view_lower(struct hikari_view *view)
     return;
   }
 
-  wl_list_remove(&view->sheet_views);
-  wl_list_insert(view->sheet->views.prev, &view->sheet_views);
-
-  wl_list_remove(&view->group_views);
-  wl_list_insert(view->group->views.prev, &view->group_views);
-
-  wl_list_remove(&view->output_views);
-  wl_list_insert(view->output->views.prev, &view->output_views);
-
-  wl_list_remove(&view->visible_group_views);
-  wl_list_insert(view->group->visible_views.prev, &view->visible_group_views);
-
-  wl_list_remove(&view->group->visible_server_groups);
-  wl_list_insert(
-      hikari_server.visible_groups.prev, &view->group->visible_server_groups);
-
-  wl_list_remove(&view->workspace_views);
-  wl_list_insert(view->sheet->workspace->views.prev, &view->workspace_views);
-
-  wl_list_remove(&view->visible_server_views);
-  wl_list_insert(hikari_server.visible_views.prev, &view->visible_server_views);
+  /* [COMMENT] Action purpose: Lower is the exact mirror of raise_view() --
+  stacking lists to the back via move_to_bottom(), visibility lists to the back
+  via the same single writer used everywhere else. This previously inlined its
+  own remove/insert against all seven lists, a third hand-maintained copy of the
+  linkage that shared no code with move_to_top() or view_link_visible() and had
+  to be kept in agreement with them by hand. See DECISIONS_LOG Phase 55. */
+  move_to_bottom(view);
+  view_link_visible_at(view, view->sheet->workspace, false);
 
   hikari_view_damage_whole(view);
 }
@@ -1103,6 +1311,7 @@ hikari_view_tile(
   struct hikari_layout *layout = view->sheet->workspace->sheet->layout;
 
   struct hikari_tile *tile = hikari_malloc(sizeof(struct hikari_tile));
+  assert(tile != NULL);
   hikari_tile_init(tile, view, layout, geometry, geometry);
 
   queue_tile(view, layout, tile, center);
@@ -1398,6 +1607,17 @@ hikari_view_evacuate(struct hikari_view *view, struct hikari_sheet *sheet)
   view->output = sheet->workspace->output;
   view->sheet = sheet;
 
+  /* Action purpose: Unconditionally move the view's list links to the new
+  sheet and output before evaluating visibility. If the view is hidden, its
+  sheet_views and output_views links are NOT removed during hide(), meaning
+  they would otherwise be left dangling in the old (potentially destroyed)
+  output's lists. */
+  wl_list_remove(&view->sheet_views);
+  wl_list_insert(&sheet->views, &view->sheet_views);
+
+  wl_list_remove(&view->output_views);
+  wl_list_insert(&view->output->views, &view->output_views);
+
   if (!hikari_view_is_hidden(view)) {
     if (hikari_view_is_forced(view)) {
       move_to_top(view);
@@ -1407,7 +1627,7 @@ hikari_view_evacuate(struct hikari_view *view, struct hikari_sheet *sheet)
 
     if (hikari_sheet_is_visible(sheet)) {
       hikari_view_damage_whole(view);
-      hikari_indicator_damage(&hikari_server.indicator, view);
+      hikari_indicator_position(&hikari_server.indicator, view);
     } else {
       if (hikari_view_is_forced(view)) {
         move_to_top(view);
@@ -1445,18 +1665,24 @@ hikari_view_pin_to_sheet(struct hikari_view *view, struct hikari_sheet *sheet)
       move_to_top(view);
     } else {
       hikari_view_raise(view);
-      hikari_indicator_damage(&hikari_server.indicator, view);
+      hikari_indicator_position(&hikari_server.indicator, view);
     }
   } else {
     if (hikari_sheet_is_visible(sheet)) {
-      place_visibly_above(view, sheet->workspace);
+      view_link_visible(view, sheet->workspace);
 
       hikari_view_damage_whole(view);
-      hikari_indicator_damage(&hikari_server.indicator, view);
+      hikari_indicator_position(&hikari_server.indicator, view);
     } else {
       hikari_view_hide(view);
       hikari_server_cursor_focus();
     }
+
+    // [COMMENT] Action purpose: Move the list link with the pointer. hide()
+    // leaves sheet_views linked, so without this the view reports the new sheet
+    // while still sitting in the old sheet's list.
+    wl_list_remove(&view->sheet_views);
+    wl_list_insert(&sheet->views, &view->sheet_views);
 
     view->sheet = sheet;
 
@@ -1538,8 +1764,12 @@ hikari_view_group(struct hikari_view *view, struct hikari_group *group)
   remove_from_group(view);
   view->group = group;
 
-  increase_group_visiblity(view);
-
+  /* [COMMENT] Action purpose: raise_view() links the view into the new group's
+  visible_views and re-establishes that group's server-visibility aggregate via
+  view_link_visible(). The separate increase_group_visiblity() call this
+  replaced did only the aggregate half. The view is still flagged visible here
+  -- remove_from_group() detaches group bookkeeping without hiding it -- so the
+  linkage precondition holds. */
   raise_view(view);
 
   hikari_view_damage_whole(view);
@@ -1566,6 +1796,8 @@ hikari_view_exchange(struct hikari_view *from, struct hikari_view *to)
 
   struct hikari_tile *from_tile = hikari_malloc(sizeof(struct hikari_tile));
   struct hikari_tile *to_tile = hikari_malloc(sizeof(struct hikari_tile));
+  assert(from_tile != NULL);
+  assert(to_tile != NULL);
 
   hikari_tile_init(from_tile, from, layout, to_geometry, to_geometry);
   hikari_tile_init(to_tile, to, layout, from_geometry, from_geometry);
@@ -1588,6 +1820,20 @@ destroy_subsurface_handler(struct wl_listener *listener, void *data)
   hikari_free(view_subsurface);
 }
 
+// [COMMENT] Function purpose: hikari_view_child.fini implementation for
+// hikari_view_subsurface, dispatched generically from hikari_view_unmap()'s
+// teardown loop over view->children.
+static void
+subsurface_child_fini(struct hikari_view_child *view_child)
+{
+  struct hikari_view_subsurface *view_subsurface =
+      (struct hikari_view_subsurface *)view_child;
+
+  hikari_view_subsurface_fini(view_subsurface);
+
+  hikari_free(view_subsurface);
+}
+
 void
 hikari_view_subsurface_init(struct hikari_view_subsurface *view_subsurface,
     struct hikari_view *parent,
@@ -1599,8 +1845,10 @@ hikari_view_subsurface_init(struct hikari_view_subsurface *view_subsurface,
   wl_signal_add(
       &subsurface->surface->events.destroy, &view_subsurface->destroy);
 
-  hikari_view_child_init(
-      (struct hikari_view_child *)view_subsurface, parent, subsurface->surface);
+  hikari_view_child_init((struct hikari_view_child *)view_subsurface,
+      parent,
+      subsurface->surface,
+      subsurface_child_fini);
 }
 
 void
@@ -1659,12 +1907,23 @@ commit_child_handler(struct wl_listener *listener, void *data)
   }
 }
 
+// Function purpose: Allocate and initialise a hikari_view_subsurface for a
+// subsurface discovered under an already-tracked child (a subsurface's own
+// subsurface, or a popup's subsurface) -- the shared entry point used by
+// new_subsurface_child_handler and hikari_view_child_init's initial walk.
 static void
 view_subsurface_create(
     struct wlr_subsurface *wlr_subsurface, struct hikari_view *parent)
 {
+  // [COMMENT] Action purpose: Graceful-degradation allocation -- see
+  // new_subsurface_handler and DECISIONS_LOG Finding 4. Nested subsurfaces
+  // (a subsurface's or popup's own subsurfaces) go through this shared path.
   struct hikari_view_subsurface *view_subsurface =
-      hikari_malloc(sizeof(struct hikari_view_subsurface));
+      hikari_try_malloc(sizeof(struct hikari_view_subsurface));
+
+  if (view_subsurface == NULL) {
+    return;
+  }
 
   hikari_view_subsurface_init(view_subsurface, parent, wlr_subsurface);
 }
@@ -1680,13 +1939,19 @@ new_subsurface_child_handler(struct wl_listener *listener, void *data)
   view_subsurface_create(wlr_subsurface, view_child->parent);
 }
 
+// Function purpose: Shared initialisation for every hikari_view_child kind
+// (subsurface or popup) -- wire up its commit/new_subsurface listeners, link
+// it into the parent view's children list, and recursively track any
+// subsurfaces it already has.
 void
 hikari_view_child_init(struct hikari_view_child *view_child,
     struct hikari_view *parent,
-    struct wlr_surface *surface)
+    struct wlr_surface *surface,
+    void (*fini)(struct hikari_view_child *))
 {
   view_child->parent = parent;
   view_child->surface = surface;
+  view_child->fini = fini;
 
   view_child->new_subsurface.notify = new_subsurface_child_handler;
   wl_signal_add(&surface->events.new_subsurface, &view_child->new_subsurface);
@@ -1707,17 +1972,15 @@ hikari_view_child_init(struct hikari_view_child *view_child,
   }
 }
 
+// [COMMENT] Function purpose: Damage a single surface of the view granularly --
+// either its full buffer extents (whole) or its committed damage at its exact
+// view-relative position -- unified for CSD and SSD views; no whole-output
+// fallback.
 void
 hikari_view_damage_surface(
     struct hikari_view *view, struct wlr_surface *surface, bool whole)
 {
   assert(view != NULL);
-
-  // TODO I know, this needs to be done A LOT better
-  if (view->use_csd) {
-    hikari_output_damage_whole(view->output);
-    return;
-  }
 
   struct hikari_damage_data damage_data;
 
@@ -1731,6 +1994,7 @@ hikari_view_damage_surface(
       (struct hikari_node *)view, damage_single_surface, &damage_data);
 }
 
+// [COMMENT] Function purpose: Refresh view geometry and position its scene node.
 void
 hikari_view_refresh_geometry(struct hikari_view *view, struct wlr_box *geometry)
 {
@@ -1740,6 +2004,19 @@ hikari_view_refresh_geometry(struct hikari_view *view, struct wlr_box *geometry)
 
   view->current_geometry = new_geometry;
   view->current_unmaximized_geometry = refresh_unmaximized_geometry(view);
+  
+  // [COMMENT] Action purpose: Guard against BOTH a missing scene node and a
+  // missing output before updating position. view->output is NULL between
+  // hikari_view_init and hikari_view_configure, but scene_node is already set
+  // by then (hikari_xdg_view_init assigns it at new_toplevel time). first_map
+  // calls this function in that window, so guarding only on scene_node
+  // dereferences a NULL output on every single window creation. The position
+  // is recomputed once the view is configured onto an output.
+  if (view->scene_node != NULL && view->output != NULL) {
+    wlr_scene_node_set_position(view->scene_node,
+        new_geometry->x + view->output->geometry.x,
+        new_geometry->y + view->output->geometry.y);
+  }
 
   refresh_border_geometry(view);
 }
@@ -1788,7 +2065,9 @@ hikari_view_commit_pending_operation(
   view->pending_operation.geometry.width = geometry->width;
   view->pending_operation.geometry.height = geometry->height;
 
-  hikari_indicator_damage(&hikari_server.indicator, view);
+  if (!hikari_view_is_hidden(view)) {
+    hikari_indicator_position(&hikari_server.indicator, view);
+  }
   hikari_view_damage_whole(view);
 
   commit_operation(&view->pending_operation, view);
@@ -1817,6 +2096,7 @@ migrate_view(struct hikari_view *view, struct hikari_sheet *sheet, bool center)
   view->output = sheet->workspace->output;
   view->sheet = sheet;
 
+
   move_to_top(view);
 
   queue_reset(view, center);
@@ -1832,12 +2112,12 @@ hikari_view_migrate(struct hikari_view *view,
   struct hikari_output *output = sheet->workspace->output;
   struct wlr_box *view_geometry = hikari_view_geometry(view);
 
-  hikari_indicator_damage(&hikari_server.indicator, view);
+  hikari_indicator_position(&hikari_server.indicator, view);
   hikari_view_damage_whole(view);
 
   // only remove view from lists and do not make it lose focus by calling
   // `hikari_view_hide`.
-  hide(view);
+  view_unlink_visible(view);
 
   hikari_geometry_constrain_relative(
       &view->geometry, &output->usable_area, x, y);
@@ -1896,6 +2176,7 @@ hikari_view_configure(struct hikari_view *view,
   }
 
   view->sheet = sheet;
+
   view->output = output;
 
   wl_list_init(&view->workspace_views);

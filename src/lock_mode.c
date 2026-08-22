@@ -10,22 +10,48 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+// [COMMENT] Action purpose: Portability shim — on FreeBSD, explicit_bzero is
+// declared in <strings.h>. On Linux (used only for IDE analysis, not builds),
+// it requires _DEFAULT_SOURCE. Provide a fallback declaration so clangd works.
+#if !defined(__FreeBSD__) && !defined(HAVE_EXPLICIT_BZERO)
+extern void explicit_bzero(void *, size_t);
+#endif
+
 #include <wlr/types/wlr_seat.h>
+#include <errno.h>
+#include <wayland-server-core.h>
+#include <wlr/backend.h>
 
 #include <hikari/cursor.h>
 #include <hikari/keyboard.h>
 #include <hikari/lock_indicator.h>
 #include <hikari/output.h>
-#include <hikari/renderer.h>
+
 #include <hikari/server.h>
 #include <hikari/utf8.h>
 #include <hikari/view.h>
 
 #define BUFFER_SIZE 1024
 
+// [COMMENT] Action purpose: Resolve the unlock helper through a compile-time
+// absolute path rather than the inherited PATH. hikari-unlocker is installed
+// setuid (mode 4555); resolving it via `/bin/sh -c "hikari-unlocker"` would let
+// a caller-controlled PATH substitute an impostor helper that reports
+// authentication success without verifying the password. HIKARI_PREFIX is
+// supplied by the Makefile and matches the install destination.
+#define HIKARI_STR_INNER(s) #s
+#define HIKARI_STR(s) HIKARI_STR_INNER(s)
+#define HIKARI_UNLOCKER_PATH HIKARI_STR(HIKARI_PREFIX) "/bin/hikari-unlocker"
+
 static char input_buffer[BUFFER_SIZE];
 static int cursor = 0;
 static int locker_pipe[2][2] = { { -1, -1 }, { -1, -1 } };
+static pid_t locker_pid = -1;
+
+// [COMMENT] Action purpose: Unlocker children awaiting a non-blocking reap after
+// a restart replaced locker_pid. Entries <= 0 are free slots.
+#define HIKARI_MAX_PENDING_LOCKERS 8
+static pid_t pending_locker_pids[HIKARI_MAX_PENDING_LOCKERS];
 
 static struct hikari_lock_mode *
 get_mode(void)
@@ -41,7 +67,7 @@ static void
 clear_buffer(void)
 {
   cursor = 0;
-  memset(input_buffer, 0, BUFFER_SIZE);
+  explicit_bzero(input_buffer, BUFFER_SIZE);
 }
 
 static void
@@ -53,27 +79,94 @@ clear_password(void)
   hikari_lock_indicator_clear(mode->lock_indicator);
 }
 
-static void
+// [COMMENT] Function purpose: Fork and exec hikari-unlocker, wiring its stdin
+// and stdout to the password and result pipes.
+static bool
 start_unlocker(void)
 {
-  pipe(locker_pipe[0]);
-  pipe(locker_pipe[1]);
+  // [COMMENT] Action purpose: Create two unidirectional pipes for IPC with
+  // hikari-unlocker: pipe[0] carries the password (parent writes, child reads),
+  // pipe[1] carries the authentication result (child writes, parent reads).
+  if (pipe(locker_pipe[0]) == -1) {
+    return false;
+  }
+  if (pipe(locker_pipe[1]) == -1) {
+    close(locker_pipe[0][0]);
+    close(locker_pipe[0][1]);
+    locker_pipe[0][0] = -1;
+    locker_pipe[0][1] = -1;
+    return false;
+  }
 
-  pid_t locker = fork();
+  // [COMMENT] Action purpose: Fork a child process to run hikari-unlocker,
+  // which performs PAM authentication in a separate address space so the
+  // compositor event loop is never blocked by pam_authenticate().
+  locker_pid = fork();
 
-  if (locker == 0) {
+  // [COMMENT] Action purpose: On fork failure, close all pipe descriptors and
+  // preserve the locked session without attempting password submission.
+  if (locker_pid == -1) {
+    close(locker_pipe[0][0]);
     close(locker_pipe[0][1]);
     close(locker_pipe[1][0]);
-    close(0);
-    close(1);
-    dup2(locker_pipe[0][0], 0);
-    dup2(locker_pipe[1][1], 1);
-    execl("/bin/sh", "/bin/sh", "-c", "hikari-unlocker", NULL);
-    exit(0);
+    close(locker_pipe[1][1]);
+    locker_pipe[0][0] = -1;
+    locker_pipe[0][1] = -1;
+    locker_pipe[1][0] = -1;
+    locker_pipe[1][1] = -1;
+    locker_pid = -1;
+    return false;
+  }
+
+  // [COMMENT] Action purpose: In the child process, rewire stdin/stdout to the
+  // pipe endpoints and exec hikari-unlocker for PAM authentication.
+  if (locker_pid == 0) {
+    close(locker_pipe[0][1]);
+    close(locker_pipe[1][0]);
+    // [COMMENT] Action purpose: dup2 both endpoints onto stdin/stdout, checking
+    // for failure -- an unchecked dup2 could silently leave the child reading
+    // or writing the wrong descriptor. The original endpoints need no explicit
+    // close here; the closefrom() below sweeps them up.
+    if (dup2(locker_pipe[0][0], STDIN_FILENO) == -1 ||
+        dup2(locker_pipe[1][1], STDOUT_FILENO) == -1) {
+      static const char msg[] =
+          "error: could not redirect hikari-unlocker pipes\n";
+      write(STDERR_FILENO, msg, sizeof(msg) - 1);
+      _exit(EXIT_FAILURE);
+    }
+
+    // [COMMENT] Action purpose: Close every inherited descriptor above stderr
+    // -- the Wayland listening socket, DRM/GBM descriptors, and the seatd
+    // connection -- before exec, matching the same hardening already applied
+    // to the topbar helper. Only stdin/stdout/stderr are meant to reach the
+    // authentication helper. This also closes the original pipe ends.
+    closefrom(STDERR_FILENO + 1);
+
+    // [COMMENT] Action purpose: Execute the helper directly at its absolute
+    // install path. Avoiding the /bin/sh -c indirection removes both the PATH
+    // lookup and the shell's own metacharacter/environment handling from the
+    // authentication path.
+    execl(HIKARI_UNLOCKER_PATH, "hikari-unlocker", NULL);
+    // [COMMENT] Action purpose: Reached only when execl fails. The child must
+    // not report success: emit a diagnostic (stderr survives the stdin/stdout
+    // rewiring) via write(), which is async-signal-safe unlike fprintf, and
+    // exit non-zero so the failure is diagnosable. _exit skips inherited
+    // atexit handlers and stdio flushing in the forked compositor address
+    // space; the parent observes the pipe hangup as a terminal locker
+    // failure and reaps the child.
+    {
+      static const char msg[] = "error: could not execute hikari-unlocker\n";
+      write(STDERR_FILENO, msg, sizeof(msg) - 1);
+    }
+    _exit(EXIT_FAILURE);
+  // [COMMENT] Action purpose: In the parent process, close the child-side pipe
+  // endpoints that are no longer needed to avoid descriptor leaks.
   } else {
     close(locker_pipe[0][0]);
     close(locker_pipe[1][1]);
   }
+
+  return true;
 }
 
 static void
@@ -108,26 +201,299 @@ delete_char(void)
   }
 }
 
+/* [COMMENT] Function purpose: Attempt one non-blocking reap of the unlocker
+child. Returns true when the child has been collected (or was already gone),
+false when it is still running and a retry is needed. */
+/* [COMMENT] Function purpose: Non-blocking reap of a single pid. Returns true
+when it has been collected or was already gone. */
+static bool
+reap_pid(pid_t pid)
+{
+  int status;
+  pid_t result;
+  do {
+    result = waitpid(pid, &status, WNOHANG);
+  } while (result == -1 && errno == EINTR);
+
+  // [COMMENT] Action purpose: ECHILD means the child is already gone (e.g. reaped
+  // elsewhere); treat it as success so the pid state is cleared either way.
+  return result > 0 || (result == -1 && errno == ECHILD);
+}
+
+static bool
+try_reap_locker(void)
+{
+  bool done = true;
+
+  // [COMMENT] Action purpose: Drain deferred children first. A restart parks the
+  // live pid here, so these are previous helpers that must still be collected.
+  for (size_t i = 0; i < HIKARI_MAX_PENDING_LOCKERS; i++) {
+    if (pending_locker_pids[i] > 0) {
+      if (reap_pid(pending_locker_pids[i])) {
+        pending_locker_pids[i] = -1;
+      } else {
+        done = false;
+      }
+    }
+  }
+
+  if (locker_pid > 0) {
+    if (reap_pid(locker_pid)) {
+      locker_pid = -1;
+    } else {
+      done = false;
+    }
+  }
+
+  return done;
+}
+
+/* [COMMENT] Function purpose: Park the live unlocker pid in the pending set so a
+subsequent start_unlocker() can overwrite locker_pid without dropping the only
+reference to the previous child, which would leave it a zombie for the rest of
+the session. Returns false when the pending table is full and locker_pid could
+not be parked -- unlike src/bar.c's topbar startup cleanup, this runs mid-session
+from inside the live Wayland event loop, so it must never block. The caller must
+not proceed to start_unlocker() when this returns false, since that would
+immediately overwrite (and leak) the still-live pid. */
+static bool
+defer_locker_pid(void)
+{
+  if (locker_pid <= 0) {
+    return true;
+  }
+
+  for (size_t i = 0; i < HIKARI_MAX_PENDING_LOCKERS; i++) {
+    if (pending_locker_pids[i] <= 0) {
+      pending_locker_pids[i] = locker_pid;
+      locker_pid = -1;
+      return true;
+    }
+  }
+
+  // [COMMENT] Action purpose: Table full (many rapid restarts, all still
+  // pending reap). Do not block the event loop waiting for this child to
+  // exit, and do not drop the only reference to it by clearing locker_pid --
+  // leave it tracked as-is. try_reap_locker() (driven by reap_locker_deferred's
+  // retry timer) already attempts to reap locker_pid directly on every tick, so
+  // a pending slot -- or locker_pid itself -- will free up on its own without
+  // blocking here.
+  return false;
+}
+
+/* [COMMENT] Function purpose: Timer callback that retries the non-blocking reap
+until the unlocker child is collected, then disarms itself. */
+static int
+reap_locker_handler(void *data)
+{
+  struct hikari_lock_mode *mode = data;
+
+  if (try_reap_locker()) {
+    if (mode->locker_reap_timer != NULL) {
+      wl_event_source_remove(mode->locker_reap_timer);
+      mode->locker_reap_timer = NULL;
+    }
+    return 0;
+  }
+
+  // [COMMENT] Action purpose: Child still running -- re-arm rather than spin.
+  wl_event_source_timer_update(mode->locker_reap_timer, 50);
+  return 0;
+}
+
+/* [COMMENT] Function purpose: Reap the unlocker child without ever blocking the
+event loop. Tries once inline; if the child has not exited yet, arms a short
+retry timer and returns immediately so the compositor keeps dispatching. */
+static void
+reap_locker_deferred(struct hikari_lock_mode *mode)
+{
+  if (try_reap_locker()) {
+    return;
+  }
+
+  if (mode->locker_reap_timer == NULL) {
+    mode->locker_reap_timer = wl_event_loop_add_timer(
+        hikari_server.event_loop, reap_locker_handler, mode);
+  }
+
+  if (mode->locker_reap_timer != NULL) {
+    wl_event_source_timer_update(mode->locker_reap_timer, 50);
+  }
+}
+
+// [COMMENT] Function purpose: Handle the authentication result from hikari-unlocker
+// asynchronously via the Wayland event loop. This callback fires when data is
+// available on the locker result pipe, preventing the compositor from blocking
+// during PAM password verification.
+static int
+locker_result_handler(int fd, uint32_t mask, void *data)
+{
+  struct hikari_lock_mode *mode = data;
+  bool success = false;
+  bool got_result = false;
+
+  // [COMMENT] Action purpose: Read the authentication result boolean from the
+  // unlocker pipe when data is available, distinguishing a complete result from
+  // read failure or EOF.
+  if (mask & WL_EVENT_READABLE) {
+    ssize_t n;
+    do {
+      n = read(fd, &success, sizeof(bool));
+    } while (n == -1 && errno == EINTR);
+
+    if (n == (ssize_t)sizeof(bool)) {
+      // [COMMENT] Action purpose: A complete authentication result was read
+      // from the unlocker pipe. Mark as received so hangup does not override.
+      got_result = true;
+    } else {
+      // [COMMENT] Action purpose: Treat read failure, EOF, or incomplete read
+      // as authentication failure -- hikari-unlocker may have crashed.
+      success = false;
+    }
+  }
+
+  // [COMMENT] Action purpose: Handle pipe hangup when no readable result was
+  // obtained -- the unlocker exited or crashed without writing a result, so
+  // this is a terminal failure requiring child cleanup.
+  if ((mask & WL_EVENT_HANGUP) && !got_result) {
+    success = false;
+  }
+
+  // [COMMENT] Action purpose: Determine whether this result is terminal (the
+  // child has exited or will exit) or retryable (wrong password, child stays
+  // alive for the next attempt). Terminal conditions: success, read failure,
+  // or ANY hangup. WL_EVENT_READABLE and WL_EVENT_HANGUP can be delivered in
+  // the same callback when the child writes a false result and then exits; in
+  // that case got_result is true and success is false, so without the explicit
+  // hangup term this would be misclassified as retryable, leaving locker_pid
+  // unreaped and the pipe fds open on a dead child. The next password attempt
+  // would then write into a broken pipe. Retryable: a complete false result
+  // read while the helper is still alive.
+  bool terminal = success || !got_result || (mask & WL_EVENT_HANGUP);
+
+  // [COMMENT] Action purpose: Remove the fd event source now that we have a
+  // result. The source must be cleaned up before closing the pipe fds.
+  if (mode->locker_event_source != NULL) {
+    wl_event_source_remove(mode->locker_event_source);
+    mode->locker_event_source = NULL;
+  }
+
+  if (terminal) {
+    // [COMMENT] Action purpose: Reap the unlocker child WITHOUT blocking. This
+    // runs inside a Wayland event-loop callback: hikari-unlocker writes its
+    // result and only then finishes PAM cleanup and exits, so a blocking
+    // waitpid() here stalls the entire compositor for the duration of that
+    // teardown. reap_locker_deferred tries once and falls back to a short retry
+    // timer, keeping the event loop dispatching either way.
+    reap_locker_deferred(mode);
+
+    close(locker_pipe[1][0]);
+    close(locker_pipe[0][1]);
+    locker_pipe[1][0] = -1;
+    locker_pipe[0][1] = -1;
+  }
+
+  if (success) {
+    hikari_server_enter_normal_mode(NULL);
+  } else {
+    hikari_lock_indicator_set_deny(mode->lock_indicator);
+  }
+
+  return 0;
+}
+
+// Function purpose: Send the password to hikari-unlocker and register
+// a non-blocking event source for the authentication result.
 static void
 submit_password(void)
 {
   struct hikari_lock_mode *mode = get_mode();
-  size_t password_length = strnlen(input_buffer, 1023) + 1;
-  bool success = false;
+
+  // [COMMENT] Action purpose: If the unlocker IPC is not usable (failed start,
+  // died, or its pipes were closed by a terminal result), restart it before
+  // denying. locker_pid alone is not sufficient: locker_result_handler closes
+  // both pipe fds on every terminal result while reap_locker_deferred may
+  // still be waiting on the child to exit, so locker_pid can be positive with
+  // no usable descriptors — gating on it here would silently accept no further
+  // password attempts ever again.
+  if (locker_pipe[0][1] == -1 || locker_pipe[1][0] == -1) {
+    // [COMMENT] Action purpose: Park the previous child before start_unlocker
+    // overwrites locker_pid. A deferred reap alone is not enough: it leaves
+    // locker_pid set when the child has not exited yet, and the fork below would
+    // then drop the only reference to it.
+    if (locker_pid > 0) {
+      if (!defer_locker_pid()) {
+        // [COMMENT] Action purpose: Pending table full; locker_pid could not
+        // be parked. Do not call start_unlocker() -- its fork() would
+        // immediately overwrite locker_pid and leak this reference. Deny
+        // this attempt instead; reap_locker_deferred's retry timer frees a
+        // slot (or reaps locker_pid directly) without blocking, and the next
+        // attempt will park/restart normally.
+        clear_buffer();
+        reap_locker_deferred(mode);
+        hikari_lock_indicator_set_deny(mode->lock_indicator);
+        return;
+      }
+      reap_locker_deferred(mode);
+    }
+    if (!start_unlocker()) {
+      hikari_lock_indicator_set_deny(mode->lock_indicator);
+      return;
+    }
+  }
+
+  size_t password_length = strnlen(input_buffer, BUFFER_SIZE - 1) + 1;
 
   hikari_lock_indicator_set_verify(mode->lock_indicator);
-  write(locker_pipe[0][1], input_buffer, password_length);
+  // [COMMENT] Action purpose: Write the full password to the unlocker pipe,
+  // advancing past each partial write and retrying on EINTR. On any other
+  // write failure the password never reaches the unlocker, which then writes
+  // no result -- locker_result_handler eventually fires with WL_EVENT_HANGUP
+  // and shows the deny indicator, so the attempt fails closed.
+  const char *buf = input_buffer;
+  size_t remaining = password_length;
+  while (remaining > 0) {
+    ssize_t nw = write(locker_pipe[0][1], buf, remaining);
+    if (nw == -1) {
+      if (errno == EINTR) {
+        continue;
+      }
+      fprintf(stderr, "lock_mode: failed to write password to unlocker pipe\n");
+      break;
+    }
+    buf += nw;
+    remaining -= (size_t)nw;
+  }
   clear_buffer();
-  read(locker_pipe[1][0], &success, sizeof(bool));
 
-  if (success) {
-    int status;
+  // [COMMENT] Action purpose: Register the locker result pipe with the Wayland
+  // event loop for non-blocking read. The locker_result_handler will fire when
+  // hikari-unlocker writes the success/failure boolean back.
+  if (mode->locker_event_source != NULL) {
+    wl_event_source_remove(mode->locker_event_source);
+  }
+  mode->locker_event_source = wl_event_loop_add_fd(
+      hikari_server.event_loop,
+      locker_pipe[1][0],
+      WL_EVENT_READABLE | WL_EVENT_HANGUP,
+      locker_result_handler,
+      mode);
+
+  /* [COMMENT] Action purpose: Without the event source nothing will ever read
+  the unlocker's reply, so the attempt would hang the lock screen forever with
+  no feedback while leaking both pipe fds and leaving the child unreaped. Tear
+  the attempt down the same way locker_result_handler's terminal path does and
+  deny it, so the user can simply type the password again. */
+  if (mode->locker_event_source == NULL) {
+    fprintf(stderr,
+        "lock_mode: failed to register locker result pipe with event loop\n");
+
+    reap_locker_deferred(mode);
+
     close(locker_pipe[1][0]);
     close(locker_pipe[0][1]);
-    wait(&status);
-
-    hikari_server_enter_normal_mode(NULL);
-  } else {
+    locker_pipe[1][0] = -1;
+    locker_pipe[0][1] = -1;
 
     hikari_lock_indicator_set_deny(mode->lock_indicator);
   }
@@ -171,9 +537,10 @@ enable_outputs(void)
   mode->outputs_disabled = false;
 }
 
+// [COMMENT] Function purpose: Handles keyboard events for lock mode authentication.
 static void
 key_handler(
-    struct hikari_keyboard *keyboard, struct wlr_event_keyboard_key *event)
+    struct hikari_keyboard *keyboard, struct wlr_keyboard_key_event *event)
 {
   struct hikari_lock_mode *mode = get_mode();
 
@@ -183,7 +550,7 @@ key_handler(
     uint32_t codepoint;
 
     int nsyms = xkb_state_key_get_syms(
-        keyboard->device->keyboard->xkb_state, keycode, &syms);
+        keyboard->wlr_keyboard->xkb_state, keycode, &syms);
 
     enable_outputs();
 
@@ -239,9 +606,10 @@ static void
 modifiers_handler(struct hikari_keyboard *keyboard)
 {}
 
+// [COMMENT] Function purpose: Ignores pointer button events during lock mode.
 static void
 button_handler(
-    struct hikari_cursor *cursor, struct wlr_event_pointer_button *event)
+    struct hikari_cursor *cursor, struct wlr_pointer_button_event *event)
 {}
 
 static void
@@ -264,13 +632,44 @@ reset_visibility(void)
   }
 }
 
+// [COMMENT] Function purpose: Tear down active lock mode state, restoring outputs and
+// compositor focus to normal operation. Called on authentication success or forced
+// cancellation (e.g. compositor shutdown while locked).
 static void
 cancel(void)
 {
   struct hikari_lock_mode *mode = get_mode();
 
-  wl_event_source_remove(mode->disable_outputs);
-  mode->disable_outputs = NULL;
+  // [COMMENT] Action purpose: Clean up the locker event source if authentication
+  // is still pending when lock mode is cancelled.
+  if (mode->locker_event_source != NULL) {
+    wl_event_source_remove(mode->locker_event_source);
+    mode->locker_event_source = NULL;
+  }
+
+  // [COMMENT] Action purpose: Close pipe FDs and reap the unlocker child if
+  // authentication was still in flight when cancel is called (e.g. compositor
+  // shutdown while locked). Closing the write end of the password pipe causes
+  // the child to receive EOF on its stdin and exit cleanly.
+  if (locker_pipe[0][1] != -1) {
+    close(locker_pipe[0][1]);
+    locker_pipe[0][1] = -1;
+  }
+  if (locker_pipe[1][0] != -1) {
+    close(locker_pipe[1][0]);
+    locker_pipe[1][0] = -1;
+  }
+  // [COMMENT] Action purpose: Reap the child without blocking. It exits shortly
+  // after stdin receives EOF (the password pipe write-end was closed above). If
+  // it has not exited yet, reap_locker_deferred arms the retry timer so it is
+  // collected later instead of surviving until hikari_lock_mode_fini's single
+  // non-blocking attempt, which does not retry.
+  reap_locker_deferred(mode);
+
+  if (mode->disable_outputs != NULL) {
+    wl_event_source_remove(mode->disable_outputs);
+    mode->disable_outputs = NULL;
+  }
 
   struct hikari_output *output;
   wl_list_for_each (output, &hikari_server.outputs, server_outputs) {
@@ -281,6 +680,10 @@ cancel(void)
   hikari_lock_indicator_fini(mode->lock_indicator);
   hikari_free(mode->lock_indicator);
   mode->lock_indicator = NULL;
+
+  // [COMMENT] Action purpose: Reset outputs_disabled flag so re-entry into
+  // lock mode starts with clean state.
+  mode->outputs_disabled = false;
 
   reset_visibility();
 
@@ -307,19 +710,38 @@ hikari_lock_mode_init(struct hikari_lock_mode *lock_mode)
   lock_mode->mode.key_handler = key_handler;
   lock_mode->mode.button_handler = button_handler;
   lock_mode->mode.modifiers_handler = modifiers_handler;
-  lock_mode->mode.render = hikari_renderer_lock_mode;
+
   lock_mode->mode.cancel = cancel;
   lock_mode->mode.cursor_move = cursor_move;
 
   lock_mode->lock_indicator = NULL;
+  lock_mode->locker_event_source = NULL;
+  lock_mode->locker_reap_timer = NULL;
+  lock_mode->outputs_disabled = false;
 
   mlock(input_buffer, BUFFER_SIZE);
   clear_buffer();
 }
 
+// [COMMENT] Function purpose: Final cleanup of lock mode resources, including a
+// deferred blocking reap of any unlocker child that cancel() could not collect
+// non-blockingly, and unlocking the password buffer from RAM.
 void
 hikari_lock_mode_fini(struct hikari_lock_mode *lock_mode)
 {
+  // [COMMENT] Action purpose: Tear down the retry timer before the mode goes
+  // away so a pending reap callback cannot fire against freed state.
+  if (lock_mode->locker_reap_timer != NULL) {
+    wl_event_source_remove(lock_mode->locker_reap_timer);
+    lock_mode->locker_reap_timer = NULL;
+  }
+
+  // [COMMENT] Action purpose: Final non-blocking reap attempt for any unlocker
+  // child still outstanding. The child exits shortly after its stdin receives
+  // EOF (the pipe write-end was closed in cancel()). If it somehow has not
+  // exited yet, leave it to init rather than blocking compositor shutdown.
+  try_reap_locker();
+
   munlock(input_buffer, BUFFER_SIZE);
 }
 
@@ -388,6 +810,9 @@ hikari_lock_mode_enter(void)
   hikari_lock_indicator_init(mode->lock_indicator);
 
   clear_buffer();
+  // [COMMENT] Action purpose: Start the unlocker child process. If pipe or fork
+  // setup fails here, submit_password() will retry start_unlocker() on the
+  // first password submission attempt.
   start_unlocker();
   override_visibility();
 

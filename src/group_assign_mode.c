@@ -15,7 +15,7 @@
 #include <hikari/keyboard.h>
 #include <hikari/memory.h>
 #include <hikari/normal_mode.h>
-#include <hikari/renderer.h>
+
 #include <hikari/server.h>
 #include <hikari/sheet.h>
 #include <hikari/view.h>
@@ -251,7 +251,7 @@ done:
 
 static void
 key_handler(
-    struct hikari_keyboard *keyboard, struct wlr_event_keyboard_key *event)
+    struct hikari_keyboard *keyboard, struct wlr_keyboard_key_event *event)
 {
   if (event->state == WL_KEYBOARD_KEY_STATE_PRESSED) {
     uint32_t keycode = event->keycode + 8;
@@ -296,7 +296,7 @@ cancel(void)
 
 static void
 button_handler(
-    struct hikari_cursor *cursor, struct wlr_event_pointer_button *event)
+    struct hikari_cursor *cursor, struct wlr_pointer_button_event *event)
 {}
 
 static void
@@ -310,7 +310,7 @@ hikari_group_assign_mode_init(
   group_assign_mode->mode.key_handler = key_handler;
   group_assign_mode->mode.button_handler = button_handler;
   group_assign_mode->mode.modifiers_handler = modifiers_handler;
-  group_assign_mode->mode.render = hikari_renderer_group_assign_mode;
+
   group_assign_mode->mode.cancel = cancel;
   group_assign_mode->mode.cursor_move = cursor_move;
   group_assign_mode->group = NULL;

@@ -1,6 +1,6 @@
 NAME
 ====
-**hikari** - Wayland Compositor
+**Hikari Sakura** - FreeBSD Wayland Compositor
 
 SYNTAX
 ======
@@ -9,7 +9,9 @@ SYNTAX
 DESCRIPTION
 ===========
 
-**hikari** is a stacking Wayland compositor with additional tiling capabilities,
+**Hikari Sakura** is a FreeBSD-focused revamp and modernization of the original Hikari (originally by antaz, since abandoned upstream). It is explicitly designed as a comprehensive, focused Wayland desktop environment for FreeBSD.
+
+It is a stacking Wayland compositor with additional tiling capabilities,
 it is heavily inspired by the Calm Window manager (cwm(1)). Its core concepts
 are views, workspaces, sheets and groups.
 
@@ -156,6 +158,15 @@ _etc_ directory.
 
 The default configuration is going to use **$TERMINAL** as your standard
 terminal application.
+
+Structural changes like UI themes, custom actions, and new bindings can be
+hot-reloaded using the **reload** action. `xkb` settings configured natively in
+the *keyboards* section of the config file are reapplied to already-connected
+keyboards on every reload, same as any other config value. Settings that come
+from the session environment instead of the config file -- `xkb` environment
+variables used as a fallback for keyboards with no native configuration, and
+XWayland initialization -- are only read once at startup and require a full
+restart of the compositor to apply.
 
 On startup **hikari** attempts to execute _~/.config/hikari/autostart_ to
 autostart applications.
@@ -520,6 +531,14 @@ defined the following.
 terminal = sakura
 ```
 
+You can also define actions for laptop media controls, such as volume and brightness:
+
+```
+vol-up = "mixer vol +5"
+vol-down = "mixer vol -5"
+bright-up = "backlight +5"
+```
+
 Now we can bind the newly defined *action-terminal* to a key combination in the
 *bindings* section.
 
@@ -551,6 +570,15 @@ Once a key combination has been identified it can be bound to an action.
 ```
 "LS+a" = action1 # symbol binding
 "LS-38" = action2 # code binding
+```
+
+For laptop media keys, you can bind `XF86` keysyms directly without a modifier
+by using `0`:
+
+```
+"0+XF86AudioRaiseVolume" = action-vol-up
+"0+XF86AudioLowerVolume" = action-vol-down
+"0+XF86MonBrightnessUp" = action-bright-up
 ```
 
 The *bindings* section can contain 2 subsections *keyboard* and *mouse* for
@@ -890,7 +918,20 @@ Colorschemes
 **hikari** uses color to indicate different states of views and their indicator
 bars. By specifying a *colorscheme* section the user can control these colors. A
 colorscheme is a number of properties that can be changed individually. Colors
-are specified using hexadecimal RGB values (e.g. 0xE6DB74).
+are specified using hexadecimal RGB values (e.g. 0xE6DB74), or as a quoted
+string in either *"#RRGGBB"* or *"#RRGGBBAA"* form. The string form is the only
+way to specify an alpha channel:
+
+```
+active = 0xFFFFFF      # integer, always fully opaque
+active = "#FFFFFF"     # identical, written explicitly
+active = "#FFFFFF80"   # 50% alpha
+```
+
+Alpha deliberately cannot be written as an integer. *0x0080FFCC* and *0x80FFCC*
+parse to values that cannot be told apart, so guessing 8-versus-6 digits would
+silently misread any color whose red channel is zero. The quoted form makes the
+digit count explicit, and every existing integer setting keeps its exact meaning.
 
 * **active**
 
@@ -899,6 +940,12 @@ are specified using hexadecimal RGB values (e.g. 0xE6DB74).
 * **background**
 
   Specifies the background color. This will be obscured by a wallpaper
+
+* **bar**
+
+  Background color of the native top bar. Independent of **background**, so the
+  bar can be tinted or made translucent without altering the desktop behind
+  every window. Defaults to *"#282C34E6"* (the desktop slate at ~90% opacity).
 
 * **conflict**
 
@@ -937,6 +984,7 @@ These are the default settings for the **hikari** colorscheme.
 ```
 colorscheme {
   background = 0x282C34
+  bar        = "#282C34E6"
   foreground = 0x000000
   selected   = 0xF5E094
   grouped    = 0xFDAF53
@@ -1117,6 +1165,43 @@ inputs {
   }
 }
 ```
+
+Gestures
+--------
+Trackpad gestures reported via *wlr\_pointer\_gestures\_v1* can be bound in the
+*gestures* subsection, same as switches. A binding key has the form
+*swipe-\<direction\>-\<fingers\>*, *pinch-\<direction\>-\<fingers\>*, or
+*hold-\<fingers\>*, where *direction* is one of *up*, *down*, *left*, *right*
+for swipe or *in*, *out* for pinch, and *fingers* is the number of touchpoints
+the gesture requires.
+
+A gesture that matches a configured binding triggers that action instead of
+being forwarded to the focused client; any gesture without a matching binding
+is delivered to the client. Update events are buffered until the gesture ends
+(in case it turns out to match a binding); a gesture with more than 128 update
+events has the excess silently dropped from what is delivered to the client.
+
+```
+inputs {
+  gestures {
+    "swipe-left-3"  = workspace-cycle-next
+    "swipe-right-3" = workspace-cycle-prev
+    "pinch-in-3"    = view-toggle-maximize-full
+    "hold-3"        = action-terminal
+  }
+}
+```
+
+Touch
+-----
+Touchscreen input is supported natively: a touch device is attached to the
+cursor's output layout like a pointer, and touch events are forwarded to
+clients via the standard Wayland touch protocol. The first touch point of a
+new touch sequence additionally drives the same focus, raise, move, and
+resize behavior as a left mouse click, so windows can be managed by tapping
+and dragging on a touchscreen without a mouse. Further simultaneous touch
+points are left untouched for the client to interpret (e.g. pinch-to-zoom in
+a PDF viewer).
 
 OUTPUTS
 =======

@@ -1,11 +1,12 @@
 #include <hikari/indicator.h>
+#include <hikari/indicator_frame.h>
 
-#include <wlr/render/wlr_renderer.h>
-#include <wlr/types/wlr_matrix.h>
+
+
 
 #include <hikari/configuration.h>
 #include <hikari/mark.h>
-#include <hikari/renderer.h>
+
 #include <hikari/sheet.h>
 #include <hikari/view.h>
 
@@ -33,6 +34,17 @@ hikari_indicator_fini(struct hikari_indicator *indicator)
   hikari_indicator_bar_fini(&indicator->mark);
 }
 
+// [COMMENT] Function purpose: Finalize indicator and hide the indicator frame on the associated view.
+void
+hikari_indicator_fini_for_view(
+    struct hikari_indicator *indicator, struct hikari_view *view)
+{
+  hikari_indicator_fini(indicator);
+  if (view != NULL) {
+    hikari_indicator_frame_hide(&view->indicator_frame);
+  }
+}
+
 void
 hikari_indicator_update(
     struct hikari_indicator *indicator, struct hikari_view *view)
@@ -49,6 +61,19 @@ hikari_indicator_update(
     hikari_indicator_update_mark(indicator, output, view->mark->name);
   } else {
     hikari_indicator_update_mark(indicator, output, "");
+  }
+
+  /* [COMMENT] Action purpose: Re-assert the current Logo-key state instead of
+  assuming it. This runs on every focus change and on every keystroke while
+  assigning a mark/group/sheet, so a content update must not by itself put the
+  overlay on screen -- doing exactly that is what made the indicators permanent.
+  hikari_indicator_show() repositions before enabling, which also covers the
+  fact that hikari_indicator_bar_update() recreates each scene buffer at
+  position (0,0). See DECISIONS_LOG Phase 59. */
+  if (hikari_server_is_indicating()) {
+    hikari_indicator_show(indicator, view);
+  } else {
+    hikari_indicator_hide(indicator, view);
   }
 }
 
@@ -72,7 +97,7 @@ void
 hikari_indicator_update_sheet(struct hikari_indicator *indicator,
     struct hikari_output *output,
     struct hikari_sheet *sheet,
-    unsigned long flags)
+    uint16_t flags)
 {
   bool invisible = flags & hikari_view_invisible_flag;
   bool floating = flags & hikari_view_floating_flag;
@@ -113,11 +138,18 @@ hikari_indicator_update_sheet(struct hikari_indicator *indicator,
 
   hikari_indicator_bar_update(&indicator->sheet, output, text);
 
+  // [COMMENT] Action purpose: Do not reposition from hikari_server.workspace
+  // here. This function receives output/sheet as parameters specifically so
+  // it can be called for a non-current workspace (e.g. during
+  // hikari_server_migrate_focus_view, before hikari_server.workspace is
+  // reassigned to the destination output), and hikari_indicator_position
+  // already positions all four bars from the correct view afterward.
+
   hikari_free(text);
 }
 
 void
-hikari_indicator_damage(
+hikari_indicator_position(
     struct hikari_indicator *indicator, struct hikari_view *view)
 {
   assert(indicator != NULL);
@@ -126,8 +158,58 @@ hikari_indicator_damage(
   struct wlr_box *geometry = hikari_view_border_geometry(view);
   struct hikari_output *output = view->output;
 
-  hikari_indicator_bar_damage(&indicator->title, output, geometry);
-  hikari_indicator_bar_damage(&indicator->sheet, output, geometry);
-  hikari_indicator_bar_damage(&indicator->group, output, geometry);
-  hikari_indicator_bar_damage(&indicator->mark, output, geometry);
+  hikari_indicator_bar_position(&indicator->title, output, geometry);
+  hikari_indicator_bar_position(&indicator->sheet, output, geometry);
+  hikari_indicator_bar_position(&indicator->group, output, geometry);
+  hikari_indicator_bar_position(&indicator->mark, output, geometry);
+
+  /* [COMMENT] Action purpose: Positioning is geometry only. This function
+  previously ended with an unconditional hikari_indicator_frame_show(), which
+  meant every caller that merely wanted to reposition -- move, resize, tile,
+  commit, focus change -- also forced the frame visible, so it never went away.
+  Visibility is now owned solely by hikari_indicator_show/hide below. See
+  DECISIONS_LOG Phase 59. */
+}
+
+/* Function purpose: Make the whole indicator overlay visible for a view -- all
+four text bars plus the frame around the view -- and position it. Called when
+the Logo key goes down, and on a focus/content change that happens while it is
+already held. */
+void
+hikari_indicator_show(
+    struct hikari_indicator *indicator, struct hikari_view *view)
+{
+  assert(indicator != NULL);
+
+  if (view == NULL) {
+    return;
+  }
+
+  hikari_indicator_position(indicator, view);
+
+  hikari_indicator_bar_show(&indicator->title);
+  hikari_indicator_bar_show(&indicator->sheet);
+  hikari_indicator_bar_show(&indicator->group);
+  hikari_indicator_bar_show(&indicator->mark);
+
+  hikari_indicator_frame_show(&view->indicator_frame, indicator->title.color);
+}
+
+/* Function purpose: Inverse of hikari_indicator_show. The bars are global to
+the server while the frame belongs to the view, so a NULL view still hides the
+bars -- that case arises when the Logo key is released with no focused view. */
+void
+hikari_indicator_hide(
+    struct hikari_indicator *indicator, struct hikari_view *view)
+{
+  assert(indicator != NULL);
+
+  hikari_indicator_bar_hide(&indicator->title);
+  hikari_indicator_bar_hide(&indicator->sheet);
+  hikari_indicator_bar_hide(&indicator->group);
+  hikari_indicator_bar_hide(&indicator->mark);
+
+  if (view != NULL) {
+    hikari_indicator_frame_hide(&view->indicator_frame);
+  }
 }

@@ -4,9 +4,8 @@
 #include <stdlib.h>
 
 #include <wlr/backend.h>
-#include <wlr/render/wlr_renderer.h>
-#include <wlr/render/wlr_texture.h>
-#include <wlr/types/wlr_matrix.h>
+
+
 #ifdef HAVE_XWAYLAND
 #include <wlr/xwayland.h>
 #endif
@@ -36,16 +35,23 @@
     return;                                                                    \
   }
 
+/* [COMMENT] Function purpose: Initialise per-output workspace state (view
+list, sheet array, defaults). Runs on every output hotplug, so global server
+list heads owned by server_init are deliberately left untouched. */
 void
 hikari_workspace_init(
     struct hikari_workspace *workspace, struct hikari_output *output)
 {
+  /* [COMMENT] Action purpose: Initialise per-workspace state only. The global
+  hikari_server.visible_groups list head is owned by server_init() and must NOT
+  be re-initialised here -- doing so on every output hotplug would orphan all
+  previously linked visible-group entries (list corruption). */
   wl_list_init(&workspace->views);
-  wl_list_init(&hikari_server.visible_groups);
   workspace->output = output;
   workspace->focus_view = NULL;
   workspace->sheets =
-      hikari_calloc(HIKARI_NR_OF_SHEETS, sizeof(struct hikari_sheet));
+      hikari_malloc(HIKARI_NR_OF_SHEETS * sizeof(struct hikari_sheet));
+  assert(workspace->sheets != NULL);
 
   for (int i = 0; i < HIKARI_NR_OF_SHEETS; i++) {
     hikari_sheet_init(&workspace->sheets[i], i, workspace);
@@ -151,17 +157,36 @@ hikari_workspace_clear(struct hikari_workspace *workspace)
 static void
 display_sheet(struct hikari_workspace *workspace, struct hikari_sheet *sheet)
 {
-  hikari_workspace_clear(workspace);
-
   if (sheet != workspace->sheet) {
     workspace->alternate_sheet = workspace->sheet;
     workspace->sheet = sheet;
   }
 
-  hikari_sheet_show(&workspace->sheets[0]);
+  struct hikari_view *view, *view_tmp;
 
-  if (sheet->nr != 0) {
-    hikari_sheet_show(sheet);
+  wl_list_for_each_reverse_safe (
+      view, view_tmp, &(workspace->views), workspace_views) {
+    if (view->sheet != sheet && view->sheet != &workspace->sheets[0]) {
+      if (!hikari_view_is_hidden(view)) {
+        hikari_view_hide(view);
+      }
+    }
+  }
+
+  wl_list_for_each_reverse_safe (
+      view, view_tmp, &sheet->views, sheet_views) {
+    if (!hikari_view_is_invisible(view) && hikari_view_is_hidden(view)) {
+      hikari_view_show(view);
+    }
+  }
+
+  if (sheet != &workspace->sheets[0]) {
+    wl_list_for_each_reverse_safe (
+        view, view_tmp, &workspace->sheets[0].views, sheet_views) {
+      if (!hikari_view_is_invisible(view) && hikari_view_is_hidden(view)) {
+        hikari_view_show(view);
+      }
+    }
   }
 
   hikari_server_cursor_focus();
@@ -377,8 +402,22 @@ hikari_workspace_focus_view(
 
   struct wlr_seat *seat = hikari_server.seat;
 
+  /* [COMMENT] Action purpose: Tolerate a NULL current workspace instead of
+  faulting. hikari_output_fini() sets hikari_server.workspace to NULL while
+  tearing down the noop output, and at shutdown wlroots destroys outputs in
+  backend order -- so a real output can be finalised AFTER that has happened,
+  and hikari_output_fini() then calls straight into this function. That was an
+  unconditional NULL dereference killing the compositor with SIGSEGV on exit;
+  confirmed from a core dump whose backtrace is
+  hikari_server_stop -> wlr_output_finish -> destroy_handler ->
+  hikari_output_fini -> hikari_workspace_focus_view. See DECISIONS_LOG Phase 63.
+
+  There is simply no outgoing focus to clear in that state, so NULL is the
+  correct value for focus_view and the rest of the function proceeds normally.
+  current_workspace is not used anywhere else. */
   struct hikari_workspace *current_workspace = hikari_server.workspace;
-  struct hikari_view *focus_view = current_workspace->focus_view;
+  struct hikari_view *focus_view =
+      current_workspace != NULL ? current_workspace->focus_view : NULL;
 
   if (focus_view != NULL) {
     if (hikari_server_is_indicating()) {
@@ -387,6 +426,8 @@ hikari_workspace_focus_view(
     } else {
       hikari_view_damage_border(focus_view);
     }
+    // [COMMENT] Action purpose: Hide the indicator frame on the outgoing focus view.
+    hikari_indicator_frame_hide(&focus_view->indicator_frame);
     hikari_view_activate(focus_view, false);
   }
 

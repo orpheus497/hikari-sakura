@@ -2,11 +2,18 @@
 
 #include <hikari/memory.h>
 
+// [COMMENT] Function purpose: Set the server-side decoration mode for an XDG toplevel.
 static void
 set_mode(struct hikari_decoration *decoration)
 {
-  wlr_xdg_toplevel_decoration_v1_set_mode(
-      decoration->decoration, WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
+  // [COMMENT] Action purpose: Conditionally set mode based on initialization state.
+  if (decoration->decoration->toplevel->base->initialized) {
+    wlr_xdg_toplevel_decoration_v1_set_mode(decoration->decoration,
+        WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
+  } else {
+    decoration->decoration->scheduled_mode =
+        WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE;
+  }
 }
 
 static void

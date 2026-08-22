@@ -7,12 +7,20 @@
 
 #include <hikari/view.h>
 
-struct hikari_renderer;
 
 struct hikari_xdg_view {
   struct hikari_view view;
 
   struct wlr_xdg_surface *surface;
+  struct wlr_xdg_toplevel *xdg_toplevel;
+  /* scene_tree is the hikari-owned parent tree for
+  this view -- hikari controls its lifetime and positions it at the view's
+  layout-absolute origin. surface_tree is the wlroots-owned tree returned by
+  wlr_scene_xdg_surface_create, parented under scene_tree; wlroots destroys it
+  itself from its own xdg_surface destroy listener, so it must NOT hold any
+  hikari-owned nodes. */
+  struct wlr_scene_tree *scene_tree;
+  struct wlr_scene_tree *surface_tree;
 
   struct wl_listener map;
   struct wl_listener unmap;
@@ -21,6 +29,13 @@ struct hikari_xdg_view {
   struct wl_listener new_popup;
   struct wl_listener set_title;
   struct wl_listener request_fullscreen;
+  /* [COMMENT] Listener on the xdg_toplevel's own destroy signal. wlroots
+  destroys the toplevel role object BEFORE emitting the xdg_surface destroy
+  signal, and destroy_xdg_toplevel() asserts that every toplevel-scoped signal
+  has no listeners left. Anything registered on xdg_toplevel->events.* must
+  therefore be released here, not in the xdg_surface destroy handler, which runs
+  too late. See DECISIONS_LOG Phase 57. */
+  struct wl_listener toplevel_destroy;
 };
 
 void
@@ -33,9 +48,17 @@ struct hikari_xdg_popup {
 
   struct wlr_xdg_popup *popup;
 
+  /* [COMMENT] Scene tree for this popup, created by
+  wlr_scene_xdg_surface_create() and parented to the parent surface's tree.
+  wlroots owns its lifetime (it destroys the tree from its own xdg_surface
+  destroy listener), so hikari must never destroy it. Without this the popup
+  has no scene node at all and never renders. */
+  struct wlr_scene_tree *scene_tree;
+
   struct wl_listener map;
   struct wl_listener unmap;
   struct wl_listener destroy;
+  struct wl_listener commit;
   struct wl_listener new_popup;
 };
 

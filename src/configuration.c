@@ -5,7 +5,7 @@
 
 #include <ucl.h>
 
-#include <linux/input-event-codes.h>
+#include <dev/evdev/input-event-codes.h>
 #include <wlr/types/wlr_cursor.h>
 #include <wlr/types/wlr_switch.h>
 
@@ -17,6 +17,7 @@
 #include <hikari/command.h>
 #include <hikari/exec.h>
 #include <hikari/geometry.h>
+#include <hikari/gesture_config.h>
 #include <hikari/keyboard.h>
 #include <hikari/keyboard_config.h>
 #include <hikari/layout.h>
@@ -493,13 +494,96 @@ copy_in_config_string(const ucl_object_t *obj)
   }
 }
 
+/* [COMMENT] Function purpose: Parse one colourscheme value into normalised
+RGBA, accepting either form:
+
+  integer  0xRRGGBB      -- historical form, always fully opaque
+  string   "#RRGGBB"     -- same, written explicitly
+  string   "#RRGGBBAA"   -- carries alpha in the low byte
+
+Alpha deliberately cannot be expressed as an integer. UCL parses `0x0080FFCC`
+and `0x80FFCC` to values that a magnitude test cannot tell apart, so an
+8-vs-6-digit integer heuristic would silently misread any colour whose red
+channel is zero. The string form makes the digit count explicit, so the two
+never collide and every existing integer config keeps its exact meaning. See
+DECISIONS_LOG Phase 60. */
+static bool
+parse_color(const ucl_object_t *obj, const char *key, float dst[static 4])
+{
+  if (ucl_object_type(obj) == UCL_STRING) {
+    const char *str;
+
+    if (!ucl_object_tostring_safe(obj, &str) || str[0] != '#') {
+      fprintf(stderr,
+          "configuration error: expected \"#RRGGBB\" or \"#RRGGBBAA\" for "
+          "\"%s\"\n",
+          key);
+      return false;
+    }
+
+    size_t len = strlen(str + 1);
+
+    if (len != 6 && len != 8) {
+      fprintf(stderr,
+          "configuration error: \"%s\" must have 6 or 8 hex digits, got %zu\n",
+          key,
+          len);
+      return false;
+    }
+
+    for (size_t i = 1; i <= len; i++) {
+      if (!isxdigit((unsigned char)str[i])) {
+        fprintf(stderr,
+            "configuration error: invalid hex digit in \"%s\" value \"%s\"\n",
+            key,
+            str);
+        return false;
+      }
+    }
+
+    /* [COMMENT] Action purpose: strtoul over exactly 6 or 8 validated hex
+    digits cannot overflow uint32_t, so the value is used directly. */
+    unsigned long value = strtoul(str + 1, NULL, 16);
+
+    if (len == 8) {
+      hikari_color_convert_rgba(dst, (uint32_t)value);
+    } else {
+      hikari_color_convert(dst, (uint32_t)value);
+    }
+
+    return true;
+  }
+
+  int64_t color;
+  if (!ucl_object_toint_safe(obj, &color)) {
+    fprintf(stderr,
+        "configuration error: expected integer or \"#RRGGBB[AA]\" string for "
+        "\"%s\"\n",
+        key);
+    return false;
+  }
+
+  /* [COMMENT] Action purpose: Reject out-of-range values instead of silently
+  truncating them in the cast below -- -1 would otherwise become white, and
+  0x1FF0000 would become 0xFF0000. */
+  if (color < 0 || color > 0xFFFFFF) {
+    fprintf(stderr,
+        "configuration error: \"%s\" must be between 0x000000 and 0xFFFFFF\n",
+        key);
+    return false;
+  }
+
+  hikari_color_convert(dst, (uint32_t)color);
+
+  return true;
+}
+
 static bool
 parse_colorscheme(struct hikari_configuration *configuration,
     const ucl_object_t *colorscheme_obj)
 {
   bool success = false;
   const ucl_object_t *cur;
-  int64_t color;
 
   ucl_object_iter_t it = ucl_object_iterate_new(colorscheme_obj);
 
@@ -507,77 +591,49 @@ parse_colorscheme(struct hikari_configuration *configuration,
     const char *key = ucl_object_key(cur);
 
     if (!strcmp("selected", key)) {
-      if (!ucl_object_toint_safe(cur, &color)) {
-        fprintf(
-            stderr, "configuration error: expected integer for \"%s\"\n", key);
+      if (!parse_color(cur, key, configuration->indicator_selected)) {
         goto done;
       }
-
-      hikari_color_convert(configuration->indicator_selected, color);
     } else if (!strcmp("grouped", key)) {
-      if (!ucl_object_toint_safe(cur, &color)) {
-        fprintf(
-            stderr, "configuration error: expected integer for \"%s\"\n", key);
+      if (!parse_color(cur, key, configuration->indicator_grouped)) {
         goto done;
       }
-
-      hikari_color_convert(configuration->indicator_grouped, color);
     } else if (!strcmp("first", key)) {
-      if (!ucl_object_toint_safe(cur, &color)) {
-        fprintf(
-            stderr, "configuration error: expected integer for \"%s\"\n", key);
+      if (!parse_color(cur, key, configuration->indicator_first)) {
         goto done;
       }
-
-      hikari_color_convert(configuration->indicator_first, color);
     } else if (!strcmp("conflict", key)) {
-      if (!ucl_object_toint_safe(cur, &color)) {
-        fprintf(
-            stderr, "configuration error: expected integer for \"%s\"\n", key);
+      if (!parse_color(cur, key, configuration->indicator_conflict)) {
         goto done;
       }
-
-      hikari_color_convert(configuration->indicator_conflict, color);
     } else if (!strcmp("insert", key)) {
-      if (!ucl_object_toint_safe(cur, &color)) {
-        fprintf(
-            stderr, "configuration error: expected integer for \"%s\"\n", key);
+      if (!parse_color(cur, key, configuration->indicator_insert)) {
         goto done;
       }
-
-      hikari_color_convert(configuration->indicator_insert, color);
     } else if (!strcmp("active", key)) {
-      if (!ucl_object_toint_safe(cur, &color)) {
-        fprintf(
-            stderr, "configuration error: expected integer for \"%s\"\n", key);
+      if (!parse_color(cur, key, configuration->border_active)) {
         goto done;
       }
-
-      hikari_color_convert(configuration->border_active, color);
     } else if (!strcmp("inactive", key)) {
-      if (!ucl_object_toint_safe(cur, &color)) {
-        fprintf(
-            stderr, "configuration error: expected integer for \"%s\"\n", key);
+      if (!parse_color(cur, key, configuration->border_inactive)) {
         goto done;
       }
-
-      hikari_color_convert(configuration->border_inactive, color);
     } else if (!strcmp("foreground", key)) {
-      if (!ucl_object_toint_safe(cur, &color)) {
-        fprintf(
-            stderr, "configuration error: expected integer for \"%s\"\n", key);
+      if (!parse_color(cur, key, configuration->foreground)) {
         goto done;
       }
-
-      hikari_color_convert(configuration->foreground, color);
     } else if (!strcmp("background", key)) {
-      if (!ucl_object_toint_safe(cur, &color)) {
-        fprintf(
-            stderr, "configuration error: expected integer for \"%s\"\n", key);
+      if (!parse_color(cur, key, configuration->clear)) {
         goto done;
       }
-
-      hikari_color_convert(configuration->clear, color);
+    } else if (!strcmp("bar", key)) {
+      /* [COMMENT] Action purpose: The top bar's own background. It previously
+      borrowed "background" (the output clear colour), which meant it could not
+      be tinted or made translucent without also changing the desktop
+      background behind every window. See DECISIONS_LOG Phase 60. */
+      if (!parse_color(cur, key, configuration->bar)) {
+        goto done;
+      }
     } else {
       fprintf(stderr, "configuration error: unknown color key \"%s\"\n", key);
       goto done;
@@ -1275,6 +1331,54 @@ parse_switches(struct hikari_configuration *configuration,
   success = true;
 
 done:
+  // [COMMENT] Action purpose: releases the UCL iterator on both the
+  // successful and failed parsing paths.
+  ucl_object_iterate_free(it);
+
+  return success;
+}
+
+/* Function purpose: Parse the `inputs { gestures {} }` block into the
+configuration's gesture binding list. */
+static bool
+parse_gestures(struct hikari_configuration *configuration,
+    const ucl_object_t *gestures_obj)
+{
+  bool success = false;
+  const ucl_object_t *cur;
+  struct hikari_gesture_binding_config *gesture_binding_config;
+
+  ucl_object_iter_t it = ucl_object_iterate_new(gestures_obj);
+  while ((cur = ucl_object_iterate_safe(it, true)) != NULL) {
+    const char *key = ucl_object_key(cur);
+
+    gesture_binding_config =
+        hikari_malloc(sizeof(struct hikari_gesture_binding_config));
+    wl_list_insert(&configuration->gesture_binding_configs,
+        &gesture_binding_config->link);
+
+    if (!hikari_gesture_binding_config_key_parse(key,
+            &gesture_binding_config->type,
+            &gesture_binding_config->direction,
+            &gesture_binding_config->fingers)) {
+      fprintf(stderr,
+          "configuration error: invalid gesture binding \"%s\"\n",
+          key);
+      goto done;
+    }
+
+    struct hikari_action *action = &gesture_binding_config->action;
+    hikari_action_init(action);
+
+    if (!hikari_action_parse(action, &configuration->action_configs, cur)) {
+      goto done;
+    }
+  }
+
+  success = true;
+
+done:
+  ucl_object_iterate_free(it);
 
   return success;
 }
@@ -1300,6 +1404,10 @@ parse_inputs(
       }
     } else if (!strcmp(key, "switches")) {
       if (!parse_switches(configuration, cur)) {
+        goto done;
+      }
+    } else if (!strcmp(key, "gestures")) {
+      if (!parse_gestures(configuration, cur)) {
         goto done;
       }
     } else {
@@ -1428,9 +1536,14 @@ parse_output_config(struct hikari_output_config *output_config,
 
       hikari_output_config_set_position(output_config, position);
     } else {
+      // [COMMENT] Action purpose: Unknown output keys must fail the parse, not
+      // just log -- silently accepting typos (e.g. "postion") would leave a
+      // running compositor that ignores the intended rule. This matches the
+      // strict behaviour of every other unknown-key branch in this parser.
       fprintf(stderr,
           "configuration error: unknown \"outputs\" configuration key \"%s\"\n",
           key);
+      goto done;
     }
   }
 
@@ -1741,7 +1854,7 @@ hikari_configuration_reload(char *config_path)
     wl_list_for_each (keyboard, &hikari_server.keyboards, server_keyboards) {
       struct hikari_keyboard_config *keyboard_config =
           hikari_configuration_resolve_keyboard_config(
-              hikari_configuration, keyboard->device->name);
+              hikari_configuration, keyboard->wlr_keyboard->base.name);
 
       assert(keyboard_config != NULL);
       hikari_keyboard_configure(keyboard, keyboard_config);
@@ -1784,7 +1897,7 @@ hikari_configuration_reload(char *config_path)
     wl_list_for_each (swtch, &hikari_server.switches, server_switches) {
       struct hikari_switch_config *switch_config =
           hikari_configuration_resolve_switch_config(
-              hikari_configuration, swtch->device->name);
+              hikari_configuration, swtch->wlr_switch->base.name);
 
       if (switch_config != NULL) {
         hikari_switch_configure(swtch, switch_config);
@@ -1817,6 +1930,7 @@ hikari_configuration_init(struct hikari_configuration *configuration)
   wl_list_init(&configuration->keyboard_binding_configs);
   wl_list_init(&configuration->mouse_binding_configs);
   wl_list_init(&configuration->switch_configs);
+  wl_list_init(&configuration->gesture_binding_configs);
 
   hikari_color_convert(configuration->clear, 0x282C34);
   hikari_color_convert(configuration->foreground, 0x000000);
@@ -1827,6 +1941,12 @@ hikari_configuration_init(struct hikari_configuration *configuration)
   hikari_color_convert(configuration->indicator_insert, 0xE3C3FA);
   hikari_color_convert(configuration->border_active, 0xFFFFFF);
   hikari_color_convert(configuration->border_inactive, 0x465457);
+
+  /* [COMMENT] Action purpose: Default the top bar to the same slate as the
+  desktop background but slightly translucent (0xE6 ~ 90%), so the bar reads as
+  an overlay rather than a solid block while remaining legible. Overridable via
+  the "bar" colourscheme key. */
+  hikari_color_convert_rgba(configuration->bar, 0x282C34E6);
 
   hikari_font_init(&configuration->font, "monospace 10");
 
@@ -1889,6 +2009,16 @@ hikari_configuration_fini(struct hikari_configuration *configuration)
 
     hikari_switch_config_fini(switch_config);
     hikari_free(switch_config);
+  }
+
+  struct hikari_gesture_binding_config *gesture_binding_config,
+      *gesture_binding_config_temp;
+  wl_list_for_each_safe (gesture_binding_config,
+      gesture_binding_config_temp,
+      &configuration->gesture_binding_configs,
+      link) {
+    wl_list_remove(&gesture_binding_config->link);
+    hikari_free(gesture_binding_config);
   }
 
   struct hikari_binding_config *binding_config, *binding_config_temp;

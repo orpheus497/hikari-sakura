@@ -5,7 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include <linux/input-event-codes.h>
+#include <dev/evdev/input-event-codes.h>
 
 #include <wlr/types/wlr_keyboard.h>
 
@@ -62,8 +62,16 @@ hikari_binding_config_key_parse(
 
   if (*remaining == '-') {
     errno = 0;
-    const long value = strtol(remaining + 1, NULL, 10);
-    if (errno != 0 || value < 0 || value > UINT32_MAX) {
+    char *end;
+    const long value = strtol(remaining + 1, &end, 10);
+
+    /* [COMMENT] Action purpose: Reject an empty parse, trailing characters, and
+    anything below the X11 keycode offset. Without the end pointer "12abc" and
+    "abc" (which strtol reports as 0 with errno untouched) were both accepted,
+    and any value under 8 made the subtraction below wrap: keycode 0 became
+    4294967288. */
+    if (errno != 0 || end == remaining + 1 || *end != '\0' || value < 8 ||
+        value > UINT32_MAX) {
       fprintf(stderr,
           "configuration error: failed to parse keycode \"%s\"\n",
           remaining + 1);
@@ -85,6 +93,13 @@ hikari_binding_config_key_parse(
     binding_key->type = HIKARI_ACTION_BINDING_KEY_KEYSYM;
     binding_key->value.keysym = value;
   } else {
+    // [COMMENT] Action purpose: str is a bare modifier mask with no
+    // "-keycode" or "+keysym" suffix (e.g. "L" instead of "L+space").
+    // Every other failure path above this one reports a specific cause;
+    // without this, the caller's own load-failure message is the only
+    // diagnostic ever printed, silently hiding the actual line at fault.
+    fprintf(
+        stderr, "configuration error: invalid key binding \"%s\"\n", str);
     goto done;
   }
 
@@ -95,6 +110,9 @@ done:
   return success;
 }
 
+/* [COMMENT] Function purpose: Parse a mouse binding spec -- modifier mask
+plus a named button ("L+left") or a '-'-prefixed numeric evdev button code
+("L-272") -- into a binding key for the mouse bindings table. */
 bool
 hikari_binding_config_button_parse(
     struct hikari_binding_config_key *binding_key, const char *str)
@@ -139,13 +157,25 @@ hikari_binding_config_button_parse(
     remaining++;
 
     errno = 0;
-    const long value = strtol(remaining, NULL, 10);
-    if (errno != 0 || value < 0 || value > UINT32_MAX) {
+    char *end = NULL;
+    const long value = strtol(remaining, &end, 10);
+    /* [COMMENT] Action purpose: Reject specs with no digits (end pointer
+    unchanged) or trailing characters (end not at the terminating NUL) --
+    strtol alone would silently accept "272abc" or a bare "-". The errno and
+    UINT32 range validation is retained. */
+    if (errno != 0 || end == remaining || *end != '\0' || value < 0 ||
+        value > UINT32_MAX) {
       fprintf(stderr,
           "configuration error: failed to parse mouse binding \"%s\"\n",
           remaining);
       goto done;
     }
+
+    /* [COMMENT] Action purpose: Store the parsed numeric button code. The value
+    was previously validated and then discarded, leaving keycode zero-initialised
+    so numeric mouse bindings (e.g. "L-272") could never fire. Mouse button codes
+    are raw evdev codes -- no xkb +8 offset like keyboard keycodes. */
+    binding_key->value.keycode = (uint32_t)value;
   } else {
     goto done;
   }

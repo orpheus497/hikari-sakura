@@ -1,6 +1,4 @@
-.ifmake clean
 WITH_ALL = YES
-.endif
 
 .ifdef WITH_ALL
 WITH_XWAYLAND = YES
@@ -21,6 +19,7 @@ OBJS = \
 	action_config.o \
 	binding_config.o \
 	binding_group.o \
+	bar.o \
 	border.o \
 	command.o \
 	completion.o \
@@ -31,6 +30,7 @@ OBJS = \
 	exec.o \
 	font.o \
 	geometry.o \
+	gesture_config.o \
 	group.o \
 	group_assign_mode.o \
 	indicator.o \
@@ -59,7 +59,6 @@ OBJS = \
 	pointer.o \
 	pointer_config.o \
 	position_config.o \
-	renderer.o \
 	resize_mode.o \
 	server.o \
 	sheet.o \
@@ -68,6 +67,7 @@ OBJS = \
 	switch.o \
 	switch_config.o \
 	tile.o \
+	touch.o \
 	view.o \
 	view_config.o \
 	workspace.o \
@@ -81,7 +81,7 @@ OBJS += \
 
 WAYLAND_PROTOCOLS != ${PKG_CONFIG} --variable pkgdatadir wayland-protocols
 
-.PHONY: distclean clean clean-doc doc dist install uninstall
+.PHONY: distclean clean clean-doc doc dist install uninstall install-user uninstall-user FORCE
 .PATH: src
 
 # Allow specification of /extra/ CFLAGS and LDFLAGS
@@ -89,10 +89,27 @@ CFLAGS += ${CFLAGS_EXTRA}
 LDFLAGS += ${LDFLAGS_EXTRA}
 
 .ifdef DEBUG
-CFLAGS += -g -O0 -fsanitize=address
+# [COMMENT] Action purpose: Debug build — full symbols, no optimisation, strict
+# warnings. ASan is deliberately excluded from the base debug build because
+# wlroots/GBM maps DMA buffers via mmap(2) directly; ASan intercepts those
+# calls and either false-positives or crashes the compositor before the DRM
+# backend initialises. Enable ASan only when explicitly needed via ASAN=YES
+# (e.g. unit-testing non-graphics code paths).
+CFLAGS += -g -Werror -Wno-unused-function -Wno-unused-variable -O0
+.if "${ASAN}" == "YES"
+CFLAGS += -fsanitize=address
+LDFLAGS += -fsanitize=address
+.endif
 .else
 CFLAGS += -DNDEBUG
 .endif
+
+# [COMMENT] Action purpose: Snapshot the shared DEBUG/ASAN/warning/hardening
+# flags for hikari-topbar before WITH_POSIX_C_SOURCE is applied below.
+# topbar.c deliberately requires __BSD_VISIBLE to stay set (u_int, IFF_UP,
+# usleep at 200809L) -- see the comment atop src/topbar.c -- so it must not
+# inherit -D_POSIX_C_SOURCE the way the compositor's own CFLAGS does.
+TOPBAR_CFLAGS := ${CFLAGS} -std=gnu11 -Wall
 
 .ifdef WITH_POSIX_C_SOURCE
 CFLAGS += -D_POSIX_C_SOURCE=200809L
@@ -124,12 +141,16 @@ PERMS = 555
 CFLAGS += -DHAVE_VIRTUAL_INPUT=1
 .endif
 
-CFLAGS += -Wall -I. -Iinclude -DHIKARI_ETC_PREFIX=${ETC_PREFIX}
+# [COMMENT] Action purpose: HIKARI_PREFIX resolves the setuid unlocker and the
+# top bar helper through compile-time absolute paths, so a modified PATH cannot
+# substitute a different binary into either pipeline.
+CFLAGS += -Wall -I. -Iinclude -DHIKARI_ETC_PREFIX=${ETC_PREFIX} -DHIKARI_PREFIX=${PREFIX}
+CFLAGS += -DHIKARI_TOPBAR_PATH='"${PREFIX}/bin/hikari-topbar"'
 
-WLROOTS_CFLAGS != ${PKG_CONFIG} --cflags wlroots
-WLROOTS_LIBS != ${PKG_CONFIG} --libs wlroots
+WLROOTS_CFLAGS != ${PKG_CONFIG} --cflags wlroots-0.20
+WLROOTS_LIBS != ${PKG_CONFIG} --libs wlroots-0.20
 
-WLROOTS_CFLAGS += -DWLR_USE_UNSTABLE=1
+WLROOTS_CFLAGS += -DWLR_USE_UNSTABLE
 
 PANGO_CFLAGS != ${PKG_CONFIG} --cflags pangocairo
 PANGO_LIBS != ${PKG_CONFIG} --libs pangocairo
@@ -152,6 +173,11 @@ LIBINPUT_LIBS != ${PKG_CONFIG} --libs libinput
 UCL_CFLAGS != ${PKG_CONFIG} --cflags libucl
 UCL_LIBS != ${PKG_CONFIG} --libs libucl
 
+.if ${OS} == "FreeBSD"
+EPOLL_SHIM_CFLAGS != ${PKG_CONFIG} --cflags epoll-shim
+EPOLL_SHIM_LIBS != ${PKG_CONFIG} --libs epoll-shim
+.endif
+
 CFLAGS += \
 	${WLROOTS_CFLAGS} \
 	${PANGO_CFLAGS} \
@@ -160,7 +186,8 @@ CFLAGS += \
 	${XKBCOMMON_CFLAGS} \
 	${WAYLAND_CFLAGS} \
 	${LIBINPUT_CFLAGS} \
-	${UCL_CFLAGS}
+	${UCL_CFLAGS} \
+	${EPOLL_SHIM_CFLAGS}
 
 LIBS = \
 	${WLROOTS_LIBS} \
@@ -170,7 +197,8 @@ LIBS = \
 	${XKBCOMMON_LIBS} \
 	${WAYLAND_LIBS} \
 	${LIBINPUT_LIBS} \
-	${UCL_LIBS}
+	${UCL_LIBS} \
+	${EPOLL_SHIM_LIBS}
 
 PROTOCOL_HEADERS = xdg-shell-protocol.h
 
@@ -178,10 +206,19 @@ PROTOCOL_HEADERS = xdg-shell-protocol.h
 PROTOCOL_HEADERS += wlr-layer-shell-unstable-v1-protocol.h
 .endif
 
-all: hikari hikari-unlocker
+all: hikari hikari-unlocker hikari-topbar
 
-version.h:
-	echo "#define HIKARI_VERSION \"${VERSION}\"" >> version.h
+# [COMMENT] Action purpose: Regenerate version.h on every build. The phony
+# FORCE prerequisite keeps the target permanently out of date; the header is
+# written to a temporary file and atomically renamed, so an interrupted build
+# can never leave a partial or empty version.h behind (the rename only runs
+# after the write succeeds).
+version.h: FORCE
+	echo "#define HIKARI_VERSION \"${VERSION}\"" > version.h.tmp && mv version.h.tmp version.h
+
+FORCE:
+
+main.o: version.h
 
 hikari: version.h ${PROTOCOL_HEADERS} ${OBJS}
 	${CC} ${LDFLAGS} ${CFLAGS} ${INCLUDES} -o ${.TARGET} ${OBJS} ${LIBS}
@@ -194,6 +231,18 @@ wlr-layer-shell-unstable-v1-protocol.h:
 
 hikari-unlocker: hikari_unlocker.c
 	${CC} ${CFLAGS_EXTRA} ${LDFLAGS_EXTRA} -o hikari-unlocker hikari_unlocker.c -lpam
+
+# [COMMENT] Action purpose: Build the top bar telemetry helper as its own
+# binary. It is deliberately NOT linked into the compositor: it samples sensors
+# with blocking popen() calls, which would stall the Wayland event loop if run
+# in-process. hikari reads its swaybar-protocol output over a non-blocking pipe.
+# It shares the project's DEBUG/ASAN/warning/hardening/GNU11 settings but has
+# its own feature-test-macro handling: topbar.c explicitly relies on
+# __BSD_VISIBLE (u_int, IFF_UP) staying set, which _POSIX_C_SOURCE clears, so
+# WITH_POSIX_C_SOURCE is deliberately NOT inherited here (see the comment atop
+# src/topbar.c).
+hikari-topbar: src/topbar.c
+	${CC} ${LDFLAGS} ${TOPBAR_CFLAGS} -o hikari-topbar src/topbar.c
 
 clean-doc:
 	@test -e _darcs && echo "cleaning manpage" ||:
@@ -208,6 +257,7 @@ clean: clean-doc
 	@echo "cleaning executables"
 	@rm hikari 2> /dev/null ||:
 	@rm hikari-unlocker 2> /dev/null ||:
+	@rm hikari-topbar 2> /dev/null ||:
 
 share/man/man1/hikari.1:
 	pandoc -M title:"HIKARI(1) ${VERSION} | hikari - Wayland Compositor" -s \
@@ -228,6 +278,7 @@ hikari-${VERSION}.tar.gz: version.h share/man/man1/hikari.1
 		LICENSE \
 		README.md \
 		CoC.md \
+		start-hikari.sh \
 		CHANGELOG.md \
 		share/man/man1/hikari.md \
 		share/man/man1/hikari.1 \
@@ -242,7 +293,7 @@ distclean: clean-doc
 
 dist: distclean hikari-${VERSION}.tar.gz
 
-install: hikari hikari-unlocker share/man/man1/hikari.1
+install: hikari hikari-unlocker hikari-topbar share/man/man1/hikari.1
 	mkdir -p ${DESTDIR}/${PREFIX}/bin
 	mkdir -p ${DESTDIR}/${PREFIX}/share/man/man1
 	mkdir -p ${DESTDIR}/${PREFIX}/share/backgrounds/hikari
@@ -252,15 +303,30 @@ install: hikari hikari-unlocker share/man/man1/hikari.1
 	sed "s,PREFIX,${PREFIX}," etc/hikari/hikari.conf > ${DESTDIR}/${ETC_PREFIX}/etc/hikari/hikari.conf
 	chmod 644 ${DESTDIR}/${ETC_PREFIX}/etc/hikari/hikari.conf
 	install -m ${PERMS} hikari ${DESTDIR}/${PREFIX}/bin
+	install -m 555 start-hikari.sh ${DESTDIR}/${PREFIX}/bin/start-hikari
 	install -m 4555 hikari-unlocker ${DESTDIR}/${PREFIX}/bin
+	# [COMMENT] Action purpose: Install the top bar helper unprivileged (555).
+	# Unlike the unlocker it needs no elevated rights -- it only reads sysctls
+	# and runs user-level query tools.
+	install -m 555 hikari-topbar ${DESTDIR}/${PREFIX}/bin
 	install -m 644 share/man/man1/hikari.1 ${DESTDIR}/${PREFIX}/share/man/man1
+	# [COMMENT] Action purpose: Install the default wallpaper to the path the
+	# sed-rewritten outputs.background configuration points at
+	# (${PREFIX}/share/backgrounds/hikari/hikari_wallpaper.png).
 	install -m 644 share/backgrounds/hikari/hikari_wallpaper.png ${DESTDIR}/${PREFIX}/share/backgrounds/hikari/hikari_wallpaper.png
-	install -m 644 share/wayland-sessions/hikari.desktop ${DESTDIR}/${PREFIX}/share/wayland-sessions/hikari.desktop
+	# [COMMENT] Action purpose: Rewrite the desktop entry Exec= value to use the
+	# absolute installed path so display managers resolve the wrapper correctly.
+	sed "s,Exec=start-hikari,Exec=${PREFIX}/bin/start-hikari," share/wayland-sessions/hikari.desktop > ${DESTDIR}/${PREFIX}/share/wayland-sessions/hikari.desktop
+	# [COMMENT] Action purpose: Set desktop entry file permissions to read-only
+	# (644) matching freedesktop.org wayland-sessions convention.
+	chmod 644 ${DESTDIR}/${PREFIX}/share/wayland-sessions/hikari.desktop
 	install -m 644 etc/pam.d/hikari-unlocker.${OS} ${DESTDIR}/${ETC_PREFIX}/etc/pam.d/hikari-unlocker
 
 uninstall:
 	-rm ${DESTDIR}/${PREFIX}/bin/hikari
+	-rm ${DESTDIR}/${PREFIX}/bin/start-hikari
 	-rm ${DESTDIR}/${PREFIX}/bin/hikari-unlocker
+	-rm ${DESTDIR}/${PREFIX}/bin/hikari-topbar
 	-rm ${DESTDIR}/${PREFIX}/share/man/man1/hikari.1
 	-rm ${DESTDIR}/${PREFIX}/share/backgrounds/hikari/hikari_wallpaper.png
 	-rm ${DESTDIR}/${PREFIX}/share/wayland-sessions/hikari.desktop
@@ -268,3 +334,28 @@ uninstall:
 	-rm ${DESTDIR}/${ETC_PREFIX}/etc/hikari/hikari.conf
 	-rmdir ${DESTDIR}/${ETC_PREFIX}/etc/hikari
 	-rmdir ${DESTDIR}/${PREFIX}/share/backgrounds/hikari
+
+# [COMMENT] Action purpose: Seed a working per-user config for the invoking
+# user (run as yourself, no sudo/DESTDIR -- this writes into $HOME). Copies
+# the wallpaper next to the config and pre-substitutes its path so the
+# background renders out of the box; unlike `install`, it never overwrites an
+# existing ~/.config/hikari/hikari.conf.
+install-user: share/backgrounds/hikari/hikari_wallpaper.png etc/hikari/hikari.conf
+	@test -n "${HOME}" || { echo "error: HOME is not set" >&2; exit 1; }
+	mkdir -p "${HOME}/.config/hikari"
+	install -m 644 share/backgrounds/hikari/hikari_wallpaper.png "${HOME}/.config/hikari/hikari_wallpaper.png"
+	@if [ -e "${HOME}/.config/hikari/hikari.conf" ]; then \
+		echo "install-user: ${HOME}/.config/hikari/hikari.conf already exists -- leaving it untouched"; \
+	else \
+		tmp=$$(mktemp "${HOME}/.config/hikari/hikari.conf.XXXXXX") && \
+		sed "s,PREFIX,${PREFIX}," etc/hikari/hikari.conf | \
+		  sed "s,/share/backgrounds/hikari,${HOME}/.config/hikari," > "$$tmp" && \
+		chmod 644 "$$tmp" && \
+		mv -f "$$tmp" "${HOME}/.config/hikari/hikari.conf" && \
+		echo "install-user: wrote ${HOME}/.config/hikari/hikari.conf"; \
+	fi
+
+uninstall-user:
+	@test -n "${HOME}" || { echo "error: HOME is not set" >&2; exit 1; }
+	-rm "${HOME}/.config/hikari/hikari_wallpaper.png"
+	@echo "uninstall-user: ${HOME}/.config/hikari/hikari.conf left in place -- remove it manually if desired"

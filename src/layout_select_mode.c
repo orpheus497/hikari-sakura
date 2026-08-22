@@ -11,14 +11,14 @@
 #include <hikari/keyboard.h>
 #include <hikari/layout_config.h>
 #include <hikari/normal_mode.h>
-#include <hikari/renderer.h>
+
 #include <hikari/server.h>
 #include <hikari/view.h>
 #include <hikari/workspace.h>
 
 static struct hikari_split *
 lookup_layout(struct hikari_configuration *configuration,
-    struct wlr_event_keyboard_key *event,
+    struct wlr_keyboard_key_event *event,
     struct hikari_keyboard *keyboard)
 {
   uint32_t keycode = event->keycode + 8;
@@ -41,7 +41,7 @@ lookup_layout(struct hikari_configuration *configuration,
 
 static void
 apply_layout(struct hikari_configuration *configuration,
-    struct wlr_event_keyboard_key *event,
+    struct wlr_keyboard_key_event *event,
     struct hikari_keyboard *keyboard)
 {
   struct hikari_split *split = lookup_layout(configuration, event, keyboard);
@@ -57,7 +57,7 @@ apply_layout(struct hikari_configuration *configuration,
 
 static void
 key_handler(
-    struct hikari_keyboard *keyboard, struct wlr_event_keyboard_key *event)
+    struct hikari_keyboard *keyboard, struct wlr_keyboard_key_event *event)
 {
   if (event->state == WL_KEYBOARD_KEY_STATE_PRESSED) {
     apply_layout(hikari_configuration, event, keyboard);
@@ -70,7 +70,7 @@ modifiers_handler(struct hikari_keyboard *keyboard)
 
 static void
 button_handler(
-    struct hikari_cursor *cursor, struct wlr_event_pointer_button *event)
+    struct hikari_cursor *cursor, struct wlr_pointer_button_event *event)
 {}
 
 static void
@@ -95,7 +95,7 @@ hikari_layout_select_mode_init(
   layout_select_mode->mode.key_handler = key_handler;
   layout_select_mode->mode.button_handler = button_handler;
   layout_select_mode->mode.modifiers_handler = modifiers_handler;
-  layout_select_mode->mode.render = hikari_renderer_layout_select_mode;
+
   layout_select_mode->mode.cancel = cancel;
   layout_select_mode->mode.cursor_move = cursor_move;
 }

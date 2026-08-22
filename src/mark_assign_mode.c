@@ -8,7 +8,7 @@
 #include <hikari/keyboard.h>
 #include <hikari/mark.h>
 #include <hikari/normal_mode.h>
-#include <hikari/renderer.h>
+
 #include <hikari/view.h>
 
 static struct hikari_mark_assign_mode *
@@ -148,7 +148,7 @@ handle_keysym(
 
 static void
 assign_mark(
-    struct wlr_event_keyboard_key *event, struct hikari_keyboard *keyboard)
+    struct wlr_keyboard_key_event *event, struct hikari_keyboard *keyboard)
 {
   assert(hikari_server.workspace->focus_view != NULL);
 
@@ -159,7 +159,7 @@ assign_mark(
 
 static void
 key_handler(
-    struct hikari_keyboard *keyboard, struct wlr_event_keyboard_key *event)
+    struct hikari_keyboard *keyboard, struct wlr_keyboard_key_event *event)
 {
   if (event->state == WL_KEYBOARD_KEY_STATE_PRESSED) {
     assign_mark(event, keyboard);
@@ -201,7 +201,7 @@ cancel(void)
 
 static void
 button_handler(
-    struct hikari_cursor *cursor, struct wlr_event_pointer_button *event)
+    struct hikari_cursor *cursor, struct wlr_pointer_button_event *event)
 {}
 
 static void
@@ -214,7 +214,7 @@ hikari_mark_assign_mode_init(struct hikari_mark_assign_mode *mark_assign_mode)
   mark_assign_mode->mode.key_handler = key_handler;
   mark_assign_mode->mode.button_handler = button_handler;
   mark_assign_mode->mode.modifiers_handler = modifiers_handler;
-  mark_assign_mode->mode.render = hikari_renderer_mark_assign_mode;
+
   mark_assign_mode->mode.cancel = cancel;
   mark_assign_mode->mode.cursor_move = cursor_move;
 

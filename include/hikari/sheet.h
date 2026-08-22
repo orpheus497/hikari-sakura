@@ -1,6 +1,9 @@
 #if !defined(HIKARI_SHEET_H)
 #define HIKARI_SHEET_H
 
+#include <stdbool.h>
+#include <stdint.h>
+
 #include <wayland-util.h>
 
 #include <wlr/util/box.h>

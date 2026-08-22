@@ -10,7 +10,7 @@
 #include <hikari/indicator.h>
 #include <hikari/indicator_frame.h>
 #include <hikari/keyboard.h>
-#include <hikari/renderer.h>
+
 #include <hikari/server.h>
 #include <hikari/view.h>
 
@@ -151,7 +151,7 @@ dump_debug(struct hikari_server *server)
 static void
 modifiers_handler(struct hikari_keyboard *keyboard)
 {
-  wlr_seat_set_keyboard(hikari_server.seat, keyboard->device);
+  wlr_seat_set_keyboard(hikari_server.seat, keyboard->wlr_keyboard);
   struct hikari_view *focus_view = hikari_server.workspace->focus_view;
 
   if (hikari_server.keyboard_state.mod_released) {
@@ -166,9 +166,23 @@ modifiers_handler(struct hikari_keyboard *keyboard)
   }
 
   if (hikari_server.keyboard_state.mod_changed) {
-    if (focus_view != NULL) {
-      hikari_group_damage(focus_view->group);
-      hikari_indicator_damage(&hikari_server.indicator, focus_view);
+    /* [COMMENT] Action purpose: The Logo key going down or up is what drives
+    the indicator overlay on and off. This previously called
+    hikari_indicator_damage() for both transitions -- and that is just
+    hikari_indicator_position(), which used to force the frame visible -- so
+    releasing the key showed the overlay exactly as much as pressing it did,
+    and nothing ever took it back down. See DECISIONS_LOG Phase 59. */
+    if (hikari_server_is_indicating()) {
+      if (focus_view != NULL) {
+        hikari_group_damage(focus_view->group);
+      }
+      hikari_indicator_show(&hikari_server.indicator, focus_view);
+    } else {
+      hikari_indicator_hide(&hikari_server.indicator, focus_view);
+
+      if (focus_view != NULL) {
+        hikari_group_damage(focus_view->group);
+      }
     }
 #ifndef NDEBUG
     dump_debug(&hikari_server);
@@ -176,7 +190,7 @@ modifiers_handler(struct hikari_keyboard *keyboard)
   }
 
   wlr_seat_keyboard_notify_modifiers(
-      hikari_server.seat, &keyboard->device->keyboard->modifiers);
+      hikari_server.seat, &keyboard->wlr_keyboard->modifiers);
 }
 
 static void
@@ -218,7 +232,7 @@ cursor_move(uint32_t time)
           &sx,
           &sy);
 
-  if (node != NULL) {
+if (node != NULL) {
     struct hikari_node *focus_node =
         (struct hikari_node *)hikari_server.workspace->focus_view;
 
@@ -241,7 +255,7 @@ cursor_move(uint32_t time)
 }
 
 static inline void
-start_cursor_down_handling(struct wlr_event_pointer_button *event)
+start_cursor_down_handling(struct wlr_pointer_button_event *event)
 {
   double lx = hikari_server.cursor.wlr_cursor->x;
   double ly = hikari_server.cursor.wlr_cursor->y;
@@ -267,7 +281,7 @@ start_cursor_down_handling(struct wlr_event_pointer_button *event)
 }
 
 static inline void
-stop_cursor_down_handling(struct wlr_event_pointer_button *event)
+stop_cursor_down_handling(struct wlr_pointer_button_event *event)
 {
   hikari_server.normal_mode.mode.cursor_move = cursor_move;
 
@@ -285,16 +299,16 @@ is_cursor_down(void)
 
 static void
 button_handler(
-    struct hikari_cursor *cursor, struct wlr_event_pointer_button *event)
+    struct hikari_cursor *cursor, struct wlr_pointer_button_event *event)
 {
   if (handle_pending_action()) {
-    if (event->state == WLR_BUTTON_RELEASED && is_cursor_down()) {
+    if (event->state == WL_POINTER_BUTTON_STATE_RELEASED && is_cursor_down()) {
       stop_cursor_down_handling(event);
     }
     return;
   }
 
-  if (event->state == WLR_BUTTON_PRESSED) {
+  if (event->state == WL_POINTER_BUTTON_STATE_PRESSED) {
     uint32_t modifiers = hikari_server.keyboard_state.modifiers;
     struct hikari_binding_group *map = &cursor->bindings[modifiers];
 
@@ -313,7 +327,7 @@ button_handler(
 
 static void
 key_handler(
-    struct hikari_keyboard *keyboard, struct wlr_event_keyboard_key *event)
+    struct hikari_keyboard *keyboard, struct wlr_keyboard_key_event *event)
 {
   if (handle_pending_action()) {
     return;
@@ -328,7 +342,7 @@ key_handler(
     }
   }
 
-  wlr_seat_set_keyboard(hikari_server.seat, keyboard->device);
+  wlr_seat_set_keyboard(hikari_server.seat, keyboard->wlr_keyboard);
   wlr_seat_keyboard_notify_key(
       hikari_server.seat, event->time_msec, event->keycode, event->state);
 }
@@ -339,7 +353,7 @@ hikari_normal_mode_init(struct hikari_normal_mode *normal_mode)
   normal_mode->mode.key_handler = key_handler;
   normal_mode->mode.button_handler = button_handler;
   normal_mode->mode.modifiers_handler = modifiers_handler;
-  normal_mode->mode.render = hikari_renderer_normal_mode;
+
   normal_mode->mode.cancel = cancel;
   normal_mode->mode.cursor_move = cursor_move;
   normal_mode->pending_action = NULL;

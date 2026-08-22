@@ -15,7 +15,7 @@ static void
 update_mod_state(struct hikari_keyboard *keyboard)
 {
   uint32_t modifier_keys =
-      wlr_keyboard_get_modifiers(keyboard->device->keyboard);
+      wlr_keyboard_get_modifiers(keyboard->wlr_keyboard);
 
   bool was_pressed = hikari_server.keyboard_state.mod_pressed;
   bool is_pressed = modifier_keys & WLR_MODIFIER_LOGO;
@@ -30,7 +30,7 @@ static void
 key_handler(struct wl_listener *listener, void *data)
 {
   struct hikari_keyboard *keyboard = wl_container_of(listener, keyboard, key);
-  struct wlr_event_keyboard_key *event = data;
+  struct wlr_keyboard_key_event *event = data;
 
   hikari_server.mode->key_handler(keyboard, event);
 }
@@ -137,19 +137,20 @@ void
 hikari_keyboard_init(
     struct hikari_keyboard *keyboard, struct wlr_input_device *device)
 {
-  keyboard->device = device;
+  struct wlr_keyboard *wlr_keyboard = wlr_keyboard_from_input_device(device);
+  keyboard->wlr_keyboard = wlr_keyboard;
   keyboard->keymap = NULL;
 
   keyboard->modifiers.notify = modifiers_handler;
-  wl_signal_add(&device->keyboard->events.modifiers, &keyboard->modifiers);
+  wl_signal_add(&wlr_keyboard->events.modifiers, &keyboard->modifiers);
 
   keyboard->key.notify = key_handler;
-  wl_signal_add(&device->keyboard->events.key, &keyboard->key);
+  wl_signal_add(&wlr_keyboard->events.key, &keyboard->key);
 
   keyboard->destroy.notify = destroy_handler;
-  wl_signal_add(&device->keyboard->events.destroy, &keyboard->destroy);
+  wl_signal_add(&device->events.destroy, &keyboard->destroy);
 
-  wlr_seat_set_keyboard(hikari_server.seat, device);
+  wlr_seat_set_keyboard(hikari_server.seat, wlr_keyboard);
 
   wl_list_insert(&hikari_server.keyboards, &keyboard->server_keyboards);
 
@@ -185,19 +186,30 @@ load_keymap(struct hikari_keyboard_config *keyboard_config)
   return keymap;
 }
 
+// Function purpose: Apply a resolved keyboard_config's keymap and repeat
+// settings to a connected keyboard. Called both at first attach and on every
+// config reload that re-resolves an already-connected keyboard's config.
 void
 hikari_keyboard_configure(struct hikari_keyboard *keyboard,
     struct hikari_keyboard_config *keyboard_config)
 {
+  // Action purpose: Release the previous keymap reference before
+  // overwriting the pointer. hikari_keyboard_configure can run more than once
+  // per device (e.g. a config reload re-resolving an already-connected
+  // keyboard's config), and load_keymap() always returns a fresh ref via
+  // xkb_keymap_ref() -- without this, each reconfigure leaks the prior keymap.
+  // xkb_keymap_unref(NULL) is a no-op, so this is safe on the first call too.
+  xkb_keymap_unref(keyboard->keymap);
+
   keyboard->keymap = load_keymap(keyboard_config);
   assert(keyboard->keymap != NULL);
-  wlr_keyboard_set_keymap(keyboard->device->keyboard, keyboard->keymap);
+  wlr_keyboard_set_keymap(keyboard->wlr_keyboard, keyboard->keymap);
 
   int repeat_rate = hikari_keyboard_config_get_repeat_rate(keyboard_config);
   int repeat_delay = hikari_keyboard_config_get_repeat_delay(keyboard_config);
 
   wlr_keyboard_set_repeat_info(
-      keyboard->device->keyboard, repeat_rate, repeat_delay);
+      keyboard->wlr_keyboard, repeat_rate, repeat_delay);
 }
 
 void
@@ -217,7 +229,7 @@ hikari_keyboard_for_keysym(struct hikari_keyboard *keyboard,
 {
   const xkb_keysym_t *syms;
   int nsyms = xkb_state_key_get_syms(
-      keyboard->device->keyboard->xkb_state, keycode, &syms);
+      keyboard->wlr_keyboard->xkb_state, keycode, &syms);
 
   for (int i = 0; i < nsyms; i++) {
     iter(keyboard, keycode, syms[i]);

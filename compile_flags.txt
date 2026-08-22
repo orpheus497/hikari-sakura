@@ -1,0 +1,4 @@
+-Wall
+-Iinclude
+-DWLR_USE_UNSTABLE
+-std=gnu11

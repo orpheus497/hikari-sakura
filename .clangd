@@ -1,0 +1,39 @@
+CompileFlags:
+  Add:
+    - "-Iinclude"
+    - "-I/usr/local/include/wlroots-0.20"
+    - "-I/usr/local/include"
+    - "-I/usr/local/include/pixman-1"
+    - "-I/usr/local/include/libdrm"
+    - "-I/usr/local/include/libepoll-shim"
+    - "-I/usr/local/include/pango-1.0"
+    - "-I/usr/local/include/cairo"
+    - "-I/usr/local/include/fribidi"
+    - "-I/usr/local/include/harfbuzz"
+    - "-I/usr/local/include/freetype2"
+    - "-I/usr/local/include/libpng16"
+    - "-I/usr/local/include/glib-2.0"
+    - "-I/usr/local/lib/glib-2.0/include"
+    - "-DWLR_USE_UNSTABLE"
+    - "-DHIKARI_ETC_PREFIX=/usr/local"
+    - "-DHIKARI_PREFIX=/usr/local"
+    - "-DHIKARI_TOPBAR_PATH=\"/usr/local/bin/hikari-topbar\""
+    # Do NOT define _POSIX_C_SOURCE here: on FreeBSD sys/cdefs.h sets
+    # __BSD_VISIBLE to 0 whenever _POSIX_C_SOURCE/_XOPEN_SOURCE/_ANSI_SOURCE is
+    # defined, which hides BSD-only declarations the sources legitimately use
+    # (u_int via sys/ucred.h, IFF_UP via net/if.h) and, at 200809L
+    # specifically, usleep -- which POSIX removed in the 2008 revision. That
+    # made clangd stricter than the actual build and produced errors for code
+    # that compiles cleanly.
+    #
+    # Deliberately no blanket -std= here: the Makefile's main CFLAGS pass no
+    # -std, so cc falls through to FreeBSD's compiler default (gnu17), while
+    # only hikari-topbar's TOPBAR_CFLAGS pins -std=gnu11. A shared -std=gnu11
+    # for every file would make clangd disagree with the main target. See the
+    # per-file override below for src/topbar.c.
+---
+If:
+  PathMatch: "src/topbar\\.c"
+CompileFlags:
+  Add:
+    - "-std=gnu11"

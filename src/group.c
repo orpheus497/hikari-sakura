@@ -17,6 +17,13 @@ hikari_group_init(struct hikari_group *group, const char *name)
 
   wl_list_init(&group->views);
   wl_list_init(&group->visible_views);
+  /* [COMMENT] Action purpose: Initialise the server-visibility aggregate link.
+  A group is allocated with hikari_malloc (non-zeroing) and this link is only
+  inserted once the group's first view becomes visible, so without this it holds
+  indeterminate garbage for the whole lifetime of a group that is never shown --
+  which hikari_group_fini() would then attempt to remove. See DECISIONS_LOG
+  Phase 55. */
+  wl_list_init(&group->visible_server_groups);
 
   wl_list_insert(&hikari_server.groups, &group->server_groups);
 }
@@ -26,6 +33,16 @@ hikari_group_fini(struct hikari_group *group)
 {
   hikari_free(group->name);
   wl_list_remove(&group->server_groups);
+  /* [COMMENT] Action purpose: Unlink the server-visibility aggregate before the
+  group is freed. Callers are expected to have already left this unlinked (a
+  group with no views can have no visible views), but that was an unwritten and
+  unasserted invariant maintained by entirely different functions -- and if it
+  is ever violated, hikari_server.visible_groups retains a node inside freed
+  heap, which is walked on every focus change. Removing unconditionally turns a
+  silent use-after-free into a no-op. Safe in both states because the link is
+  kept valid by hikari_group_init() and decrease_group_visibility(). See
+  DECISIONS_LOG Phase 55. */
+  wl_list_remove(&group->visible_server_groups);
 }
 
 #define GROUP_VIEW(name, link)                                                 \

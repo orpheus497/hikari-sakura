@@ -17,16 +17,11 @@ hikari_command_execute(const char *cmd)
     if (child == 0) {
       setsid();
       execl("/bin/sh", "/bin/sh", "-c", cmd, NULL);
+      _exit(EXIT_FAILURE);
     }
     _exit(child == -1);
   }
 
-  for (;;) {
-    waitpid(child, &status, 0);
-    if (errno == EINTR) {
-      continue;
-    } else {
-      return;
-    }
-  }
+  // [COMMENT] Action purpose: Reap the intermediate child, retrying on EINTR.
+  while (waitpid(child, &status, 0) == -1 && errno == EINTR) {}
 }

@@ -6,7 +6,7 @@
 #include <hikari/binding.h>
 #include <hikari/configuration.h>
 #include <hikari/keyboard.h>
-#include <hikari/renderer.h>
+
 #include <hikari/server.h>
 #include <hikari/view.h>
 
@@ -28,9 +28,10 @@ cancel(void)
   }
 }
 
+// [COMMENT] Function purpose: Handles keyboard events during move mode.
 static void
 key_handler(
-    struct hikari_keyboard *keyboard, struct wlr_event_keyboard_key *event)
+    struct hikari_keyboard *keyboard, struct wlr_keyboard_key_event *event)
 {
   if (event->state == WL_KEYBOARD_KEY_STATE_RELEASED) {
     hikari_server_enter_normal_mode(NULL);
@@ -69,11 +70,12 @@ cursor_move(uint32_t time_msec)
   }
 }
 
+// [COMMENT] Function purpose: Handles pointer button events during move mode.
 static void
 button_handler(
-    struct hikari_cursor *cursor, struct wlr_event_pointer_button *event)
+    struct hikari_cursor *cursor, struct wlr_pointer_button_event *event)
 {
-  if (event->state == WLR_BUTTON_RELEASED) {
+  if (event->state == WL_POINTER_BUTTON_STATE_RELEASED) {
     hikari_server_enter_normal_mode(NULL);
   }
 }
@@ -84,7 +86,7 @@ hikari_move_mode_init(struct hikari_move_mode *move_mode)
   move_mode->mode.key_handler = key_handler;
   move_mode->mode.button_handler = button_handler;
   move_mode->mode.modifiers_handler = modifiers_handler;
-  move_mode->mode.render = hikari_renderer_move_mode;
+
   move_mode->mode.cancel = cancel;
   move_mode->mode.cursor_move = cursor_move;
 }

@@ -26,6 +26,12 @@ struct hikari_configuration {
   float border_active[4];
   float border_inactive[4];
 
+  /* [COMMENT] Class purpose: Top bar background, independent of `clear`. Kept
+  separate so the bar can be tinted or made translucent without altering the
+  desktop background, which is what sharing `clear` forced. Alpha is honoured
+  -- see parse_color() in src/configuration.c. */
+  float bar[4];
+
   struct hikari_font font;
 
   int border;
@@ -43,6 +49,7 @@ struct hikari_configuration {
   struct wl_list keyboard_binding_configs;
   struct wl_list mouse_binding_configs;
   struct wl_list switch_configs;
+  struct wl_list gesture_binding_configs;
 };
 
 extern struct hikari_configuration *hikari_configuration;

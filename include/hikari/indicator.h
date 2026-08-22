@@ -5,7 +5,6 @@
 #include <hikari/indicator_bar.h>
 #include <hikari/sheet.h>
 
-struct hikari_renderer;
 struct hikari_view;
 struct hikari_output;
 
@@ -23,6 +22,11 @@ hikari_indicator_init(
 void
 hikari_indicator_fini(struct hikari_indicator *indicator);
 
+/* Function purpose: Finalize indicator bars and hide the associated view's indicator frame overlay. */
+void
+hikari_indicator_fini_for_view(
+    struct hikari_indicator *indicator, struct hikari_view *view);
+
 void
 hikari_indicator_update(
     struct hikari_indicator *indicator, struct hikari_view *view);
@@ -35,10 +39,23 @@ void
 hikari_indicator_update_sheet(struct hikari_indicator *indicator,
     struct hikari_output *output,
     struct hikari_sheet *sheet,
-    unsigned long flags);
+    uint16_t flags);
 
 void
-hikari_indicator_damage(
+hikari_indicator_position(
+    struct hikari_indicator *indicator, struct hikari_view *view);
+
+/* Function purpose: Show the whole indicator overlay (four bars plus the
+view's frame) and position it. Visibility is owned here, not by
+hikari_indicator_position(). */
+void
+hikari_indicator_show(
+    struct hikari_indicator *indicator, struct hikari_view *view);
+
+/* Function purpose: Hide the whole indicator overlay. A NULL view still
+hides the four bars, which are global to the server. */
+void
+hikari_indicator_hide(
     struct hikari_indicator *indicator, struct hikari_view *view);
 
 #define UPDATE(name)                                                           \
@@ -61,7 +78,7 @@ UPDATE(mark)
       struct hikari_output *output,                                            \
       struct wlr_box *geometry)                                                \
   {                                                                            \
-    hikari_indicator_bar_damage(&indicator->name, output, geometry);           \
+    hikari_indicator_bar_position(&indicator->name, output, geometry);         \
   }
 
 DAMAGE(title)
@@ -69,6 +86,13 @@ DAMAGE(sheet)
 DAMAGE(group)
 DAMAGE(mark)
 #undef DAMAGE
+
+static inline void
+hikari_indicator_damage(
+    struct hikari_indicator *indicator, struct hikari_view *view)
+{
+  hikari_indicator_position(indicator, view);
+}
 
 #define COLOR(name)                                                            \
   static inline void hikari_indicator_set_color_##name(                        \
