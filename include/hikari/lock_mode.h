@@ -5,6 +5,7 @@
 
 #include <wayland-util.h>
 
+#include <hikari/lock_clock.h>
 #include <hikari/lock_indicator.h>
 #include <hikari/mode.h>
 
@@ -18,6 +19,10 @@ struct hikari_lock_mode {
   PAM cleanup and exits, so a blocking reap stalls the whole compositor. */
   struct wl_event_source *locker_reap_timer;
   struct hikari_lock_indicator *lock_indicator;
+
+  /* The compositor-drawn clock. Embedded rather than allocated because it is a
+  single timer handle and lives for exactly as long as the mode does. */
+  struct hikari_lock_clock clock;
 
   bool outputs_disabled;
 };

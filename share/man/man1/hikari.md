@@ -189,16 +189,24 @@ General actions
 ---------------
 * **lock**
 
-  Lock **hikari** and turn off all outputs. To unlock you need to enter your
-  password and press enter. Being able to unlock requires _hikari-unlocker_ to
-  be in the **PATH** and running with setuid(2) root privileges (those are
+  Lock **hikari**. To unlock you need to enter your password and press enter.
+  Being able to unlock requires _hikari-unlocker_ to be installed at the
+  compile-time prefix and running with setuid(2) root privileges (those are
   required to check if the entered password is correct). _hikari-unlocker_ also
   needs pam.conf(5) to be aware of its existence, therefore there must be a
   _hikari-unlocker_ service file in _pam.d_.
 
-  The lock screen displays all views that are marked as **public** which allows
-  applications to provide information to the user when the computer is locked
-  (e.g. a clock).
+  The lock screen shows a blurred still of the workspace as it was at the moment
+  of locking, with a clock and date drawn over it. Both are drawn by the
+  compositor and need no client running. The outputs are powered down after a
+  period of inactivity rather than immediately; see *blank-timeout-ac* and
+  *blank-timeout-battery* in the *ui* section's *lock* subsection, which also
+  controls the blur and the clock.
+
+  Views marked as **public** are displayed above the backdrop, which allows
+  applications to provide extra information while the computer is locked. Every
+  other view is hidden — the whole desktop layer is switched off, so no window,
+  bar or layer-shell surface can appear on the lock screen.
 
 * **quit**
 
@@ -461,9 +469,12 @@ View actions
   Toggles the public state of the focused view. Public views are also displayed
   on the lock screen (note: they do not accept any input when the screen is
   locked though). These views should only contain information that should be
-  displayed when the screen is locked, such as clocks or the progress of a long
-  running process, they should never contain sensitive information. The public
+  displayed when the screen is locked, such as the progress of a long running
+  process, they should never contain sensitive information. The public
   state is indicated in the sheet indicator bar via **!**.
+
+  A clock is no longer a reason to mark a view public — **hikari** draws its own
+  on the lock screen; see the *lock* subsection of the *ui* section.
 
 VT actions
 ----------
@@ -912,6 +923,72 @@ The standard **step** value is 100.
 ```
 step = 100
 ```
+
+Lock screen
+-----------
+The *lock* section controls what the screen locker draws and how long it stays
+lit. Everything here is drawn by **hikari** itself, so it is present with no
+session running, survives a client crash, and cannot be impersonated by a window
+that merely looks like a clock.
+
+* **blur**
+
+  Blurs the workspace as it looked at the moment the screen was locked, and
+  shows that behind the lock screen. Accepts either a boolean or an object, so
+  that disabling it and tuning it use the same key.
+
+  *radius* is in pixels; *passes* is how many box-blur passes approximate a
+  Gaussian. Three is the standard approximation and is rarely worth changing.
+
+```
+blur = false
+blur = { radius = 12; passes = 3 }
+```
+
+* **clock**
+
+  Whether to draw the clock and date at all. Both are **strftime**(3) format
+  strings. Setting *date-format* to an empty string draws the time alone.
+
+```
+clock        = true
+clock-format = "%H:%M"
+date-format  = "%A, %e %B"
+clock-font   = "sans 72"
+date-font    = "sans 20"
+```
+
+* **clock-color**
+
+  The color of the clock and date. Accepts the same forms as any colorscheme
+  entry, including the quoted *"#RRGGBBAA"* string with alpha.
+
+  The text is drawn with a soft shadow behind it, because it sits over a blurred
+  photograph of the user's own desktop whose brightness is not known in advance.
+  White therefore stays legible over a light wallpaper without any configuration.
+
+```
+clock-color = "#FFFFFF"
+```
+
+* **blank-timeout-ac**, **blank-timeout-battery**
+
+  Seconds of inactivity before the outputs are powered down while locked. The
+  two are separate because the useful values differ by an order of magnitude: on
+  battery the screen should die quickly, while on mains a visible clock is
+  rather the point.
+
+  A value of **0** disables blanking entirely. The power source is read each
+  time the timer is armed rather than once at lock time, so unplugging the mains
+  while the screen is locked takes effect on the next keystroke.
+
+```
+blank-timeout-ac      = 180
+blank-timeout-battery = 60
+```
+
+Views marked **public** are still displayed on the lock screen as before, and
+are drawn above the blurred backdrop. See **view-toggle-public**.
 
 Colorschemes
 ------------

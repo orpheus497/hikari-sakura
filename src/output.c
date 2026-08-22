@@ -7,16 +7,11 @@
 #include <wayland-server-core.h>
 #include <cairo/cairo.h>
 
-#include <drm_fourcc.h>
-
 #include <wlr/backend.h>
 #include <wlr/util/log.h>
-#include <wlr/render/allocator.h>
-#include <wlr/render/drm_format_set.h>
-#include <wlr/render/wlr_renderer.h>
-#include <wlr/interfaces/wlr_buffer.h>
 #include <wlr/types/wlr_scene.h>
 
+#include <hikari/buffer.h>
 #include <hikari/color.h>
 #include <hikari/memory.h>
 
@@ -25,47 +20,6 @@
 #include <hikari/view.h>
 #include <hikari/xwayland_unmanaged_view.h>
 #endif
-
-struct hikari_background_buffer {
-  struct wlr_buffer base;
-  unsigned char *data;
-  uint32_t format;
-  size_t stride;
-};
-
-static void
-bg_buffer_destroy(struct wlr_buffer *wlr_buffer)
-{
-  struct hikari_background_buffer *buffer =
-      wl_container_of(wlr_buffer, buffer, base);
-  hikari_free(buffer->data);
-  hikari_free(buffer);
-}
-
-static bool
-bg_buffer_begin_data_ptr_access(struct wlr_buffer *wlr_buffer, uint32_t flags,
-    void **data, uint32_t *format, size_t *stride)
-{
-  struct hikari_background_buffer *buffer =
-      wl_container_of(wlr_buffer, buffer, base);
-  if (flags & WLR_BUFFER_DATA_PTR_ACCESS_WRITE) {
-    return false;
-  }
-  *data = buffer->data;
-  *format = buffer->format;
-  *stride = buffer->stride;
-  return true;
-}
-
-static void
-bg_buffer_end_data_ptr_access(struct wlr_buffer *wlr_buffer)
-{}
-
-static const struct wlr_buffer_impl bg_buffer_impl = {
-  .destroy = bg_buffer_destroy,
-  .begin_data_ptr_access = bg_buffer_begin_data_ptr_access,
-  .end_data_ptr_access = bg_buffer_end_data_ptr_access,
-};
 
 /* Function purpose: Draw the background image onto the output-sized surface
 using the configured fit. Returns false when Cairo cannot render it, in which
@@ -196,29 +150,14 @@ hikari_output_load_background(struct hikari_output *output,
   // failure for the buffer itself now falls through to that same fallback
   // instead of aborting the compositor to display a wallpaper. See
   // DECISIONS_LOG Finding 4.
-  struct hikari_background_buffer *bg_buffer =
-      hikari_try_malloc(sizeof(struct hikari_background_buffer));
-  unsigned char *bg_data = NULL;
-
-  if (bg_buffer != NULL) {
-    bg_data = hikari_try_malloc(byte_count);
-    if (bg_data == NULL) {
-      hikari_free(bg_buffer);
-      bg_buffer = NULL;
-    }
-  }
+  struct wlr_buffer *bg_buffer =
+      hikari_buffer_create_argb8888(output_width, output_height, data, stride);
 
   struct wlr_scene_buffer *scene_buffer = NULL;
 
   if (bg_buffer != NULL) {
-    wlr_buffer_init(&bg_buffer->base, &bg_buffer_impl, output_width, output_height);
-    bg_buffer->format = DRM_FORMAT_ARGB8888;
-    bg_buffer->stride = stride;
-    bg_buffer->data = bg_data;
-    memcpy(bg_buffer->data, data, byte_count);
-
     scene_buffer =
-        wlr_scene_buffer_create(&hikari_server.scene->tree, &bg_buffer->base);
+        wlr_scene_buffer_create(hikari_server.layers.background, bg_buffer);
   }
 
   if (scene_buffer != NULL) {
@@ -246,7 +185,7 @@ hikari_output_load_background(struct hikari_output *output,
     hikari_color_premultiply(color, hikari_configuration->clear);
 
     struct wlr_scene_rect *rect = wlr_scene_rect_create(
-        &hikari_server.scene->tree, output_width, output_height, color);
+        hikari_server.layers.background, output_width, output_height, color);
     if (rect != NULL) {
       output->background = &rect->node;
       wlr_scene_node_set_position(
@@ -264,7 +203,7 @@ hikari_output_load_background(struct hikari_output *output,
   // hikari_lock_indicator_fini fix); bg_buffer is NULL here whenever
   // allocation failed above, so guard the call.
   if (bg_buffer != NULL) {
-    wlr_buffer_drop(&bg_buffer->base);
+    wlr_buffer_drop(bg_buffer);
   }
 
   cairo_surface_destroy(image);
@@ -498,6 +437,8 @@ hikari_output_init(struct hikari_output *output, struct wlr_output *wlr_output)
   output->server = &hikari_server;
   output->scene_output = NULL;
   output->lock_indicator_node = NULL;
+  output->lock_backdrop_node = NULL;
+  output->lock_clock_node = NULL;
   output->background = NULL;
 
   /* [COMMENT] Action purpose: Initialise the bar before output_geometry() runs,
@@ -707,6 +648,20 @@ hikari_output_fini(struct hikari_output *output)
     if (output->lock_indicator_node != NULL) {
       wlr_scene_node_destroy(&output->lock_indicator_node->node);
       output->lock_indicator_node = NULL;
+    }
+
+    /* [COMMENT] Action purpose: The lock screen's own nodes go with the output
+    they were drawn for. Both are sized and positioned against this output's
+    geometry, so leaving them parented to the shared lock layer after the output
+    disappears would strand a snapshot of a monitor that is no longer there. */
+    if (output->lock_backdrop_node != NULL) {
+      wlr_scene_node_destroy(&output->lock_backdrop_node->node);
+      output->lock_backdrop_node = NULL;
+    }
+
+    if (output->lock_clock_node != NULL) {
+      wlr_scene_node_destroy(&output->lock_clock_node->node);
+      output->lock_clock_node = NULL;
     }
 
     if (workspace != next_workspace) {

@@ -1,12 +1,20 @@
 #ifdef HAVE_XWAYLAND
 #include <hikari/xwayland_unmanaged_view.h>
 
+#include <wlr/types/wlr_scene.h>
+#include <wlr/util/log.h>
 #include <wlr/xwayland.h>
 
 #include <hikari/memory.h>
 #include <hikari/output.h>
 #include <hikari/server.h>
 #include <hikari/workspace.h>
+
+// [COMMENT] Action purpose: Defined alongside the rest of the surface-tree
+// handling further down, but needed by commit_handler above it.
+static void
+position_surface_tree(
+    struct hikari_xwayland_unmanaged_view *xwayland_unmanaged_view);
 
 static bool
 was_updated(struct wlr_xwayland_surface *surface,
@@ -53,6 +61,12 @@ commit_handler(struct wl_listener *listener, void *data)
 
     recalculate_geometry(geometry, surface, output);
 
+    // [COMMENT] Action purpose: Override-redirect surfaces reposition
+    // themselves as they are used -- a menu tracking the pointer, a drag icon
+    // following the cursor -- so the scene node has to follow, not just the
+    // hit-test geometry.
+    position_surface_tree(xwayland_unmanaged_view);
+
     hikari_output_add_damage(output, geometry);
   } else if (output->enabled) {
     hikari_output_add_effective_surface_damage(
@@ -98,6 +112,18 @@ map_unmanaged(
   wl_list_insert(&output->unmanaged_xwayland_views,
       &xwayland_unmanaged_view->unmanaged_output_views);
 
+  /* [COMMENT] Action purpose: Show it, and put it above the windows already in
+  the view layer -- an override-redirect surface is a menu, tooltip or drag
+  icon, which is only ever meaningful on top of whatever spawned it. Raising is
+  scoped to the view layer, so this cannot climb over the bar or the lock
+  screen. */
+  if (xwayland_unmanaged_view->surface_tree != NULL) {
+    position_surface_tree(xwayland_unmanaged_view);
+    wlr_scene_node_set_enabled(
+        &xwayland_unmanaged_view->surface_tree->node, true);
+    wlr_scene_node_raise_to_top(&xwayland_unmanaged_view->surface_tree->node);
+  }
+
   hikari_output_add_damage(output, geometry);
 }
 
@@ -140,6 +166,14 @@ unmap(struct hikari_xwayland_unmanaged_view *xwayland_unmanaged_view)
   wl_list_init(&xwayland_unmanaged_view->unmanaged_output_views);
 
   xwayland_unmanaged_view->hidden = true;
+
+  // [COMMENT] Action purpose: Hide the node rather than destroy it -- the
+  // surface survives an unmap and may map again (a menu reopening), and the
+  // tree's lifetime is tied to the surface, not to visibility.
+  if (xwayland_unmanaged_view->surface_tree != NULL) {
+    wlr_scene_node_set_enabled(
+        &xwayland_unmanaged_view->surface_tree->node, false);
+  }
 
   if (xwayland_unmanaged_view->workspace != NULL) {
     hikari_output_add_damage(xwayland_unmanaged_view->workspace->output,
@@ -193,6 +227,16 @@ xwayland_unmanaged_view_destroy(
   wl_list_remove(&xwayland_unmanaged_view->unmap.link);
   wl_list_remove(&xwayland_unmanaged_view->associate.link);
   wl_list_remove(&xwayland_unmanaged_view->dissociate.link);
+
+  /* [COMMENT] Action purpose: Release the surface tree if dissociate has not
+  already done so -- this path is also reached by set_override_redirect_handler
+  re-adopting the surface as a managed view, where no dissociate occurs. The
+  destroy listener nulls the pointer, so the removal below is safe either way. */
+  if (xwayland_unmanaged_view->surface_tree != NULL) {
+    wlr_scene_node_destroy(&xwayland_unmanaged_view->surface_tree->node);
+    xwayland_unmanaged_view->surface_tree = NULL;
+  }
+  wl_list_remove(&xwayland_unmanaged_view->surface_tree_destroy.link);
   wl_list_remove(&xwayland_unmanaged_view->destroy.link);
   wl_list_remove(&xwayland_unmanaged_view->request_configure.link);
   wl_list_remove(&xwayland_unmanaged_view->set_override_redirect.link);
@@ -284,6 +328,38 @@ focus(struct hikari_node *node)
 once wlroots associates it with the X11 surface. Called either directly from
 hikari_xwayland_unmanaged_view_init (when surface is already associated) or
 deferred via associate_handler (wlroots 0.20 may deliver surface later). */
+/* Function purpose: Forget the surface tree when wlroots destroys it, so the
+dissociate path never double-destroys it. */
+static void
+surface_tree_destroy_handler(struct wl_listener *listener, void *data)
+{
+  struct hikari_xwayland_unmanaged_view *xwayland_unmanaged_view =
+      wl_container_of(listener, xwayland_unmanaged_view, surface_tree_destroy);
+
+  wl_list_remove(&xwayland_unmanaged_view->surface_tree_destroy.link);
+  wl_list_init(&xwayland_unmanaged_view->surface_tree_destroy.link);
+
+  xwayland_unmanaged_view->surface_tree = NULL;
+}
+
+/* Function purpose: Put the surface tree where the X11 surface says it is.
+wlr_xwayland_surface.x/y are already layout-absolute, and the view layer is
+parented to the scene root rather than to any one output, so they can be used
+directly with no output-relative conversion. */
+static void
+position_surface_tree(
+    struct hikari_xwayland_unmanaged_view *xwayland_unmanaged_view)
+{
+  if (xwayland_unmanaged_view->surface_tree == NULL) {
+    return;
+  }
+
+  struct wlr_xwayland_surface *surface = xwayland_unmanaged_view->surface;
+
+  wlr_scene_node_set_position(
+      &xwayland_unmanaged_view->surface_tree->node, surface->x, surface->y);
+}
+
 static void
 attach_surface_listeners_unmanaged(
     struct hikari_xwayland_unmanaged_view *xwayland_unmanaged_view)
@@ -299,6 +375,39 @@ attach_surface_listeners_unmanaged(
   wl_signal_add(
       &xwayland_surface->surface->events.unmap,
       &xwayland_unmanaged_view->unmap);
+
+  /* [COMMENT] Action purpose: Attach the surface to the scene graph. Nothing in
+  this file ever did, which is why X11 menus, tooltips and dropdowns were
+  hit-tested but invisible.
+
+  Parented to the view layer rather than the overlay layer deliberately: these
+  belong to a client, so they should sit above other windows but still below
+  the compositor's own bar and indicators -- an application menu covering the
+  top bar would be wrong. Starts disabled and is enabled by the map path, which
+  is also what keeps it hidden while the screen is locked, since the whole view
+  layer is disabled then. */
+  if (xwayland_unmanaged_view->surface_tree == NULL) {
+    xwayland_unmanaged_view->surface_tree = wlr_scene_subsurface_tree_create(
+        hikari_server.layers.views, xwayland_surface->surface);
+
+    if (xwayland_unmanaged_view->surface_tree != NULL) {
+      wlr_scene_node_set_enabled(
+          &xwayland_unmanaged_view->surface_tree->node,
+          !xwayland_unmanaged_view->hidden);
+
+      position_surface_tree(xwayland_unmanaged_view);
+
+      xwayland_unmanaged_view->surface_tree_destroy.notify =
+          surface_tree_destroy_handler;
+      wl_signal_add(
+          &xwayland_unmanaged_view->surface_tree->node.events.destroy,
+          &xwayland_unmanaged_view->surface_tree_destroy);
+    } else {
+      wlr_log(WLR_ERROR,
+          "xwayland_unmanaged_view: could not create the surface tree; this "
+          "override-redirect surface will render no content");
+    }
+  }
 }
 
 /* Function purpose: wlroots 0.20 lifecycle hook -- the wlr_surface only
@@ -328,6 +437,14 @@ dissociate_handler(struct wl_listener *listener, void *data)
   wl_list_init(&xwayland_unmanaged_view->map.link);
   wl_list_remove(&xwayland_unmanaged_view->unmap.link);
   wl_list_init(&xwayland_unmanaged_view->unmap.link);
+
+  /* [COMMENT] Action purpose: The surface backing this tree is going away.
+  Destroying fires surface_tree_destroy_handler, which nulls the pointer, so
+  this stays correct whether or not wlroots already tore it down. */
+  if (xwayland_unmanaged_view->surface_tree != NULL) {
+    wlr_scene_node_destroy(&xwayland_unmanaged_view->surface_tree->node);
+    xwayland_unmanaged_view->surface_tree = NULL;
+  }
 }
 
 /* Function purpose: Initialise an unmanaged (override-redirect) XWayland
@@ -356,6 +473,14 @@ hikari_xwayland_unmanaged_view_init(
   xwayland_unmanaged_view->surface->data =
       (struct hikari_node *)xwayland_unmanaged_view;
   xwayland_unmanaged_view->hidden = true;
+
+  /* [COMMENT] Action purpose: Establish both before anything can call
+  attach_surface_listeners_unmanaged(), which init itself does on the
+  already-associated path. hikari_malloc does not zero, so the NULL is what
+  makes that function's "create it once" check meaningful, and the initialised
+  link is what lets the destroy path remove it unconditionally. */
+  xwayland_unmanaged_view->surface_tree = NULL;
+  wl_list_init(&xwayland_unmanaged_view->surface_tree_destroy.link);
 
   /* Action purpose: Pre-initialise map/unmap listener links as empty lists so
   wl_list_remove in destroy_handler is always safe, even when the surface was

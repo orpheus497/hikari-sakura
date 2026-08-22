@@ -1,5 +1,7 @@
 #include <hikari/indicator_bar.h>
 
+#include <hikari/buffer.h>
+
 #include <cairo/cairo.h>
 #include <drm_fourcc.h>
 #include <pango/pangocairo.h>
@@ -187,11 +189,11 @@ hikari_indicator_bar_update(struct hikari_indicator_bar *indicator_bar,
   int stride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, width);
 
   struct wlr_buffer *buffer =
-      hikari_server_create_argb8888_buffer(width, height, data, stride);
+      hikari_buffer_create_argb8888(width, height, data, stride);
 
   if (buffer != NULL) {
     indicator_bar->scene_buffer =
-        wlr_scene_buffer_create(&hikari_server.scene->tree, buffer);
+        wlr_scene_buffer_create(hikari_server.layers.overlay, buffer);
     wlr_buffer_drop(buffer);
 
     /* [COMMENT] Action purpose: Re-apply the recorded visibility to the newly

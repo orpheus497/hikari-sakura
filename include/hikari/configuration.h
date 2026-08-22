@@ -7,6 +7,7 @@
 
 #include <hikari/exec.h>
 #include <hikari/font.h>
+#include <hikari/lock_config.h>
 #include <hikari/mark.h>
 
 struct hikari_group;
@@ -33,6 +34,10 @@ struct hikari_configuration {
   float bar[4];
 
   struct hikari_font font;
+
+  /* [COMMENT] Class purpose: Lock screen appearance and blanking
+  behaviour -- the `ui { lock { ... } }` block. */
+  struct hikari_lock_config lock;
 
   int border;
   int gap;

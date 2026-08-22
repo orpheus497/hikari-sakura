@@ -12,11 +12,7 @@
 #include <unistd.h>
 #include <wayland-server-core.h>
 
-#include <drm_fourcc.h>
 #include <wlr/backend.h>
-// [COMMENT] Action purpose: wlr_buffer_init and struct wlr_buffer_impl are
-// declared here; required for the CPU-backed ARGB8888 buffer below.
-#include <wlr/interfaces/wlr_buffer.h>
 #include <wlr/backend/headless.h>
 #include <wlr/backend/libinput.h>
 #include <wlr/backend/session.h>
@@ -27,6 +23,8 @@
 #include <wlr/types/wlr_cursor.h>
 #include <wlr/types/wlr_data_control_v1.h>
 #include <wlr/types/wlr_data_device.h>
+#include <wlr/types/wlr_ext_data_control_v1.h>
+#include <wlr/types/wlr_ext_foreign_toplevel_list_v1.h>
 #include <wlr/types/wlr_fractional_scale_v1.h>
 #include <wlr/types/wlr_idle_inhibit_v1.h>
 #include <wlr/types/wlr_idle_notify_v1.h>
@@ -62,6 +60,10 @@
 
 #ifdef HAVE_SCREENCOPY
 #include <wlr/types/wlr_screencopy_v1.h>
+#ifdef HAVE_EXT_IMAGE_CAPTURE
+#include <wlr/types/wlr_ext_image_capture_source_v1.h>
+#include <wlr/types/wlr_ext_image_copy_capture_v1.h>
+#endif
 #endif
 
 #ifdef HAVE_XWAYLAND
@@ -69,6 +71,7 @@
 #endif
 
 #include <hikari/border.h>
+#include <hikari/buffer.h>
 #include <hikari/command.h>
 #include <hikari/configuration.h>
 #include <hikari/decoration.h>
@@ -79,6 +82,7 @@
 #include <hikari/mark.h>
 #include <hikari/memory.h>
 #include <hikari/output.h>
+#include <hikari/platform.h>
 #include <hikari/pointer.h>
 #include <hikari/pointer_config.h>
 #include <hikari/sheet.h>
@@ -897,7 +901,25 @@ request_start_drag_handler(struct wl_listener *listener, void *data)
 static void
 setup_selection(struct hikari_server *server)
 {
-  wlr_data_control_manager_v1_create(server->display);
+  /* [COMMENT] Action purpose: Clipboard managers (wl-clipboard, cliphist) read
+  and write the seat selection through a data-control protocol rather than
+  through wl_data_device, which only serves focused surfaces. Both generations
+  are advertised deliberately: wlroots 0.20 still ships the wlr- variant that
+  existing tools bind, while newer releases of those same tools prefer the
+  standardised ext- one and fall back. They coexist by design -- wlroots keys
+  both off the same seat selection -- so offering both is what keeps old and
+  new clipboard tooling working against one compositor. */
+  if (wlr_data_control_manager_v1_create(server->display) == NULL) {
+    wlr_log(WLR_ERROR,
+        "could not create wlr-data-control manager; clipboard managers "
+        "binding this protocol will not function");
+  }
+
+  if (wlr_ext_data_control_manager_v1_create(server->display, 1) == NULL) {
+    wlr_log(WLR_ERROR,
+        "could not create ext-data-control manager; clipboard managers "
+        "binding this protocol will not function");
+  }
 
   wlr_primary_selection_v1_device_manager_create(server->display);
 
@@ -972,6 +994,48 @@ setup_scene_graph(struct hikari_server *server)
     wl_display_destroy(server->display);
     exit(EXIT_FAILURE);
   }
+
+  /* [COMMENT] Action purpose: Create the six stacking layers everything else
+  attaches to. Nothing may parent itself to server->scene->tree directly after
+  this point -- that is what reintroduces the flat list these replace. */
+  struct wlr_scene_tree **layers[] = {
+    &server->layers.background,
+    &server->layers.bottom,
+    &server->layers.views,
+    &server->layers.top,
+    &server->layers.overlay,
+    &server->layers.lock,
+  };
+  const size_t layer_count = sizeof(layers) / sizeof(layers[0]);
+
+  for (size_t i = 0; i < layer_count; i++) {
+    *layers[i] = wlr_scene_tree_create(&server->scene->tree);
+
+    // [COMMENT] Action purpose: Fatal rather than degraded. Every subsequent
+    // scene attachment dereferences one of these, so a NULL here would surface
+    // much later as a crash in unrelated code. Matches the fatal-exit pattern
+    // used for the seat, layer shell and pointer gestures.
+    if (*layers[i] == NULL) {
+      fprintf(stderr, "error: could not create scene layer %zu\n", i);
+      wl_display_destroy(server->display);
+      exit(EXIT_FAILURE);
+    }
+  }
+
+  /* [COMMENT] Action purpose: Establish the stacking order explicitly rather
+  than relying on the order wlr_scene_tree_create() happens to insert in.
+  Raising each layer in turn, bottom first, leaves them in exactly this order
+  whichever end insertion uses -- so the ordering is a property of this loop and
+  stays correct if wlroots ever changes that detail. */
+  for (size_t i = 0; i < layer_count; i++) {
+    wlr_scene_node_raise_to_top(&(*layers[i])->node);
+  }
+
+  /* [COMMENT] Action purpose: The lock layer stays disabled for the whole of a
+  normal session; hikari_lock_mode_enter() swaps it in. Creating it up front
+  rather than on demand means lock mode never has to allocate at the moment it
+  is asked to hide the screen. */
+  wlr_scene_node_set_enabled(&server->layers.lock->node, false);
 }
 
 static void
@@ -1015,6 +1079,18 @@ request_activate_handler(struct wl_listener *listener, void *data)
 static void
 setup_xdg_activation(struct hikari_server *server)
 {
+  /* [COMMENT] Action purpose: ext-foreign-toplevel-list-v1 -- the protocol a
+  dock, panel or taskbar binds to enumerate open windows. Without it nothing
+  outside the compositor can discover them, so a taskbar has nothing to list.
+  Non-fatal: its absence costs window listing, not the session. */
+  server->foreign_toplevel_list =
+      wlr_ext_foreign_toplevel_list_v1_create(server->display, 1);
+  if (server->foreign_toplevel_list == NULL) {
+    wlr_log(WLR_ERROR,
+        "could not create the foreign-toplevel list; docks and taskbars will "
+        "not be able to enumerate windows");
+  }
+
   server->xdg_activation = wlr_xdg_activation_v1_create(server->display);
   // [COMMENT] Action purpose: Guard against manager allocation failure before
   // the wl_signal_add below takes the address of one of its members.
@@ -1491,7 +1567,41 @@ server_init(struct hikari_server *server, char *config_path)
 #endif
 
 #ifdef HAVE_SCREENCOPY
+  /* [COMMENT] Action purpose: wlr-screencopy-v1 is what every screen-capture
+  tool on this platform actually binds today -- grim, and xdg-desktop-portal-wlr
+  in the absence of anything newer. wlroots' own header calls it deprecated and
+  says the implementation "will be dropped in a future wlroots version", so this
+  will need replacing eventually; see the ext-image-copy block below for why the
+  replacement is not enabled yet. */
   wlr_screencopy_manager_v1_create(server->display);
+
+#ifdef HAVE_EXT_IMAGE_CAPTURE
+  /* [COMMENT] Action purpose: ext-image-copy-capture-v1, the successor to
+  wlr-screencopy. Compiled out by default -- see the Makefile block that defines
+  this macro for the full reasoning, and DECISIONS_LOG Phase 80.
+
+  In short: xdg-desktop-portal-wlr switches to this protocol the moment it is
+  advertised, and on this hardware that path yields black frames while
+  wlr-screencopy captures correctly. Advertising it makes screen sharing worse
+  rather than better, because the client silently moves to the broken path.
+
+  The copy manager needs a capture SOURCE to copy from, so both globals are
+  required -- the copy manager alone would advertise a protocol for which no
+  client could name a target. */
+  if (wlr_ext_output_image_capture_source_manager_v1_create(
+          server->display, 1) == NULL) {
+    wlr_log(WLR_ERROR,
+        "could not create the ext-image-capture-source manager; modern "
+        "screen capture will be unavailable");
+  }
+
+  if (wlr_ext_image_copy_capture_manager_v1_create(server->display, 1) ==
+      NULL) {
+    wlr_log(WLR_ERROR,
+        "could not create the ext-image-copy-capture manager; modern screen "
+        "capture will be unavailable");
+  }
+#endif
 #endif
 
 #ifdef HAVE_XWAYLAND
@@ -1512,6 +1622,14 @@ server_init(struct hikari_server *server, char *config_path)
   if (linux_dmabuf != NULL) {
     wlr_scene_set_linux_dmabuf_v1(server->scene, linux_dmabuf);
   }
+
+  /* [COMMENT] Action purpose: Record what the machine actually provides, now
+  that the renderer exists and linux-dmabuf has either been created or failed.
+  Placed here rather than later because subsequent code may want to branch on
+  the result, and because logging it early means a session that dies during
+  startup still leaves the platform facts in the log. */
+  hikari_platform_probe(server->renderer, linux_dmabuf != NULL);
+  hikari_platform_log();
 
   /* [COMMENT] Action purpose: Protocols browsers and media players rely on for
   video subsurface scaling, frame timing, and HiDPI. wlr_scene picks up
@@ -1541,6 +1659,28 @@ server_init(struct hikari_server *server, char *config_path)
     exit(EXIT_FAILURE);
   }
   setup_selection(server);
+#ifdef HAVE_XWAYLAND
+  /* [COMMENT] Action purpose: Hand the seat to XWayland so its window manager
+  runs the X11 selection bridge. Without this, wlroots' xwm never claims
+  CLIPBOARD/PRIMARY on the X server and never mirrors them to the Wayland
+  seat, so copy and paste do not cross the X11/Wayland boundary in either
+  direction -- a long-standing gap inherited from upstream, not a wlroots 0.20
+  regression.
+
+  This cannot move up into setup_xwayland(): that runs earlier in
+  server_init() and the seat does not exist until setup_selection() creates it
+  immediately above. wlroots owns the teardown -- struct wlr_xwayland keeps its
+  own private seat_destroy listener -- so hikari must not add one of its own.
+
+  The NULL check is defensive, not load-bearing: setup_xwayland() currently
+  exits the process when wlr_xwayland_create() returns NULL, so the pointer is
+  non-NULL by the time control reaches here. It is kept because making that
+  failure non-fatal is a plausible future change, and this call would then
+  dereference NULL with no other guard in the path. */
+  if (server->xwayland != NULL) {
+    wlr_xwayland_set_seat(server->xwayland, server->seat);
+  }
+#endif
   setup_xdg_shell(server);
   setup_xdg_activation(server);
   setup_idle_inhibit(server);
@@ -1614,6 +1754,40 @@ terminate_signal_handler(int signal_number, void *data)
   return 0;
 }
 
+/* [COMMENT] Function purpose: Publish the session's display variables into the
+D-Bus activation environment.
+
+Without this, xdg-desktop-portal-wlr cannot work at all -- and the failure is
+completely silent. start-hikari.sh wraps the compositor in dbus-run-session, so
+the session bus is started BEFORE the compositor creates its Wayland socket;
+D-Bus hands each service it activates the environment the bus itself was started
+with, which therefore never contains WAYLAND_DISPLAY. The portal backend then
+launches with no idea which compositor to connect to, fails, and screen sharing
+reports no provider -- with nothing in any log to say why. Verified on this
+machine: the session dbus-daemon and the running xdg-desktop-portal both had no
+WAYLAND_DISPLAY in their environment at all.
+
+XDG_CURRENT_DESKTOP is included because the same staleness applies to it: a
+session started before an updated start-hikari.sh keeps whatever the display
+manager set, and that is what selects a portal backend. DISPLAY is included so
+X11 helpers activated over D-Bus reach our Xwayland rather than a foreign
+server -- it is exported by setup_xwayland() well before this runs.
+
+Deliberately best-effort. dbus-update-activation-environment lives in the
+dbus package, which a minimal install may not have, and a compositor must not
+refuse to start over an optional integration -- so the command is run through
+the same detached helper as autostart entries and its absence costs only this
+feature. */
+static void
+export_activation_environment(void)
+{
+  hikari_command_execute("command -v dbus-update-activation-environment "
+                         "> /dev/null 2>&1 && "
+                         "dbus-update-activation-environment "
+                         "WAYLAND_DISPLAY XDG_CURRENT_DESKTOP DISPLAY "
+                         "XDG_SESSION_TYPE XDG_RUNTIME_DIR");
+}
+
 static void
 run_autostart(char *autostart)
 {
@@ -1657,6 +1831,8 @@ hikari_server_start(char *config_path, char *autostart)
     wl_display_destroy(hikari_server.display);
     exit(EXIT_FAILURE);
   }
+
+  export_activation_environment();
 
   if (autostart != NULL) {
     run_autostart(autostart);
@@ -2316,114 +2492,6 @@ move_resize_view(int dx, int dy, int dwidth, int dheight)
   }
 }
 
-/* [COMMENT] Class purpose: CPU-backed ARGB8888 buffer holding a copy of
-caller-rendered cairo pixels. This exists because allocating through
-wlr_allocator does not work on the target platform: GBM buffer mapping fails on
-FreeBSD/ZFS, so wlr_allocator_create_buffer() (or the subsequent
-begin_data_ptr_access for write) returns failure and every UI element built this
-way silently disappears. output.c already worked around this for the background
-with its own wlr_buffer_impl (DECISIONS_LOG Phase 33); this brings the shared
-helper -- and therefore the indicator bars, lock indicator, and top bar -- onto
-the same footing. */
-struct hikari_argb8888_buffer {
-  struct wlr_buffer base;
-  unsigned char *data;
-  uint32_t format;
-  size_t stride;
-};
-
-static void
-argb8888_buffer_destroy(struct wlr_buffer *wlr_buffer)
-{
-  struct hikari_argb8888_buffer *buffer =
-      wl_container_of(wlr_buffer, buffer, base);
-  hikari_free(buffer->data);
-  hikari_free(buffer);
-}
-
-static bool
-argb8888_buffer_begin_data_ptr_access(struct wlr_buffer *wlr_buffer,
-    uint32_t flags,
-    void **data,
-    uint32_t *format,
-    size_t *stride)
-{
-  struct hikari_argb8888_buffer *buffer =
-      wl_container_of(wlr_buffer, buffer, base);
-
-  // [COMMENT] Action purpose: The pixels are a snapshot owned by the buffer;
-  // callers re-render and create a new buffer rather than mutating this one.
-  if (flags & WLR_BUFFER_DATA_PTR_ACCESS_WRITE) {
-    return false;
-  }
-
-  *data = buffer->data;
-  *format = buffer->format;
-  *stride = buffer->stride;
-
-  return true;
-}
-
-static void
-argb8888_buffer_end_data_ptr_access(struct wlr_buffer *wlr_buffer)
-{}
-
-static const struct wlr_buffer_impl argb8888_buffer_impl = {
-  .destroy = argb8888_buffer_destroy,
-  .begin_data_ptr_access = argb8888_buffer_begin_data_ptr_access,
-  .end_data_ptr_access = argb8888_buffer_end_data_ptr_access,
-};
-
-struct wlr_buffer *
-hikari_server_create_argb8888_buffer(int width, int height, unsigned char *data, int stride)
-{
-  // [COMMENT] Action purpose: Reject degenerate geometry and guard the size
-  // computation against overflow before allocating.
-  if (width <= 0 || height <= 0 || stride <= 0 || data == NULL) {
-    return NULL;
-  }
-
-  // [COMMENT] Action purpose: ARGB8888 is 4 bytes/pixel; a stride shorter than
-  // that would make the flat memcpy below (stride * height bytes) read past
-  // the end of the source buffer. Guard the width*4 multiplication against
-  // overflow before comparing.
-  size_t min_stride = (size_t)width * 4;
-  if (min_stride / 4 != (size_t)width || (size_t)stride < min_stride) {
-    return NULL;
-  }
-
-  size_t byte_count = (size_t)stride * (size_t)height;
-  if (byte_count / (size_t)stride != (size_t)height) {
-    return NULL;
-  }
-
-  // [COMMENT] Action purpose: Graceful-degradation allocation. This helper's
-  // contract is already "return NULL on failure" (see the geometry/overflow
-  // guards above), and every caller (hikari_bar_refresh, hikari_indicator_bar_
-  // update) already handles a NULL return by skipping that one UI element's
-  // repaint rather than crashing -- aborting here would have defeated that
-  // contract for the one failure mode that actually matters. See
-  // DECISIONS_LOG Finding 4.
-  struct hikari_argb8888_buffer *buffer =
-      hikari_try_malloc(sizeof(struct hikari_argb8888_buffer));
-  if (buffer == NULL) {
-    return NULL;
-  }
-
-  unsigned char *buffer_data = hikari_try_malloc(byte_count);
-  if (buffer_data == NULL) {
-    hikari_free(buffer);
-    return NULL;
-  }
-
-  wlr_buffer_init(&buffer->base, &argb8888_buffer_impl, width, height);
-  buffer->format = DRM_FORMAT_ARGB8888;
-  buffer->stride = (size_t)stride;
-  buffer->data = buffer_data;
-  memcpy(buffer->data, data, byte_count);
-
-  return &buffer->base;
-}
 
 void
 hikari_server_decrease_view_size_down(void *arg)

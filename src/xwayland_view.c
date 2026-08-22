@@ -8,6 +8,8 @@
 #include <xcb/xcb_icccm.h>
 
 #include <wlr/types/wlr_cursor.h>
+#include <wlr/types/wlr_scene.h>
+#include <wlr/util/log.h>
 #include <wlr/xwayland.h>
 
 #include <hikari/configuration.h>
@@ -274,6 +276,7 @@ xwayland_view_destroy(struct hikari_xwayland_view *xwayland_view)
   safe in both states. */
   wl_list_remove(&xwayland_view->associate.link);
   wl_list_remove(&xwayland_view->dissociate.link);
+  wl_list_remove(&xwayland_view->surface_tree_destroy.link);
   wl_list_remove(&xwayland_view->map.link);
   wl_list_remove(&xwayland_view->unmap.link);
   wl_list_remove(&xwayland_view->destroy.link);
@@ -457,6 +460,20 @@ constraints(struct hikari_view *view,
 wlr_surface once wlroots associates it with the X11 surface. wlroots 0.20
 removed wlr_xwayland_surface.events.map/unmap; these signals now come from
 the associated wlr_surface. */
+/* [COMMENT] Function purpose: Forget the surface tree when wlroots destroys it
+out from under us, so the dissociate path never double-destroys it. */
+static void
+surface_tree_destroy_handler(struct wl_listener *listener, void *data)
+{
+  struct hikari_xwayland_view *xwayland_view =
+      wl_container_of(listener, xwayland_view, surface_tree_destroy);
+
+  wl_list_remove(&xwayland_view->surface_tree_destroy.link);
+  wl_list_init(&xwayland_view->surface_tree_destroy.link);
+
+  xwayland_view->surface_tree = NULL;
+}
+
 static void
 attach_surface_listeners(struct hikari_xwayland_view *xwayland_view)
 {
@@ -469,6 +486,37 @@ attach_surface_listeners(struct hikari_xwayland_view *xwayland_view)
   xwayland_view->unmap.notify = unmap_handler;
   wl_signal_add(
       &xwayland_surface->surface->events.unmap, &xwayland_view->unmap);
+
+  /* [COMMENT] Action purpose: Attach the X11 surface itself to the scene graph.
+  This is the whole of the "XWayland views render no content" fix: scene_tree
+  carried only hikari's own border and indicator rects, and nothing anywhere
+  ever displayed the surface, so managed X11 windows drew as empty bordered
+  rectangles.
+
+  wlr_scene_subsurface_tree_create() rather than wlr_scene_surface_create()
+  because the latter documents that "child sub-surfaces are ignored" -- rare on
+  X11, but silently dropping them would be a fresh version of the same bug.
+  Created here rather than at init because xwayland_surface->surface is NULL
+  until wlroots associates it, and here rather than on map because the surface
+  is valid for the whole associate/dissociate window, which is exactly the
+  lifetime this tree should have. */
+  if (xwayland_view->surface_tree == NULL) {
+    xwayland_view->surface_tree = wlr_scene_subsurface_tree_create(
+        xwayland_view->scene_tree, xwayland_surface->surface);
+
+    if (xwayland_view->surface_tree != NULL) {
+      xwayland_view->surface_tree_destroy.notify = surface_tree_destroy_handler;
+      wl_signal_add(&xwayland_view->surface_tree->node.events.destroy,
+          &xwayland_view->surface_tree_destroy);
+    } else {
+      /* [COMMENT] Action purpose: Allocation failure only. Degrade to the old
+      behaviour -- a bordered window with no content -- rather than refusing the
+      surface outright, which would lose the window entirely. */
+      wlr_log(WLR_ERROR,
+          "xwayland_view: could not create the surface tree; this window will "
+          "render no content");
+    }
+  }
 }
 
 /* [COMMENT] Function purpose: wlroots 0.20 xwayland lifecycle hook -- the
@@ -496,6 +544,16 @@ dissociate_handler(struct wl_listener *listener, void *data)
   wl_list_init(&xwayland_view->map.link);
   wl_list_remove(&xwayland_view->unmap.link);
   wl_list_init(&xwayland_view->unmap.link);
+
+  /* [COMMENT] Action purpose: The surface this tree displays is going away, so
+  the tree goes with it -- leaving it attached would keep a node pointing at a
+  surface that no longer exists, and a later re-associate would stack a second
+  tree on top of it. Destroying fires surface_tree_destroy_handler, which nulls
+  the pointer, so this is safe whether wlroots got there first or not. */
+  if (xwayland_view->surface_tree != NULL) {
+    wlr_scene_node_destroy(&xwayland_view->surface_tree->node);
+    xwayland_view->surface_tree = NULL;
+  }
 }
 
 /* [COMMENT] Function purpose: Initialise a managed XWayland view wrapper --
@@ -527,7 +585,7 @@ hikari_xwayland_view_init(struct hikari_xwayland_view *xwayland_view,
   border and indicator frame nodes. Creation only fails on OOM; bail out via
   the same cleanup the destroy path uses (hikari_view_fini + hikari_free)
   before any listeners are registered, leaving no dangling state behind. */
-  xwayland_view->scene_tree = wlr_scene_tree_create(&hikari_server.scene->tree);
+  xwayland_view->scene_tree = wlr_scene_tree_create(hikari_server.layers.views);
   if (xwayland_view->scene_tree == NULL) {
     fprintf(stderr, "error: could not create scene tree for xwayland view\n");
     hikari_view_fini(&xwayland_view->view);
@@ -535,6 +593,14 @@ hikari_xwayland_view_init(struct hikari_xwayland_view *xwayland_view,
     return;
   }
   xwayland_view->view.scene_node = &xwayland_view->scene_tree->node;
+
+  /* [COMMENT] Action purpose: The surface tree is created later, when the
+  wlr_surface associates. Both are established here so the destroy path can
+  remove the listener link unconditionally, whether or not a surface ever
+  associated. */
+  xwayland_view->surface_tree = NULL;
+  wl_list_init(&xwayland_view->surface_tree_destroy.link);
+
   hikari_border_init(&xwayland_view->view.border, xwayland_view->scene_tree);
   hikari_indicator_frame_init(&xwayland_view->view.indicator_frame, xwayland_view->scene_tree);
 

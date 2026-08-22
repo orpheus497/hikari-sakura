@@ -1,3 +1,1160 @@
+## [2026-08-22 15:52] Phase 88: R2 delivered -- foreign-toplevel list; side-panel intent documented
+
+**Status:** **DONE -- CONFIRMED ON HARDWARE 2026-08-22: waybar lists hikari's windows.** 0 warnings across all three build configurations.
+
+**This closes W7b, and with it the entire original W0-W8 programme.** No workstream from the original plan remains open.
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
+
+### Why this was wanted
+
+The user asked for taskbar support, with a stated goal: **a side panel that slides in and out from the left, listing applications.** `ext-foreign-toplevel-list-v1` is the enabling dependency -- without it nothing outside the compositor can discover open windows at all, so a panel would have nothing to list. The panel itself is documented as future intent in `PLANS.md` item -15, deliberately unscoped.
+
+### A correction to the R2 scoping
+
+The Phase 84 plan asserted that *"views currently receive `app_id` in `hikari_view_configure()` but do not retain it"* and budgeted for adding a stored string. **That was wrong.** `view->id` already holds the app_id: set by `set_app_id()` from `hikari_view_configure()`, owned via `hikari_malloc`, freed in `hikari_view_fini()`. R2 therefore needed **one pointer, not a pointer and a string**, and was materially smaller than planned.
+
+Worth noting how the error arose: the plan was written from the API's requirements outward, and assumed the codebase lacked something without checking. The same shape as the Phase 84 omission of R10 -- **planning from what was expected rather than from what is there.**
+
+### Implementation
+
+* `hikari_server.foreign_toplevel_list` created in `setup_xdg_activation()`'s neighbourhood, non-fatally -- its absence costs window listing, not the session.
+* `hikari_view.foreign_toplevel` -- one owned handle, NULL whenever the view is unmapped.
+* **Created on map, destroyed on unmap.** That is deliberate and is what makes an unmapped window vanish from a taskbar rather than persisting as a dead entry a dock cannot act on. A remap creates a fresh handle.
+* `publish_foreign_toplevel()` pushes title and app_id, and is called from both `hikari_view_set_title()` and `set_app_id()` so a retitle propagates live. It no-ops when there is no handle, which is the normal state during `first_map` -- the shells set the title *before* `hikari_view_configure()` and both before `hikari_view_map()`.
+* Empty strings rather than NULL are published when either field is unset, so a dock sees a window with no app_id rather than no window.
+
+### Ordering and lifetime, verified rather than assumed
+
+Working from BLUEPRINT section 15 (written in Phase 86 for exactly this kind of change):
+
+* **`configure` precedes `map`** -- `xdg_view.c:175` vs `:222`, with `first_map()` called from `map_handler` before `map()`. So `view->id` is populated before the handle is created, and the first published state already carries the app_id.
+* **`hikari_view_fini()` releases the handle defensively.** Ordinary teardown destroys it in unmap, but section 15 records three **init-failure** paths in the shell wrappers that call `fini` directly on a view that never mapped -- so fini must tolerate both a live handle and a NULL one.
+* **Initialised in `hikari_view_init()`** for the same reason: `hikari_malloc` does not zero, and fini runs on those failure paths before anything else has touched the field.
+
+Lifecycle audited by inspection: one create site (guarded on both the existing handle and the list), two destroy sites (unmap, fini), each followed by a NULL assignment, and every read guarded.
+
+### Validation
+
+0 warnings across default, full-feature, and full-feature + `HAVE_EXT_IMAGE_CAPTURE`. All four newly-called wlroots symbols confirmed exported by `nm -D`.
+
+**Hardware confirmation (2026-08-22): waybar works.** An external dock enumerates hikari's windows -- something nothing outside the compositor could do before this phase.
+
+*Scope of that confirmation, stated honestly:* waybar runs and lists. **Live retitle** and **no stale entries across repeated open/close** were not separately reported. Both follow from the implementation (publish is called from `set_title`, and destroy is on unmap) and neither is in doubt, but they are inference rather than attestation. Recorded this way because this session's recurring failure has been treating *recorded* as *verified*.
+
+### Modified files
+
+`src/view.c`, `include/hikari/view.h`, `src/server.c`, `include/hikari/server.h`.
+
+---
+
+## [2026-08-22 15:40] Phase 87: R3 deferred indefinitely; R8 resolved -- the .clang-format config is authoritative
+
+**Status:** TWO DECISIONS RECORDED. No code changes.
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
+
+### R3 -- `forced` flag removal: DEFERRED INDEFINITELY
+
+User decision. This matches the recommendation: R3 is the highest-risk item in the remaining programme -- 15 sites in `src/view.c`, the file behind eight crash phases -- and delivers **no user-visible benefit**, because F1 and F2 were already fixed structurally by the Phase 73 layer trees. The flag is now inert bookkeeping.
+
+**It is not a latent defect and carries no decay risk.** The Phase 73 deviation that created this item is therefore closed rather than merely postponed: the deviation was "the plan said delete it, I did not", and the user has now ratified not deleting it. Should anyone revisit `view.c` for another reason, BLUEPRINT section 15 records which branches the `forced` invariant makes unreachable, so the analysis does not need repeating.
+
+### R8 -- `.clang-format`: the CONFIG is the target, not the tree
+
+**Corrects the recommendation made in Phase 84.** That recommendation was to rewrite `.clang-format` to describe the existing codebase (2-space, K&R-ish) rather than reformat the tree to match the config (8-wide tabs, Allman). The user has stated the opposite intent: **the configured style is the desired house style**, so the tree is what should eventually change.
+
+That inverts the option chosen but not the conclusion for now -- **deferred**, at the user's direction. Recording the corrected intent matters because the Phase 84 note would otherwise have led a future session to quietly rewrite the config and lock in the wrong target.
+
+When it is eventually run it should be a **single isolated commit touching nothing else**, since it will rewrite every file and disrupt `git blame`; mixing it with functional changes would make both unreviewable.
+
+---
+
+## [2026-08-22 15:30] Phase 86: R6 -- shim retired; R10-a -- view ownership graph documented
+
+**Status:** BOTH COMPLETE. 0 warnings across **three** build configurations. Unbuilt.
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
+
+### R6 -- `hikari_server_create_argb8888_buffer` retired
+
+W1 kept it "for one release" so the buffer consolidation would not churn call sites. Three callers moved to `hikari_buffer_create_argb8888()` directly -- `bar.c`, `indicator_bar.c`, `lock_indicator.c` -- and the shim plus its `server.h` declaration are gone. `grep` confirms no reference remains; the tree now has one buffer entry point and one `wlr_buffer_impl`.
+
+**A fourth reference was a stale comment, and it mattered more than the code.** `bar.c` carried a block asserting the bar uses a CPU-backed buffer because *"allocating through wlr_allocator fails on the target platform (GBM buffer mapping on FreeBSD/ZFS)"*, citing Phase 33. That framing was **retired in Phase 72** (FB-2): wlroots exposes no allocator a compositor can write pixels into **on any platform**, so the custom `wlr_buffer_impl` is idiomatic rather than a FreeBSD workaround. The comment now says that and points at BLUEPRINT section 13.
+
+Worth noting: the Phase 72 correction was applied to the register and to the moved implementation's own comment, but **this second copy of the wrong explanation survived in `bar.c` for fourteen phases**. Same failure as FB-4 and as the Phase 85 sweep -- a claim recorded in more than one place, corrected in only one.
+
+### R10-a -- view ownership graph documented (BLUEPRINT section 15)
+
+The structural documentation Phase 54 specified and never received. Written from the code, verified 2026-08-22, not from the Phase 54 text -- which is now partly out of date.
+
+Contents: the seven list links with their heads and meanings; which four have a **single writer** (`view_link_visible_at()`, the Phase 55/56 remediation) and must never acquire another; pointer-by-pointer ownership; the teardown entry points including the three **init-failure** paths that constrain what `hikari_view_init()` must leave behind; and four invariants.
+
+**Three things the writing surfaced:**
+
+1. **`group` is the dangerous pointer.** It is borrowed, but the view can end its lifetime -- `detach_from_group()` frees the group when the last member leaves. That is precisely the Phase 55 use-after-free, and stating it as an ownership property makes it visible in a way "be careful in unmap" never did.
+2. **Stacking and visibility are different list sets**, and conflating them is what hid the Phase 73 bug where reordering `output_views` had no effect on what was drawn until the scene node was reordered too.
+3. **Phase 54's specification is stale.** It counted six visibility representations; Phase 73's layer trees removed one, so a checker written to the original text would be larger than necessary. Section 15 says explicitly to re-derive R10-b from it rather than from Phase 54.
+
+That last point is the R1 lesson recurring: **an approved-but-unexecuted plan decays exactly like an unverified finding.** R10-b should be scoped from section 15.
+
+### Validation
+
+0 warnings across all `src/*.c` in three configurations -- default, full-feature, and full-feature plus `HAVE_EXT_IMAGE_CAPTURE` -- plus `topbar.c`. No shim reference remains anywhere in `src/` or `include/`.
+
+### Modified files
+
+`src/bar.c`, `src/indicator_bar.c`, `src/lock_indicator.c`, `src/server.c`, `include/hikari/server.h`, `.devdocs/BLUEPRINT.md` (new section 15).
+
+---
+
+## [2026-08-22 15:25] Phase 85: R1 executed -- tracker stale-sweep. 85 open items to 16, and the plan itself was incomplete
+
+**Status:** COMPLETE. Documentation only, no product code touched.
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
+
+### Result
+
+`TODOS.md` went from **85 unchecked items to 16**. 55 were verified stale and closed; 22 were duplicates of one another or of the R-series and were consolidated; three carried numbers that were simply wrong and were corrected.
+
+Every closure was verified **against the current tree**, not from memory. A representative sample:
+
+| Claim carried as open | Verified |
+|---|---|
+| "`xwayland_view.c` attaches no surface content" (Phases 64, 65, 68) | 2 `wlr_scene_subsurface_tree_create()` call sites -- **fixed Phase 78** |
+| "XWayland does not start" (Phase 65 P0) | starts and renders -- **fixed Phase 68** |
+| "`setup_idle_inhibit` is unguarded" (Phase 67 P2) | **it is guarded** -- the claim was wrong when written |
+| "`wl_list_init(&server->outputs)` called twice" (Phase 52) | **one** occurrence |
+| "`hikari_view_init()` initialises 1 of 7 links" (Phase 54 W2) | **all seven** are initialised -- done in Phase 56 |
+| "cosmetic enum-compare warnings" (Phase 68 backlog) | **0 warnings** from `dnd_mode.c` |
+| "cursor pointer offset bug" (Phases 61, 63) | **fixed Phase 64** |
+| "orphaned `hikari-topbar` helpers" (Phase 61) | `terminate_and_reap_topbar_child()` present -- **fixed Phase 48** |
+| "`/var/coredumps` does not exist" (Phase 53) | exists; three crash investigations have used it |
+
+### The finding that matters most: the Phase 84 plan was incomplete
+
+The sweep surfaced **R10 -- the Phase 54 view-teardown hardening programme** -- which has sat "awaiting approval" since Phase 54, has its sub-items scattered across four separate live entries in the Phase 54, 55 and 61 sections, and **was omitted entirely from the R1-R9 plan written one phase earlier**.
+
+That is exactly what R1 exists to catch, and it is a second instance of the same failure mode as FB-4: a real item, recorded, never re-read, and therefore invisible to the process that was supposed to plan around it. **The plan was built from what was remembered rather than from what the trackers actually said** -- which is the same error, one level up.
+
+Its W2 (initialise all seven `wl_list` links) turned out to be **already done** (Phase 56). What remains is the ownership-graph documentation, the invariant checker, and the headless smoke test. **R10-b overlaps R5**: both concern what `view.c` checks at runtime and under which policy, so R10-b's decision should precede R5.
+
+### Second addition: R11
+
+`XDG_RUNTIME_DIR` on ZFS was recorded as a P0 in the pre-existing backlog and **verified still true**: the path is `/var/run/xdg/orpheus497` (set by `pam_xdg`), **not** the `/var/run/user/1001` every older entry names, and `df -T` reports zfs. `/tmp` *is* correctly tmpfs, so the README procedure was applied -- it simply is not where `XDG_RUNTIME_DIR` points. Consistent with the 24 `firefox.*.core` files in `/var/coredumps`. Compositor-side a non-issue (FB-1); the fix is administrative, so it is documented rather than implemented.
+
+### Process fix applied
+
+**Every row in BLUEPRINT section 13 now carries a last-verified date**, with an instruction above the table: *do not cite a row as a reason to act without re-verifying it first, and update the date when you do.* This is the direct remedy for the FB-4 failure -- the register recorded findings but never re-checks, so a finding aged into a fact.
+
+`PLANS.md` items -4 through -11 were also swept: five closed as implemented (Phases 56, 60, 61-63, 68, 78), three superseded by R5/R10.
+
+### Corrections to numbers that had drifted
+
+* asserts: **255**, not 234
+* files lacking a comment header: **50 of 65**, not 48 of 55
+* `/var/coredumps`: **6.1 GB across 65 files**, not "14 files, ~8 GB"
+
+### Honest note on method
+
+One edit in this phase mangled eight `PLANS.md` item titles by consuming the title text instead of prefixing it; caught on the verification pass immediately afterwards and repaired. Worth recording only because the fix-then-verify order is what caught it, and skipping that check would have left the file quietly damaged.
+
+---
+
+## [2026-08-22 15:16] Phase 84: Remaining-work programme planned (R1-R9) -- AWAITING APPROVAL
+
+**Status:** PLAN WRITTEN, no step approved, no code changed. Full detail in `PLANS.md` item -14.
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
+
+### Scope
+
+Everything still open after Phases 70-83, scoped into nine items with dependencies, estimates, acceptance criteria and risk notes. The lock-screen programme (W1-W6), the scene-graph restructure, XWayland integration and the portal work are delivered and hardware-confirmed; R1-R9 are the remainder.
+
+### The finding that shaped the plan
+
+Sweeping the trackers to build this revealed that **`TODOS.md` carries roughly thirty unchecked items and a substantial share are already resolved** -- the Phase 64/70 "XWayland renders no content" entries (fixed Phase 78), "XWayland does not start" (fixed Phase 68), W0-1..W0-5 (moot since Phase 83), libdrm and the clock offset (settled Phase 82), FB-6 (resolved Phase 73), and a P2 asserting `setup_idle_inhibit` is unguarded -- which was checked and **is guarded**.
+
+This is the FB-4 disease at file scale, and it is why **R1 (tracker stale-sweep) is proposed first**: every prioritisation after this reasons from that list, and a list that is partly fiction produces confidently wrong priorities. Phase 81 called W0-1 "the single highest-value command available" on exactly that basis, two phases before it turned out to be moot.
+
+### Sequencing principles encoded in the plan
+
+Each is a lesson from this session rather than a generic practice:
+
+1. **One risky change per build cycle.** Phase 78 bundled two, and a crash would have been ambiguous between them; Phase 75 bundled a guess with an evidence-backed fix and the guess survived a full cycle on borrowed credibility.
+2. **`src/view.c` always gets its own cycle** -- the file behind eight crash phases. R2 and R3 both touch it and are explicitly forbidden from shipping together.
+3. **Re-verify any recorded environmental claim before acting on it.** FB-4 was CRITICAL for ~60 phases after it stopped being true.
+4. **Use a library's constructors; never hand-build its structs.** Two crashes, one root cause (Phase 76).
+
+### Notable scoping judgements
+
+* **R3 (`forced` removal) is flagged as deferrable indefinitely.** It is the highest-risk item in the programme and delivers **no user-visible benefit** -- F1/F2 are already fixed by the layer trees. Recommending work be declined is the honest position when the risk/benefit is this lopsided.
+* **R4 is gated, not implemented.** Two minutes of user testing (R7-a) decides whether it needs a fix at all. Implementing speculatively is exactly the Phase 75 error.
+* **R5 (255 asserts) needs a scoping decision before any work**, with a proposal to limit the first pass to bucket (a) -- allocation and external-return guards -- and outside `view.c`. Phase 47 already showed one assert that would have been wrong to convert, so a mechanical sweep is ruled out.
+* **R8 recommends changing `.clang-format` to describe the tree** rather than reformatting the tree to match the config. The config was fixed in Phase 68 so it now loads, but its style (8-wide tabs, Allman) does not describe this codebase (2-space, K&R-ish); running it would rewrite every file and destroy `git blame`.
+
+### Explicitly not planned, with reasons
+
+OBS ScreenCast (downstream; compositor side verified working, portal-wlr adopted) · libdrm (declined Phase 82, never a necessity) · configurable clock offset (declined Phase 82) · pinning a DRM device (rejected Phase 83 -- would hard-code a choice the stack is making correctly) · `WITH_EXT_IMAGE_CAPTURE` (stays opt-in until a client can use it without black frames).
+
+---
+
+## [2026-08-22 15:12] Phase 83: The eDP-1 blocker was stale -- closed after ~60 phases of being carried as CRITICAL
+
+**Status:** DOCUMENTATION CORRECTION. No code changes. **BLUEPRINT section 13 now lists no known-open defect.**
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
+
+### The finding
+
+Asked directly whether the laptop's built-in panel works, the user answered that it "has been working for a long time".
+
+**FB-4 -- the eDP-1 scanout swapchain failure -- has therefore not been a live problem for a long time**, despite being carried as an open CRITICAL blocker since Phase 19 and referenced in all seven trackers. It was real when recorded: `Swapchain for output 'eDP-1' failed test` was observed live in Phase 19, with a corroborating `eglQueryDeviceStringEXT(EGL_DRM_DEVICE_FILE_EXT)` failure. It was fixed somewhere below hikari -- Mesa is now 26.1.6 and libdrm 2.4.134 -- and no code change in this project was ever needed or made.
+
+### Why it survived, which is the part worth recording
+
+Nothing ever re-verified it. Every phase that touched the priority list inherited the entry, restated it, and in several cases *reasoned from it* -- Phase 70 built the H0 hybrid-graphics hypothesis on top of it, Phase 72 shaped `hikari_platform_probe()` partly to diagnose it, and as recently as Phase 81 it was called "the single highest-value command available". The documentation treated **recorded** as **still true**, and the entry acquired weight through repetition rather than evidence.
+
+The check that closed it was one question. It should have been asked at any point in the preceding sixty phases, and the reason it was not is that a blocker attributed to "the layer below hikari" reads as someone else's problem and therefore as permanent.
+
+**Process consequence:** an open defect that this project cannot fix, and whose reproduction depends on a dependency stack that moves independently, needs a *re-verification* step, not just a record. Long-lived environmental entries in section 13 should carry the date they were last confirmed, and be re-checked before being cited as a reason to do anything.
+
+### Consequences, applied
+
+* **FB-4: RESOLVED / STALE.** Closed in section 13.
+* **FB-3 (hybrid Intel+NVIDIA): downgraded to PRESENT, no known impact.** It was only ever tracked because it was the prime suspect for FB-4. With eDP-1 working, wlroots is evidently selecting a workable device unaided. **Explicitly do not pin a device pre-emptively** -- that would hard-code a choice the current stack is making correctly, and would itself become a stale workaround. `hikari_platform_log()` already names the DRM node and the `WLR_DRM_DEVICES` override whenever more than one GPU is present, so a recurrence is self-diagnosing.
+* **Section 5 (the eDP-1 failure analysis) marked HISTORICAL**, with a note that none of it describes current behaviour and that the H1/H2/H3 discrimination matrix it calls for should not be run.
+* **The W0 matrix is largely moot.** Runs 1-5 existed to discriminate a failure that no longer occurs. **Only W0-6 remains worth doing** -- lock, wait past the blank timeout, press a key -- which settles F4/P2-14 in about two minutes.
+* **The leading OBS hypothesis is substantially weakened.** Cross-GPU dmabuf was predicated on wlroots rendering on one device and scanning out on another. eDP-1 working argues it is not doing that, so the black frames are less likely to be a multi-GPU problem than Phase 81 recorded. That hypothesis is downgraded rather than deleted -- PipeWire negotiates its own buffers with OBS independently of how the compositor scans out -- but it is no longer the leading explanation, and nothing should be built on it.
+
+### What this does not change
+
+No product code. The lock screen, clipboard, scene layers and XWayland work delivered this session are unaffected. FB-1, FB-2, FB-5 through FB-9 keep their existing status.
+
+---
+
+## [2026-08-22 14:55] Phase 82: Man page documents the lock screen; libdrm declined; clock offset left fixed
+
+**Status:** IMPLEMENTED (documentation). Two user decisions recorded.
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
+
+### Man page updated
+
+`share/man/man1/hikari.md` now documents the `ui { lock { ... } }` block -- all nine keys (`blur`, `clock`, `clock-format`, `date-format`, `clock-font`, `date-font`, `clock-color`, `blank-timeout-ac`, `blank-timeout-battery`), matching `etc/hikari/hikari.conf`. Verified: every key appears in both, and `pandoc --to man` converts cleanly.
+
+**Two existing entries were factually wrong and were corrected, not merely supplemented:**
+
+* **The `lock` action** still read "Lock **hikari** and turn off all outputs" and described `public` views as the way to get a clock on the lock screen. Both statements have been false since Phase 77. It now describes the blurred backdrop and the compositor-drawn clock, states that blanking is deferred and configurable, and -- newly important since Phase 73 -- that **every non-public view is hidden because the whole desktop layer is switched off**, which is the security property F1 established. It also no longer claims the unlocker must be "in the **PATH**"; it is resolved through a compile-time absolute path (Phase 38 hardening).
+* **`view-toggle-public`** still cited "clocks" as the example reason to mark a view public. That was upstream's workaround for having no compositor-drawn clock, and Phase 74 removed the need. The entry now says so and points at the `lock` subsection. The `public` mechanism itself is unchanged and still documented -- Total Feature Retention.
+
+### libdrm: DECLINED, and it was never a necessity
+
+The user asked what the necessity was, having ruled out a non-vendored dependency. **The honest answer is that there is none.** Recording the correction rather than defending the proposal:
+
+`hikari_platform_probe()` (Phase 72) already resolves the renderer's DRM node to a path -- `/dev/dri/renderD128` -- by matching `st_rdev` against `/dev/dri`, with no extra dependency. libdrm's `drmGetVersion(fd)->name` would have printed the *driver* (`i915` / `nvidia-drm`) instead, saving the reader one lookup of which node is which GPU on their machine. That is a convenience, not information the log lacks: the path identifies the device unambiguously.
+
+It was proposed as "strictly better FB-3 evidence", which overstated it -- the marginal gain is one manual mapping step, performed once. Against that it would add a real link dependency to a project whose charter (AGENTS.md section 2) keeps the dependency set minimal, and the user would only accept it vendored, which is disproportionate for a log line. **Declined; removed from the outstanding-decisions list.**
+
+### Lock-screen clock offset: left fixed
+
+User confirmed the current placement is fine, so no configuration key is added. Removed from the outstanding list. The offset remains a real centimetre derived from EDID physical dimensions (Phase 77), so it holds across displays of differing density without needing to be tuned.
+
+---
+
+## [2026-08-22 14:46] Phase 81: portal-wlr adopted as the supported screen-sharing path; OBS ScreenCast left open
+
+**Status:** DECISION RECORDED. No code changes. Session-end documentation pass.
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
+
+### User decision
+
+**xdg-desktop-portal-wlr is the supported screen-sharing backend for this project.** Alternative capture routes -- an OBS-specific plugin such as wlrobs, or a bespoke capture path -- are explicitly not to be pursued. Recorded so that a future session does not re-open the question or spend effort on a second mechanism.
+
+This is consistent with what is already implemented: Phase 78 made `XDG_CURRENT_DESKTOP` match portal-wlr's `UseIn`, Phase 79 fixed the D-Bus activation environment it depends on, and Phase 80 put it back on the `wlr-screencopy` path it can actually use.
+
+### State of screen sharing at session end
+
+The four-part chain, with evidence for each:
+
+| # | Requirement | State | Evidence |
+|---|---|---|---|
+| 1 | Compositor offers a capture protocol the client can use | **working** | `grim` captured 3840x1200 with 1520/1600 samples non-black, against the live session |
+| 2 | `XDG_CURRENT_DESKTOP` matches a portal backend's `UseIn` | **working** | `Hikari Sakura:wlroots` observed in all four session processes including the running portal |
+| 3 | `WAYLAND_DISPLAY` reaches the D-Bus activation environment | **fixed** | portal-wlr now activates and stays running, having previously never appeared at all |
+| 4 | PipeWire and WirePlumber running | **done by user** | both started from the session |
+
+Everything the compositor is responsible for is in place and independently verified. The portal negotiates, the picker appears, an output can be selected -- and OBS still renders black.
+
+### What remains, and why it is left open
+
+The residual failure is **downstream of the compositor**: portal-wlr feeds captured frames into PipeWire, and OBS consumes that stream. `grim` proves frame production works; the compositor no longer advertises the protocol that was breaking the negotiation. The remaining candidates are portal-wlr's PipeWire export and OBS's `linux-pipewire` consumption, neither of which is this project's code.
+
+**Not asserted as an OBS bug.** The honest position is that the compositor side is verified working and the failure is beyond it; which of portal-wlr or OBS is at fault has not been established, and establishing it would need portal-wlr TRACE output captured *during* an active capture session. The earlier attempt at that could not acquire the D-Bus name because the activated instance already held it (`dbus: failed to acquire service name: File exists`), so the session-time logs were never obtained. Anyone resuming this should start there.
+
+**`grim` is the control.** It isolates the two halves in one command: if `grim` works and OBS does not, the compositor is not implicated.
+
+### Hypothesis worth carrying forward
+
+Hybrid-GPU dmabuf remains the most plausible explanation and connects to **FB-3** (BLUEPRINT section 13). PipeWire negotiates dmabuf with OBS; on Intel+NVIDIA a buffer allocated on one GPU and imported on the other yields exactly this symptom -- a stream that connects and delivers frames that are uniformly black. `force_mod_linear=1` addressed only portal-wlr's own allocation and did not help, but it does not govern the PipeWire-to-OBS handoff. Resolving FB-3 (via the W0 matrix, still unrun) may resolve this as a side effect.
+
+---
+
+## [2026-08-22 14:40] Phase 80: ext-image-copy-capture made opt-in -- my own Phase 78 change was causing the black capture
+
+**Status:** IMPLEMENTED, unbuilt. **Root cause proven from portal-wlr's own TRACE log. The defect was introduced by Phase 78.**
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
+
+### Evidence
+
+Three independent facts, none of them inferred:
+
+1. **`grim` captures correctly.** Run against the live session: 3840x1200, 1520/1600 sampled pixels non-black, mean 55.7. `grim` uses `wlr-screencopy`, so the compositor is producing real frames and the screencopy path works.
+2. **portal-wlr's own TRACE log says `wayland: using ext_image_copy_capture`.** It registered to `ext_output_image_capture_source_manager_v1` and `ext_image_copy_capture_manager_v1` and chose that path over the `zwlr_screencopy_manager_v1` it also saw.
+3. **Hikari only advertises those two globals because Phase 78 added them.**
+
+So Phase 78 moved xdg-desktop-portal-wlr off a path that demonstrably works onto one that renders black. `grim` was unaffected because it binds screencopy directly and never sees the choice.
+
+To be exact about blame: screen sharing did not work *before* Phase 78 either, because no portal backend matched `XDG_CURRENT_DESKTOP` (fixed in the same phase). So this is not a regression from a working state -- but it is a self-inflicted obstacle, and the failure mode was foreseeable: **advertising a protocol changes client behaviour, and a newer protocol is not automatically a better one on a given machine.** That is the generalisable lesson, and it is a close cousin of the Phase 75 one about shipping a change without evidence.
+
+### What was ruled out, and a correction
+
+`force_mod_linear=1` was applied (`config: force_mod_linear: 1` in the DEBUG dump) and **did not help**, which weakens but does not eliminate the hybrid-GPU dmabuf theory.
+
+**A correction to advice I gave the user:** I suggested adding `dmabuf_device=/dev/dri/renderD128` to the portal-wlr config. The log shows it parsed the line and then printed `config: skipping invalid key in config file` -- `dmabuf_device` is an internal variable name inside portal-wlr, not a configuration key. I read it out of a `strings` dump and presented it as a config option without checking. Recorded because it is the third time this session that reading a symbol as if it were an interface has cost something.
+
+The user's manual TRACE run also could not serve a capture session -- `dbus: failed to acquire service name: File exists`, because the D-Bus-activated instance already held the name -- so no capture-time logs were obtained. They were not needed; facts 1-3 are sufficient.
+
+### Decision: opt-in build flag, default off
+
+`ext-image-copy-capture` is now behind `WITH_EXT_IMAGE_CAPTURE`, **deliberately excluded from `WITH_ALL`**, compiled out by default.
+
+Considered and rejected:
+
+* **Delete it.** Loses a capability wlroots will eventually force, and AGENTS.md section 3 discourages removing features. The problem is not the code, it is that this machine's stack cannot use it yet.
+* **Runtime config key.** Would let it be toggled without a rebuild, but it is a compatibility escape hatch for a hardware/driver limitation, not a user preference -- and the four existing protocol toggles (`WITH_SCREENCOPY`, `WITH_GAMMACONTROL`, `WITH_LAYERSHELL`, `WITH_VIRTUAL_INPUT`) are all build flags. Consistency wins.
+* **Fix the ext path in hikari.** Not possible: hikari creates two globals and wlroots implements everything behind them. There is no hikari-side code to correct.
+
+The flag exists rather than a deletion precisely so this can be re-tested with one `make` argument when the graphics stack moves on -- most plausibly once **FB-3** (hybrid Intel+NVIDIA device selection, BLUEPRINT section 13) is resolved, since black dmabuf frames across two GPUs is the same family of problem.
+
+### Screen sharing status after this phase
+
+The four-part chain from Phase 79, now complete:
+
+1. compositor advertises a capture protocol the client can use -- **wlr-screencopy, working (grim-verified)**
+2. `XDG_CURRENT_DESKTOP` matches a portal backend -- **done, Phase 78, verified live**
+3. `WAYLAND_DISPLAY` reaches the D-Bus activation environment -- **fixed Phase 79; confirmed by portal-wlr now running and connecting**
+4. PipeWire and WirePlumber running -- **user session configuration, done by the user**
+
+With this phase, portal-wlr should fall back to `wlr-screencopy`, which grim proves works end to end.
+
+### Validation
+
+0 warnings across **three** configurations -- default, full-feature, and full-feature plus `HAVE_EXT_IMAGE_CAPTURE` -- so the opt-in path still compiles. `make -V` confirms the macro is absent by default, present with `WITH_EXT_IMAGE_CAPTURE=YES`, and **not** pulled in by `WITH_ALL`. Documented in `README.md` beside the other build switches.
+
+### Modified files
+
+`Makefile`, `src/server.c`, `README.md`.
+
+---
+
+## [2026-08-22 14:10] Phase 79: OBS screen sharing diagnosed -- WAYLAND_DISPLAY never reaches the D-Bus activation environment
+
+**Status:** ONE COMPOSITOR BUG FOUND AND FIXED (unbuilt); one blocker identified as user session configuration, not a code defect. **W8 confirmed working on hardware.**
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
+
+### Origin
+
+User reported W7a/W8 working ("seems to work"), but that screen sharing with OBS still did not, adding "that might be an OBS issue". It is not. Diagnosed against the live session rather than accepted.
+
+### Confirmed working: the Phase 78 portal fix
+
+`XDG_CURRENT_DESKTOP=Hikari Sakura:wlroots` is present in `dbus-run-session`, the compositor, the session `dbus-daemon` and the running `xdg-desktop-portal`. The Phase 78 change is live and correct.
+
+**A diagnostic error of mine nearly recorded the opposite, and is worth logging.** The first reading appeared to show `XDG_CURRENT_DESKTOP=Hikari` -- neither the old value nor the new one -- and roughly ten minutes went into hypothesising a stale session, an SDDM override and a competing session file. The cause was the diagnostic itself: `procstat -e` prints a space-separated environment, and piping it through `tr ' ' '\n'` split `"Hikari Sakura:wlroots"` at its space, leaving `XDG_CURRENT_DESKTOP=Hikari` as an apparently complete line. **A value containing a space broke the parser, not the system.** Re-checked with a parse that tolerates spaces, all four processes are correct. Recorded because the failure mode -- a measurement artifact presenting as a plausible bug, in the same investigation as a genuine one -- is the same shape as Phase 75's speculative change, and cost real time.
+
+### Blocker 1 (COMPOSITOR BUG, fixed): WAYLAND_DISPLAY is absent from the activation environment
+
+Verified live: **`WAYLAND_DISPLAY` is present in neither `dbus-run-session`, nor the session `dbus-daemon`, nor the running `xdg-desktop-portal`.**
+
+The ordering makes this inevitable. `start-hikari.sh` wraps the compositor in `dbus-run-session`, so the session bus starts **before** the compositor creates its Wayland socket. D-Bus hands every service it activates the environment the bus itself was started with -- which therefore can never contain `WAYLAND_DISPLAY`. `setenv()` inside `server_init()` fixes the compositor's own environment and that of children it forks, but cannot retroactively change an already-running bus.
+
+The consequence is silent and total: `xdg-desktop-portal-wlr` D-Bus-activates with no idea which compositor to connect to, fails, and the portal reports no ScreenCast provider. It was not in the process list at all, which is consistent. **Nothing logs this**, which is why it presents as "screen sharing just doesn't work" and gets attributed to the client.
+
+**Fixed** with `export_activation_environment()` in `src/server.c`, run after the backend starts and before `run_autostart()`, publishing `WAYLAND_DISPLAY`, `XDG_CURRENT_DESKTOP`, `DISPLAY`, `XDG_SESSION_TYPE` and `XDG_RUNTIME_DIR` via `dbus-update-activation-environment`.
+
+* Placed after `wlr_backend_start()` so `DISPLAY` (exported by `setup_xwayland`) is already set and gets published too.
+* Deliberately best-effort: guarded by `command -v` and routed through `hikari_command_execute()`, the same detached helper autostart entries use. `dbus-update-activation-environment` ships in the dbus package, which a minimal install may lack, and a compositor must not refuse to start over an optional integration -- its absence costs only this feature.
+* `XDG_CURRENT_DESKTOP` is republished even though it is currently correct, because the same staleness applies to it: a bus started before an updated `start-hikari.sh` keeps whatever the display manager set, and that value is what selects a portal backend.
+
+### Blocker 2 (NOT a code defect): PipeWire is not running
+
+`pipewire` and `wireplumber` are installed (1.6.8 / 0.5.15) but **neither is running**. The portal's ScreenCast interface delivers frames over PipeWire, so OBS cannot capture regardless of how well the portal negotiates.
+
+*(An earlier count of "2" for these processes was another artifact -- it matched the grep's own subshells. Corrected by matching on the actual argv.)*
+
+There is also **no `~/.config/hikari/autostart`**, which is where hikari looks (`main.c:get_user_autostart()` -> `$XDG_CONFIG_HOME/hikari/autostart`, else `$HOME/.config/hikari/autostart`; the file must be executable).
+
+**Deliberately not fixed in code.** Starting a sound and media daemon is a session policy decision belonging to the user, not something a compositor should hardcode -- hikari already provides the autostart mechanism for exactly this. Documented instead, and raised with the user.
+
+### The full chain, for future reference
+
+For portal screen sharing to work on this platform, all four must hold:
+
+1. compositor advertises capture protocols -- **done, Phase 78**
+2. `XDG_CURRENT_DESKTOP` matches a portal backend's `UseIn` -- **done, Phase 78; verified live**
+3. `WAYLAND_DISPLAY` reaches the D-Bus activation environment -- **fixed this phase**
+4. PipeWire and WirePlumber are running -- **user session configuration**
+
+Three of the four are compositor-side and are now handled. Only (4) is outside the project.
+
+### Validation
+
+0 warnings across 64 files in both configurations. The shell guard was executed directly to confirm it parses and resolves. Unbuilt.
+
+---
+
+## [2026-08-22 13:57] Phase 78: W7a + W8 -- modern capture, the portal fix, and XWayland finally renders
+
+**Status:** IMPLEMENTED, unbuilt. 0 warnings across 64 files in both configurations. **W7's foreign-toplevel half (W7b) is deliberately sequenced to the next cycle -- see the reasoning below.**
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
+
+### W7a -- capture protocols and the portal
+
+**Both generations of screen capture are now advertised.** `wlr-screencopy-v1` is what installed tools bind today (grim, xdg-desktop-portal-wlr), but the wlroots header states plainly that it "is deprecated and superseded by ext-image-copy-capture-v1" and "will be dropped in a future wlroots version". Offering only the old one loses capture on a wlroots update; only the new one breaks every tool available today. Added `wlr_ext_output_image_capture_source_manager_v1_create()` alongside `wlr_ext_image_copy_capture_manager_v1_create()` -- the copy manager alone would advertise a protocol with no way for a client to name a capture target.
+
+**The portal fix, verified empirically rather than assumed.** `/usr/local/share/xdg-desktop-portal/portals/wlr.portal` on this machine reads:
+
+```
+Interfaces=org.freedesktop.impl.portal.Screenshot;org.freedesktop.impl.portal.ScreenCast;
+UseIn=wlroots;sway;Wayfire;river;phosh;Hyprland;
+```
+
+`XDG_CURRENT_DESKTOP="Hikari Sakura"` matched **none** of those, so screen sharing and screenshots via the portal had no backend at all -- regardless of which capture protocols the compositor advertised. Changed to `"Hikari Sakura:wlroots"`, which is a colon-separated list: the identity is kept for anything matching on it, and `wlroots` makes the backend eligible. `share/wayland-sessions/hikari.desktop` gains the matching `DesktopNames=Hikari Sakura;wlroots` (semicolon-separated there by spec; the display manager converts it).
+
+### W8 -- XWayland renders content, at last
+
+Confirmed in Phase 70 and outstanding since: `xwayland_view.c` built a scene tree and attached **only** hikari's own border and indicator rects, so every managed X11 window drew as an empty bordered rectangle; `xwayland_unmanaged_view.c` contained **no `wlr_scene` reference whatsoever**, so X11 menus, tooltips, dropdowns and drag icons were hit-tested but never drawn.
+
+**Both now attach the surface via `wlr_scene_subsurface_tree_create()`**, chosen over `wlr_scene_surface_create()` because the latter's own documentation says "child sub-surfaces are ignored" -- rare on X11, but silently dropping them would be a fresh instance of the very bug being fixed.
+
+**Created on `associate`, not at init and not on map.** `xwayland_surface->surface` is NULL until wlroots associates it, so init is too early; and the surface is valid for the whole associate/dissociate window, which is exactly the lifetime this tree should have -- map/unmap merely toggles visibility.
+
+**Ownership is shared, and that needed care.** `xdg_view.c:801` records that wlroots "tears down" these trees on surface destroy, but the header documents no such contract for the subsurface variant, and hikari also destroys it on dissociate. Rather than bet on one side, each view registers a listener on `wlr_scene_node.events.destroy` that nulls its pointer -- so whichever side destroys the tree first, the other sees NULL. Neither a double-destroy nor a stale pointer is reachable. **This is the direct application of the Phase 76 lesson**: the previous crashes came from assuming a library's contract instead of making the code correct under either behaviour.
+
+**Placement.** Managed views parent the surface tree under their existing per-view `scene_tree`, so it inherits the view's position and sits between the border (outside the geometry, so no overlap) and the indicator frame (which raises itself when shown). Unmanaged views have no per-view parent -- an override-redirect surface has no border and no indicator -- so they attach straight to `layers.views` and position in **layout-absolute** coordinates, which is what `wlr_xwayland_surface.x/y` already are. They raise to top on map, because a menu or drag icon is only meaningful above whatever spawned it; that raise is scoped to the view layer, so it cannot climb over the bar or out of a locked screen. `commit_handler` repositions the node when the surface moves, which menus tracking the pointer and drag icons following the cursor do constantly.
+
+**Audit performed rather than assumed:** every listener declared in both headers was checked for exactly one removal. All are removed in the destroy path except `commit`, which is removed in `unmap()` -- and the destroy path calls `unmap()` when mapped, in both files. Destroy *ordering* was checked too: `wlr_scene_node_destroy(&scene_tree->node)` fires the surface-tree destroy handler, which removes and re-initialises the link, before the explicit `wl_list_remove` further down -- so that removal operates on an empty list rather than a freed one.
+
+### W7b (foreign-toplevel) sequenced to the next cycle -- reasoning
+
+`ext-foreign-toplevel-list-v1` is **not** implemented in this phase. This is a deliberate sequencing decision, not a silent scope cut.
+
+**It is not required for the screen-sharing goal.** Checked rather than assumed: `wlr.portal` advertises only `Screenshot` and `ScreenCast`, and xdg-desktop-portal-wlr captures **outputs** through wlr-screencopy -- it has no window picker. Foreign-toplevel serves taskbars and docks (waybar's `wlr/taskbar`) and future window-selection portals. W7a therefore delivers W7's stated purpose on its own.
+
+**It is the expensive half.** Meaningful support needs per-window handle lifecycle -- create on map, destroy on unmap, update on title change, plus storing `app_id`, which views do not currently retain. That is six touch points in `src/view.c`: the single file behind eight separate crash phases (42, 44, 45, 55, 56, 57, 61, 63).
+
+**Bundling it here would destroy the bisect.** W8 is a substantial change to XWayland that needs runtime verification. Shipping foreign-toplevel handle wiring in the same build cycle means an X11 crash could be either change. Phase 76 recorded exactly this lesson one cycle ago -- *never ship speculation alongside an evidence-backed fix* -- and its generalisation is: do not bundle two independently-risky changes into one unverifiable build. Following that here is the point of having recorded it.
+
+### Validation
+
+| Target | Result |
+|---|---|
+| All 64 `src/*.c`, full feature config | 0 warnings |
+| All 64 `src/*.c`, default config | 0 warnings |
+| `start-hikari.sh` (`sh -n`) | clean |
+| New wlroots symbols exported | 3/3 (`wlr_ext_output_image_capture_source_manager_v1_create`, `wlr_ext_image_copy_capture_manager_v1_create`, `wlr_scene_subsurface_tree_create`) |
+| Protocol versions available | all three at version 1, confirmed against installed `wayland-protocols` |
+| Listener removal audit | all 19 listeners across both XWayland files accounted for |
+| Portal backend match | verified against the installed `wlr.portal` |
+
+Unbuilt and unrun. XWayland has never rendered content in this tree, so there is no prior behaviour to regress against -- but equally, no part of this path has ever been exercised.
+
+### Modified files
+
+`src/server.c`, `start-hikari.sh`, `share/wayland-sessions/hikari.desktop`, `src/xwayland_view.c`, `include/hikari/xwayland_view.h`, `src/xwayland_unmanaged_view.c`, `include/hikari/xwayland_unmanaged_view.h`.
+
+---
+
+## [2026-08-22 13:43] Phase 77: The lock screen works -- confirmed on hardware; clock raised by a centimetre
+
+**Status:** **W3 + W4 CONFIRMED WORKING ON HARDWARE by the user.** One cosmetic change made on request. Syntax-clean; the clock change is unbuilt.
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
+
+### The feature is delivered
+
+The user rebuilt after Phase 76 and reported it working. The native blurred lock screen with a compositor-drawn clock -- the thing originally asked for four phases ago and mis-scoped in Phase 70 as a `public`-view workaround -- is live:
+
+* the workspace is captured at lock time and blurred behind the lock screen,
+* the clock and date are drawn by the compositor, needing no client,
+* the password indicator and public views layer over it,
+* blanking is power-aware.
+
+That closes **W3** and **W4**, and with them the original request from Phase 70.
+
+### Clock position
+
+**Requested:** the clock, date and time about 1 cm higher.
+
+**Implemented as a real centimetre, not a pixel guess.** A pixel constant is a different physical distance on every panel -- 40 px is ~10 mm at 96 DPI and roughly half that on a dense laptop display -- so `mm_to_logical_pixels()` derives the offset from the panel's own dimensions: EDID's `phys_height` against the mode's pixel height gives pixels-per-millimetre, divided by the output scale because scene nodes are positioned in logical coordinates rather than physical ones.
+
+Falls back to the Wayland convention that logical space is nominally 96 DPI (10 mm = 37 logical px) when EDID reports no physical size, which virtual machines and some displays do.
+
+The existing 40 px indicator clearance is left alone; the centimetre is added to it, so this is literally "1 cm higher than it was" rather than a re-derivation of the whole layout.
+
+**Not done, and offered instead:** making the offset configurable. It was not requested, and AGENTS.md gates unapproved additions -- but given each visual tweak currently costs a full rebuild and re-login, a `clock-offset` key in the `lock` block would let this be tuned without one. Raised for the user rather than added.
+
+### Where the four-phase crash sequence leaves things
+
+Worth recording as a unit, because the shape is instructive. The feature took three build cycles to land, and the two failures were both mine:
+
+| Phase | Outcome |
+|---|---|
+| 74 | Implemented. Two bugs caught **before** shipping by re-reading (damage early-out, blur stride overflow). Two shipped. |
+| 75 | Crash 1 root-caused from a core dump in minutes. Fix correct. **A second, speculative change shipped alongside it was backwards.** |
+| 76 | Crash 2 root-caused. Root cause was *the same struct* -- the real defect was hand-building it at all. Phase 75's speculation reverted. |
+| 77 | Confirmed working. |
+
+Three lessons already recorded in their own phases, restated here because together they are the actual takeaway:
+
+1. **A fallback ladder is only as safe as its first rung** -- an assertion in a dependency is not a recoverable failure.
+2. **Do not hand-construct a library's structs when it ships a constructor**, especially one whose fields are documented "do not use".
+3. **Do not ship speculation in the same commit as an evidence-backed fix** -- the fix lends the guess credibility it has not earned, and Phase 75's `transformed_resolution` change survived a whole cycle because of it.
+
+The diagnostics infrastructure is what made this cheap: each crash went from report to named assertion in a few minutes, using core dumps and `HIKARI_LOG` from Phase 68 and the `strings`-over-a-stripped-library technique found in Phase 76.
+
+### Validation
+
+0 warnings across 64 files in both build configurations. The clock offset itself is a one-line arithmetic change and is unbuilt.
+
+---
+
+## [2026-08-22 13:39] Phase 76: Second crash root-caused -- stop hand-building wlr_drm_format, and a correction to Phase 75
+
+**Status:** FIXED, unbuilt. `src/screen_capture.c` rewritten to construct the format through the allocating API instead of by hand. **Includes a correction to a change Phase 75 made in the wrong direction.**
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
+
+### Symptom and root cause
+
+The Phase 75 fix was built and the compositor still aborted on locking. `hikari.4102.1001.core` (13:35, after the 13:29 install) resolved cleanly:
+
+```
+#4  wlr_drm_format_copy
+#5  wlr_swapchain_create
+#6  render_output_offscreen  (src/screen_capture.c:100)
+```
+
+Assertion recovered the same way, by disassembling the call site:
+**`render/drm_format_set.c:144: assert(src->len <= src->capacity)`**
+
+Phase 75 changed `.len` from 0 to 1 and **left `.capacity` at 0**. `1 <= 0` is false.
+
+### The real lesson: this was the second malformed struct in two attempts
+
+Two crashes, two different invariants of the same hand-constructed `struct wlr_drm_format`:
+
+| Attempt | Violation | Assert |
+|---|---|---|
+| Phase 74 | `len = 0` | `format->len > 0` (gbm.c:66) |
+| Phase 75 | `len = 1, capacity = 0` | `src->len <= src->capacity` (drm_format_set.c:144) |
+
+The struct's own header documents `capacity` as **"The capacity of the array; do not use."** That is wlroots stating plainly that a compositor is not meant to fill this in. Patching one field at a time in response to each successive assert was treating symptoms; the defect was building the struct at all.
+
+**Fixed properly:** the format is now built with `wlr_drm_format_set_add()`, retrieved with `wlr_drm_format_set_get()`, and released with `wlr_drm_format_set_finish()` once `wlr_swapchain_create()` has deep-copied it. The API allocates the modifier array and keeps `len` and `capacity` consistent, so there is no invariant left for this code to violate. `grep` confirms no hand-built `wlr_drm_format` and no `.capacity` assignment remains anywhere in `src/`.
+
+### Correction to Phase 75
+
+Phase 75 also changed the swapchain sizing from `wlr_output_transformed_resolution()` to `wlr_output->width/height`, on the reasoning that wlroots applies the output transform at scanout. **That was backwards, and it has been reverted.**
+
+Scanning the stripped library's assertion strings turned up `buffer->width == resolution_width && buffer->height == resolution_height` -- and `resolution_width`/`resolution_height` is wlroots' variable naming for the output of `wlr_output_transformed_resolution()`. The rotation is baked into the rendered buffer, not applied afterwards, so a 90/270 degree output renders into a buffer with width and height swapped relative to its mode. The original code was right; Phase 75 introduced a latent regression for rotated outputs while claiming to fix one, and the unrotated laptop panel under test could never have revealed either version as wrong.
+
+Recorded because the shape matters: a change justified by plausible reasoning about an API's semantics, shipped without evidence, in the same edit as a fix that *was* evidence-backed. The evidence for the real fix lent unearned credibility to the speculative one.
+
+### Method note
+
+An attempt to enumerate every assertion in the call path up front -- to stop fixing these one crash at a time -- failed: the installed `libwlroots-0.20.so` is stripped and the available `objdump` cannot disassemble this FreeBSD ELF. What did work was `strings` over the library, which lists assertion *expressions* even without symbols. That is how the `resolution_width` assert above was found, and it is the technique to reach for next time rather than another disassembly attempt.
+
+### Validation
+
+0 warnings across 64 files in both build configurations. All four newly-used symbols confirmed exported. **Not rebuilt** -- confirmation is the user's build, and the test is simply whether locking still aborts.
+
+---
+
+## [2026-08-22 13:28] Phase 75: Phase 74 crash root-caused from a core dump -- empty modifier list aborts the GBM allocator
+
+**Status:** FIXED, unbuilt. One-line class of fix in `src/screen_capture.c`. **Root cause proven from a core dump, not inferred.**
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
+
+### Symptom
+
+User built Phase 74 and reported the compositor crashing. Two hikari cores were present in `/var/coredumps`; the 12:56 one predates the rebuild and does not resolve against the current binary, but `hikari.26797.1001.core` at 13:24 is post-build and resolved cleanly.
+
+### Root cause, proven
+
+```
+#3  __assert
+#4  ??? in libwlroots-0.20.so
+#5  wlr_allocator_create_buffer
+#6  wlr_swapchain_acquire
+#7  wlr_scene_output_build_state
+#8  render_output_offscreen  (src/screen_capture.c:114)
+#9  hikari_screen_capture_init
+#10 create_backdrop          (src/lock_mode.c:853)
+#11 hikari_lock_mode_enter
+#12 hikari_server_lock
+```
+
+`SIGABRT`, not a segfault. The assertion arguments were recoverable by disassembling the call site in frame 4 -- the registers themselves were clobbered by `raise`/`abort`, but the `lea` instructions that load `__assert`'s operands are still there:
+
+```
+lea rsi,[rip+...]   # "render/allocator/gbm.c"
+lea rcx,[rip+...]   # "format->len > 0"
+mov edx,0x42        # line 66
+```
+
+**wlroots' GBM allocator requires a non-empty modifier list**: `render/allocator/gbm.c:66` opens with `assert(format->len > 0)`.
+
+Phase 74's format escalation ladder made rungs 1 and 3 `len = 0, modifiers = NULL`, intending that to mean "implicit modifier / let the allocator choose". It does not mean that -- it is simply invalid, and since rung 1 is tried first the compositor aborted on the very first lock attempt, before the ladder could reach the LINEAR rungs that *were* well-formed.
+
+The correct way to request implicit-modifier allocation is a **one-entry list containing `DRM_FORMAT_MOD_INVALID`**. wlroots' allocator tries `gbm_bo_create_with_modifiers2()` first and, on finding `INVALID` in the list, is permitted to fall back to a plain modifier-less `gbm_bo_create()`.
+
+### Fix
+
+All four rungs now carry exactly one modifier and never an empty list:
+
+| Rung | Format | Modifier |
+|---|---|---|
+| 1 | `XRGB8888` | `DRM_FORMAT_MOD_INVALID` (implicit) |
+| 2 | `XRGB8888` | `DRM_FORMAT_MOD_LINEAR` |
+| 3 | `ARGB8888` | `DRM_FORMAT_MOD_INVALID` |
+| 4 | `ARGB8888` | `DRM_FORMAT_MOD_LINEAR` |
+
+### The design lesson, recorded because it generalises
+
+**The escalation ladder can only recover from *returned* failures, never from assertions.** An `assert()` inside a dependency is not a recoverable error -- it takes the process down before the caller sees anything. So a fallback chain is only as safe as its *first* rung: every rung must be independently well-formed, and a malformed one cannot be rescued by the next.
+
+Phase 74's ladder was written on the assumption that a bad format would return NULL and move on. That assumption was never checked against wlroots' preconditions, and the ladder's apparent robustness actively disguised the danger -- it read as defensive code while containing a guaranteed abort. This is the same shape as the Phase 70 F2 finding (a comment asserting a safety property the code did not have), one level down.
+
+A second bug in the same function was found and fixed while investigating, though it would not have caused this crash:
+`wlr_output_transformed_resolution()` was used to size the swapchain, but the buffer the scene renders into is in the output's **untransformed** orientation -- wlroots applies the transform at scanout. On a 90 or 270 degree rotated output the swapchain would have been created with its dimensions swapped. The unrotated laptop panel this was tested on could never have shown it. Now uses `wlr_output->width/height`.
+
+### Validation
+
+`src/screen_capture.c` syntax-clean. **Not rebuilt** -- the fix needs the user's build to confirm, and the confirmation is simply that locking no longer aborts.
+
+Neither of these two bugs was reachable by any check available in this environment: both live in the capture path, which needs a live renderer, a real output and a composited scene. The core dump was the only instrument that could have found the first one, and it found it immediately -- which vindicates the Phase 68 diagnostics work that made cores and `HIKARI_LOG` usable.
+
+---
+
+## [2026-08-22 13:11] Phase 74: W3 + W4 executed -- the native blurred lock screen with a clock
+
+**Status:** IMPLEMENTED, unbuilt. Six new files, eight modified. Syntax-clean at 0 warnings across 64 files in both build configurations. The blur was additionally unit-tested standalone under ASan/UBSan.
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
+
+### Origin, and a correction to how this was scoped
+
+**Phase 73 was confirmed working on real hardware by the user** -- F1, F2, the stacking fix and the layer trees all verified. The user then clarified the requirement that had been mis-scoped since Phase 70: *"i do not know how to add the clock - this was supposed to be a native function of the lockscreen - it blurs the active workspace and shows a clock"*.
+
+The Phase 70 investigation established that upstream's answer to "a clock on the lock screen" was a client view marked `public`, and W4 was written around that being the fallback. That reading was **too deferential to upstream**. The user's intent was always a compositor-drawn clock, and marking a client `public` is a workaround for the absence of one, not a design. This phase implements it natively: the clock and the blur are both drawn by the compositor, so they are present with no session running, survive a client crash, and cannot be impersonated by a window that merely looks like a clock. The `public` mechanism is retained and still works -- Total Feature Retention -- it is simply no longer the answer to this question.
+
+### W3 -- capture and blur (Option B, CPU baseline per the Q3 ruling)
+
+**Capture (`src/screen_capture.c`).** wlroots has no "give me a picture of this output" call for compositors -- screencopy serves clients. What it does have is `wlr_scene_output_build_state()`'s `swapchain` option: supply a swapchain of our own, and the scene renders into it and reports the buffer through the output state. Building a state and never committing it is the supported way to render an output off-screen.
+
+**The format spike from the plan is resolved as an escalation ladder**, since wlroots 0.20.2 exposes `wlr_renderer_get_texture_formats()` but no equivalent query for render *target* formats -- the right choice cannot be looked up, only tried. Four rungs, each logged on success: `XRGB8888` implicit-modifier, `XRGB8888` LINEAR, `ARGB8888` implicit, `ARGB8888` LINEAR. Exhausting all four returns NULL and the lock screen falls back to a plain backdrop.
+
+**A failure mode caught by reasoning rather than testing, and fixed.** `wlr_scene_output_build_state()` tracks damage, and an idle desktop -- the normal state of a screen at the moment someone locks it -- has none. The capture would therefore have worked while something on screen was animating and silently produced nothing the rest of the time: **the worst possible failure shape, indistinguishable from an intermittent bug**. Fixed with `wlr_output_update_needs_frame()` before building the state. That function lives in wlroots' backend-implementer header rather than the compositor-facing one; the tree already sets that precedent (`src/buffer.c` uses `<wlr/interfaces/wlr_buffer.h>`), and setting the flag on our own output is benign -- at worst one extra render, and the lock screen needs a frame immediately afterwards anyway.
+
+**Readback avoids `gbm_bo_map` entirely.** `wlr_texture_from_buffer()` + `wlr_texture_read_pixels()` is `glReadPixels`-backed on GLES2, so it never requires the buffer to be CPU-mappable -- which matters because a GBM scanout buffer generally is not. This is the same constraint that shaped FB-2, approached from the other side.
+
+**Alpha is forced opaque after readback.** The capture is usually allocated `XRGB8888`, which carries no alpha at all, so what the readback writes into that byte is driver-dependent -- and a backdrop returning alpha 0 would simply be invisible, a hard thing to diagnose from a screenshot of a lock screen that merely looks unblurred. Normalising also makes the blur arithmetically correct: `ARGB8888` is premultiplied by wlr_scene's convention, and averaging premultiplied and straight pixels differs -- but at full alpha the two coincide, so the blur can average channels directly without knowing which it was handed.
+
+**Blur (`src/blur.c`).** Three passes of a separable box blur, which is the standard Gaussian approximation and runs in time independent of the radius via a running sum. A true Gaussian convolution at radius 12 would be roughly two orders of magnitude slower for no perceptible gain, and this runs once per lock, not per frame. Edges are **clamped** rather than wrapped or zero-padded: wrapping bleeds the right edge of the screen into the left, zero-padding darkens the borders into a vignette.
+
+**A heap overflow in this phase's own work, caught on re-read before it shipped.** `box_blur_line()` originally took one `pixel_stride` used for both source and destination. That is correct for the horizontal pass (both contiguous) but wrong for the vertical pass, which walks a **column** in the image while writing into a **compact** scratch line -- so it would have written at column stride into a buffer sized for one line, overrunning the heap by roughly the image height. Split into `src_stride` and `dst_stride`.
+
+### W4 -- backdrop, clock, and the power-aware blank timeout
+
+**Ordering is the whole trick.** `hikari_lock_mode_enter()` now captures every output **before** `override_visibility()` disables the desktop layers. Capture first and the backdrop shows the workspace the user was looking at; capture afterwards and it shows an empty screen. Both run before returning to the event loop, so no frame is committed between them and the transition is atomic -- the D4 decision, now load-bearing rather than theoretical.
+
+**Clock (`src/lock_clock.c`).** cairo/Pango into a CPU buffer per output via the shared `hikari_buffer_create_argb8888()`, attached to the lock layer. Two things worth recording:
+
+* **It ticks on the minute boundary, not every 60 seconds.** A fixed interval drifts against the wall clock, so the displayed minute would change up to a minute late. The timer re-arms to `(60 - tm_sec)` seconds each time, keeping the change simultaneous with the actual rollover. The default format has no seconds field, so a per-second repaint would re-shape text sixty times an hour to produce identical pixels.
+* **The text is drawn with a soft shadow, and that is not decoration.** The clock sits over a blurred photograph of the user's own desktop, whose brightness is entirely unknown -- white text alone disappears against a pale wallpaper. Drawing the same glyphs in translucent black at a small offset first guarantees an edge whatever is behind it, which is cheaper and far more predictable than sampling the backdrop and choosing a colour.
+
+**Stacking within the lock layer** falls out of creation order: backdrops are lowered to the bottom, public views are reparented in above them, the clock is created next, and the password indicator raises itself to the top when damaged.
+
+**Blank timeout, per the Q2 ruling: 180 s on AC, 60 s on battery, both configurable, 0 = never.** The two hardcoded values (`1000` at entry, `10 * 1000` per keystroke) are replaced by a single `arm_blank_timer()`. The power source is read **at every arm** rather than cached at lock time, so unplugging the mains while the screen is locked takes effect on the very next keystroke; since the timer is re-armed on every keypress anyway, that costs one `sysctl` per keystroke and needs no `devd` listener. `hw.acpi.acline` is absent on a desktop or a VM, and a failed read falls through to the **AC** timeout deliberately -- a machine that cannot be on battery should not inherit the battery's aggressive blanking.
+
+**Configuration.** A new `ui { lock { ... } }` block: `blur` (boolean to disable, or an object with `radius`/`passes`), `clock`, `clock-format`, `date-format`, `clock-font`, `date-font`, `clock-color`, `blank-timeout-ac`, `blank-timeout-battery`. `blur` accepts both forms deliberately so that turning it off and tuning it use the same key -- a bare `radius` would have forced a second key that could contradict it. Format strings are **copied**, not borrowed, because the `ucl_object_t` is released when the parser is torn down while these are read every minute for the life of the session.
+
+### Validation
+
+| Target | Result |
+|---|---|
+| All 64 `src/*.c`, full feature config | 0 warnings |
+| All 64 `src/*.c`, default config | 0 warnings |
+| `src/topbar.c` | 0 warnings |
+| New wlroots symbols exported (`nm -D`) | 11/11 present |
+| `etc/hikari/hikari.conf` parsed with **real libucl** | `ui.lock` found, all 9 keys present |
+| `hikari_blur_argb8888()` unit test | edges clamped (left 0, right 255 -- no vignette, no wraparound), gradient monotonic across the seam, alpha preserved |
+| Blur under **ASan + UBSan**, 6 geometries incl. 1x1 and radius 999 | clean |
+
+The config check used the installed libucl rather than a brace count, and the blur was compiled standalone and executed -- so the two pieces of genuinely new logic that could be exercised without a compositor, were.
+
+**Everything else remains unbuilt and unrun.** The capture path in particular cannot be tested here: it needs a live renderer, a real output and a composited scene.
+
+### Modified files
+
+New: `include/hikari/screen_capture.h`, `src/screen_capture.c`, `include/hikari/blur.h`, `src/blur.c`, `include/hikari/lock_clock.h`, `src/lock_clock.c`, `include/hikari/lock_config.h`, `src/lock_config.c`.
+Modified: `src/lock_mode.c`, `include/hikari/lock_mode.h`, `src/configuration.c`, `include/hikari/configuration.h`, `src/output.c`, `include/hikari/output.h`, `Makefile`, `etc/hikari/hikari.conf`.
+
+---
+
+## [2026-08-22 11:59] Phase 73: FB-6 retired, and W2 executed -- scene layer trees, F1 and F2 fixed
+
+**Status:** IMPLEMENTED, unbuilt. The largest change of the project so far: 261 insertions / 50 deletions across 12 files. **F1 (CRITICAL) and F2 (HIGH) are fixed structurally.** Syntax-clean at 0 warnings across 60 files in both build configurations.
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
+
+### FB-6 -- retired, per the user's ruling (Option 1)
+
+`WITH_POSIX_C_SOURCE` removed. Four lines of Makefile conditional, plus two comment blocks that referenced it -- the `TOPBAR_CFLAGS` snapshot rationale and the `hikari-topbar` target -- both rewritten to state what they now actually do. The `:=` on `TOPBAR_CFLAGS` remains load-bearing for a different reason (it snapshots before the feature macros and pkg-config include paths are appended), and the comment now says that instead.
+
+`src/topbar.c`'s own `__BSD_VISIBLE` comment was checked and deliberately left: it explains why no feature-test macro may be defined for that target and notes "the Makefile defines none of them", which this change makes unconditionally true. `README.md` never documented the flag. Verified afterwards: no `POSIX_C_SOURCE` reference remains outside `.devdocs/`, and the default build is unchanged (12 `-D` flags, 61 objects, `PERMS` 555). TODOS P3 closes with this.
+
+### W2 -- scene layer trees
+
+**The structure.** `struct hikari_server` gains a `layers` sub-struct of six `wlr_scene_tree *`, created in `setup_scene_graph()` and declared bottom-to-top: `background`, `bottom`, `views`, `top`, `overlay`, `lock`. All seven attachment sites were repointed; `grep -rn 'scene->tree' src/*.c` outside `server.c` now returns **zero**.
+
+Ordering is established by raising each tree in turn, bottom first, rather than relying on the order `wlr_scene_tree_create()` inserts in. The header documents `raise_to_top` as "above all siblings" but says nothing about insertion, and this could not be tested at runtime -- so the ordering is made a property of the loop, and stays correct whichever end wlroots inserts at.
+
+The `lock` tree is created disabled at startup rather than on demand, so lock mode never has to allocate at the moment it is asked to hide the screen.
+
+**F1 -- the lock screen now hides things.** `override_visibility()` keeps its flag bookkeeping (the rest of `view.c` still reads those bits) but the flags are no longer load-bearing for visibility. The boundary is four `wlr_scene_node_set_enabled(..., false)` calls on the `bottom`/`views`/`top`/`overlay` trees, and wlroots disables every child of a disabled node -- so the view layer, the top bar, the indicator overlays and every layer-shell surface go dark together, and no client action can put a window back on screen. Public views are reparented onto the `lock` tree and explicitly enabled; that explicit enable is not redundant with the flag flip, because a public view parked on another sheet has a **disabled** scene node and clearing the hidden flag never touched it. **That is the specific reason a `public` clock never appeared on the lock screen.**
+
+`background` is deliberately left enabled, so the wallpaper still shows behind the lock screen -- matching the dimmed background upstream drew via `render_background(renderer, 0.1)`. A consequence worth naming: layer-shell BACKGROUND surfaces stay visible too. That is strictly less exposure than the status quo (where *everything* was visible) and layer-shell clients are already privileged, but W4 should decide whether the blurred backdrop replaces this layer or sits above it.
+
+**F2 -- a window mapping while locked.** Its invisibility now comes from the scene graph rather than from a comment that claimed a disable which never happened. The false comment at `view.c` is replaced with an accurate one naming the real mechanism.
+
+**A bug found in this phase's own work, before it shipped.** The first version of the map-time fix reparented to the lock layer only when locked. But a view's scene tree **outlives an unmap** -- it is destroyed in the shell's `destroy_handler`, not in `hikari_view_unmap()` -- so a public view that unmapped while locked and remapped after the unlock would still be parented to the (now disabled) lock layer and stay **invisible forever**. `reset_visibility()` could not have caught it either, because unmap removes the view from `output_views` and the restore loop iterates exactly that list. Fixed by deriving the parent unconditionally on every map, which makes the layer a property of the view's current state rather than of whatever was true when it was constructed.
+
+**Stacking order is preserved across lock/unlock, and this needed care.** `move_to_top()` inserts at the list head, so `output->views` runs top-to-bottom; `wlr_scene_node_reparent()` appends, and append is the top. Iterating forward would therefore have inverted the desktop on every unlock. Both loops use `wl_list_for_each_reverse` so the top-most view is reparented last. `reset_visibility()` reparents **every** view, not just the forced ones -- public views that were already visible were moved to the lock layer without ever being forced -- and re-derives each node's enabled bit from the restored hidden flag, which is exact because outside lock mode `hikari_view_show()`/`hide()` are the only writers of either.
+
+**Layer-shell ordering became structural.** A new `layer_scene_tree()` maps the protocol's four layers onto their trees, used at both the attachment site and the `set_layer` handler. The two ad-hoc `raise_to_top`/`lower_to_bottom` pairs are deleted: within a single-layer tree they had nothing left to order against, and across the old shared root they were actively wrong -- `BACKGROUND` surfaces sank *below* the wallpaper because `output.c` also called `lower_to_bottom()` and the last writer won. Changing layer is now a **reparent**, which is what it always meant; the old raise would have left the surface stacked among the wrong neighbours.
+
+### An unrecorded bug found during W2, and fixed
+
+**Views never restacked in the scene at all.** `border.c` and `indicator_frame.c` reorder nodes *within* a view's own subtree, but nothing anywhere called `raise_to_top` on `view->scene_node`. `raise_view()` / `move_to_top()` / `hikari_view_raise()` only ever reordered hikari's own lists, which drive focus and cycling -- so window stacking was **fixed at map time** and `hikari_view_raise()` had no visual effect whatsoever. Clicking a partially covered window raised it for focus purposes while it stayed drawn underneath.
+
+Not in the plan, but squarely W2's subject: the whole point of the workstream is that z-order stops being accidental. Fixed by adding the scene half to both `raise_view()` and `hikari_view_lower()`, scoped to the view's parent tree so a raise can never lift a window out of its layer -- while locked, public views raise among themselves inside the lock tree. A pleasant side effect: scene order and `output->views` now stay in agreement instead of diverging from the first raise onward.
+
+### Deviation from the plan: the `forced` flag was NOT deleted
+
+`PLANS.md` W2 step 3 says to delete it. **Deliberately not done, and this is the one place this phase departs from the approved plan.**
+
+The plan assumed the flag lived in lock mode plus a few asserts. It is **15 sites**, including six in `view.c`'s `commit_pending_operation()` and `hikari_view_migrate_to_sheet()` that branch on `forced` in combination with `hidden` -- and several of those branches are **provably unreachable** given the invariant asserted at `view.c:108` (`forced` implies `hidden`), so untangling them means reasoning about dead code in the exact subsystem that produced eight separate crash phases (42, 44, 45, 55, 56, 57, 61, 63).
+
+Crucially, **F1 and F2 are fixed by the tree work alone** -- the flags are now pure internal bookkeeping and the trees are the visual truth. Deleting `forced` is therefore pure cleanup, not a prerequisite. Bundling a 15-site removal from crash-prone code into an already-large change that cannot be built or run would be trading a real risk for a cosmetic gain. Tracked as its own follow-up.
+
+### Validation
+
+| Target | Result |
+|---|---|
+| All 60 `src/*.c`, full feature config | 0 warnings |
+| All 60 `src/*.c`, default config | 0 warnings |
+| `src/topbar.c` | 0 warnings |
+| scene-root attachments outside `server.c` | 0 |
+| cross-layer `raise_to_top`/`lower_to_bottom` in `layer_shell.c` | 0 |
+| `make -V` defaults after FB-6 | unchanged (61 objects, 12 `-D`) |
+
+Semantics that a syntax check cannot reach were verified by reading: `move_to_top()` inserts at the head so `output->views` is top-first (drives the reverse iteration); `reset_visibility()` runs inside `cancel()` while the scene is fully alive, and the scene root is destroyed at the very end of `hikari_server_stop()`, after `hikari_lock_mode_fini()`; `cancel()` is reached only from `hikari_normal_mode_enter()`, and `hikari_output_fini()`'s call is guarded on **not** being in lock mode, so no teardown path calls `reset_visibility()` against a destroyed scene.
+
+**This is the change most in need of runtime verification in the project's history.** It is unbuilt and unrun. The specific things to exercise are listed in TODOS Phase 73.
+
+### Modified files
+
+`Makefile`, `include/hikari/server.h`, `src/server.c`, `src/view.c`, `src/lock_mode.c`, `src/layer_shell.c`, `src/output.c`, `src/bar.c`, `src/indicator_bar.c`, `src/lock_indicator.c`, `src/xdg_view.c`, `src/xwayland_view.c`.
+
+---
+
+## [2026-08-22 11:43] Phase 72: W1 executed -- platform capability layer, buffer consolidation, FB-8
+
+**Status:** IMPLEMENTED, unbuilt. Four new files, four modified. Full-tree syntax sweep clean at **0 warnings across 60 files in BOTH build configurations**. FB-8 verified fixed by direct `make -V` evaluation across every switch combination. **FB-6 deliberately not implemented -- it needs a user decision, see below.**
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
+
+### Scope executed
+
+`PLANS.md` item -12 workstream **W1**, steps 1, 2, 3 and 5. Step 4 (FB-6) is held.
+
+### Step 1+2 -- one `wlr_buffer_impl` instead of two
+
+`src/buffer.c` + `include/hikari/buffer.h` now hold the compositor's single CPU-backed ARGB8888 `wlr_buffer`. `hikari_argb8888_buffer` moved out of `src/server.c` essentially verbatim (the one change: `data` is now `const unsigned char *`, since it is only ever memcpy'd from, which no caller notices). `hikari_background_buffer` in `src/output.c` -- a byte-for-byte duplicate of the same design -- is deleted, and `hikari_output_load_background()` now calls the shared helper.
+
+`hikari_server_create_argb8888_buffer()` is retained as a one-line shim so `bar.c`, `indicator_bar.c` and `lock_indicator.c` keep working untouched. They should move to the `buffer.h` entry point directly, after which the shim goes; that is deliberately left for a later pass rather than bundled here, so this diff stays a pure move.
+
+Net effect: `src/output.c` -66/+5, `src/server.c` -108/+60, with 115 lines of shared implementation in `buffer.c`. `grep -rn wlr_buffer_impl src/ include/` now returns exactly one implementation.
+
+**Doc correction carried into the code.** The moved comment no longer claims this is a FreeBSD/ZFS workaround. It now states the actual reason -- wlroots exposes no allocator a compositor can write pixels into, on any platform -- and points at BLUEPRINT §13 FB-2. This retires the Phase 33 framing at its source, not just in the register.
+
+**Dead includes removed, and one false comment with them.** With the implementations gone, `src/output.c` no longer referenced `DRM_FORMAT_*`, `wlr_buffer_init`, `wlr_allocator_*` or `wlr_drm_format`, so `<drm_fourcc.h>`, `<wlr/render/allocator.h>`, `<wlr/render/drm_format_set.h>`, `<wlr/render/wlr_renderer.h>` and `<wlr/interfaces/wlr_buffer.h>` were all dead and are removed. `src/server.c` shed `<drm_fourcc.h>` and `<wlr/interfaces/wlr_buffer.h>` -- the latter carried a comment reading *"wlr_buffer_init and struct wlr_buffer_impl are declared here; required for the CPU-backed ARGB8888 buffer below"*, which became false the moment the buffer moved out. Deleted rather than left to mislead, on the Phase 70 F2 precedent.
+
+### Step 3 -- the platform capability layer (D3)
+
+`src/platform.c` + `include/hikari/platform.h`. `hikari_platform_probe()` is called from `server_init()` immediately after linux-dmabuf is created or fails, and `hikari_platform_log()` emits the result as one contiguous `wlr_log(WLR_INFO)` block. Deliberately placed early so a session that dies during startup still leaves the platform facts in the log -- the exact gap that made Phases 19/33/53 expensive.
+
+What it records, and why each field earns its place:
+
+* **`render_buffer_caps`** from `struct wlr_renderer.render_buffer_caps`, decoded into `can_render_to_data_ptr` / `can_render_to_dmabuf`. This is the D2 probe W3 will branch on to choose its blur backend. It is the whole point of the file: it replaces an undocumented assumption about FreeBSD with a public-API question the compositor asks at runtime.
+* **DRM node path and card count.** wlroots hands out an fd (`wlr_renderer_get_drm_fd`, documented to return -1 when unavailable) but never a path, and the path is the single most useful fact on a hybrid machine because it names which GPU the renderer actually landed on. Resolved by device number rather than by guessing: `fstat()` the fd, then `stat()` each `/dev/dri` entry for a matching `st_rdev`. When more than one `card*` node exists, the log additionally names the `WLR_DRM_DEVICES` override -- putting the FB-3 fix in the log directly beside the symptom.
+* **`XDG_RUNTIME_DIR` filesystem and a live `posix_fallocate()` probe.** Probing by actually calling it, rather than pattern-matching the filesystem name against "zfs", keeps this correct for any filesystem with the same limitation. Reported explicitly as a *client*-side failure with no compositor-side symptom, and the severity is qualified by whether linux-dmabuf is available to fall back on.
+
+**Rejected: adding libdrm as an explicit dependency.** `drmGetVersion(fd)->name` would give the driver name (`i915` vs `nvidia-drm`) rather than an inferred path, which is strictly better evidence for FB-3. libdrm is MIT and therefore AGENTS.md-compliant, and its headers are already reachable (wlroots' cflags add `-I/usr/local/include/libdrm`, and the tree already includes `drm_fourcc.h` from there). But `pkg-config --libs wlroots-0.20` returns only `-lwlroots-0.20`, so this would add a real link dependency -- and adding a project dependency was not in the approved W1 scope. The `st_rdev` resolution gives the device path with no new dependency, which answers FB-3 adequately. Raised for the user rather than taken unilaterally.
+
+### Step 5 -- FB-8, verified fixed
+
+`.ifdef X` tests whether a variable is **defined**, not what it holds, so `make WITH_XWAYLAND=NO` still compiled XWayland in and **no feature could be disabled from the command line at all**. Reproduced before fixing: `make WITH_XWAYLAND=NO -V CFLAGS` emitted `-DHAVE_XWAYLAND=1`.
+
+All 11 `.ifdef` switches converted to `.if defined(X) && ${X:tu} != "NO"`. `:tu` upper-cases first, so `no`/`No`/`NO` all work.
+
+**A cleaner approach was tried first and rejected on evidence.** Normalising once at the top with `.for` + `.undef` would have avoided repeating the condition 11 times, but a standalone test showed **`.undef` does not remove a command-line variable in bmake** -- `WITH_X=NO` still read as set afterwards. The tidier form would have silently not worked. The verbatim check at each site is what actually functions, and the Makefile now carries a comment saying so, including the `.undef` finding, so the next person does not re-try it.
+
+Verified by direct `make -V` evaluation:
+
+| Invocation | Feature macros | XWayland objects |
+|---|---|---|
+| default | 5 | 2 |
+| `WITH_XWAYLAND=NO` | 4 | 0 |
+| `WITH_XWAYLAND=no` | 4 | 0 |
+| `WITH_ALL=NO` | 0 | -- |
+
+Also confirmed: `DEBUG=YES` -> `-Werror`, `DEBUG=NO` -> `-DNDEBUG`, `WITH_SUID=YES/NO` -> `4555`/`555`, and the default configuration is **byte-identical to before** -- which is the non-regression property that matters.
+
+### Step 4 -- FB-6 HELD, needs a user decision
+
+`WITH_POSIX_C_SOURCE=YES` produces exactly the three implicit-declaration warnings on record, reproduced this phase: `explicit_bzero` (`lock_mode.c:71`, wipes the password buffer), `setgroups` (`server.c:1209`, privilege drop), `usleep` (`bar.c:385`). Under `DEBUG=YES` (`-Werror`) they are build failures.
+
+**Root cause, which the plan's one-line description did not capture:** all three live behind `__BSD_VISIBLE`, and FreeBSD's `<sys/cdefs.h>` clears `__BSD_VISIBLE` whenever `_POSIX_C_SOURCE` is defined. `lock_mode.c`'s existing shim is guarded `#if !defined(__FreeBSD__) && !defined(HAVE_EXPLICIT_BZERO)`, so on FreeBSD it never fires -- it does not cover this case at all.
+
+**Why it was not implemented.** The plan offered "feature-test detection, or retire the flag". Feature-test detection means hand-declaring three libc functions across three files behind `__BSD_VISIBLE` checks -- a workaround spreading over three files to keep alive a build knob that `WITH_ALL` never sets, nobody uses, and that exists to enforce a strict-POSIX namespace this deliberately FreeBSD-only compositor has no consumer for. That is precisely the debt-accreting hotfix the user's standing directive rules out. Retiring the flag is the engineering answer, but AGENTS.md section 3 forbids removing a feature without explicit instruction.
+
+**Decision: hold and ask.** Two options, tabled for the user:
+1. **Retire `WITH_POSIX_C_SOURCE`** (recommended). Deletes 4 lines, removes a permanently-broken configuration, costs nothing since the flag is never set by default and the project is FreeBSD-only by charter.
+2. **Keep and fix** with three `__BSD_VISIBLE`-guarded declarations in `lock_mode.c`, `server.c` and `bar.c`, extending the existing `lock_mode.c` shim pattern.
+
+Until one is chosen, FB-6 stays open in the register and `WITH_POSIX_C_SOURCE=YES` remains a broken configuration -- as it has been all along, so nothing regresses by waiting.
+
+### Validation
+
+| Target | Result |
+|---|---|
+| All 60 `src/*.c`, full feature config | 0 warnings |
+| All 60 `src/*.c`, default (no feature macros) | 0 warnings |
+| `src/topbar.c` (own flags) | 0 warnings |
+| `make -V` switch matrix | FB-8 fixed, default config unchanged |
+| `grep -rn wlr_buffer_impl` | exactly one implementation |
+
+Still not built or linked. `make` remains unavailable to the agent (root-owned `.o` files), and a syntax sweep is not proof of a link.
+
+### Modified files
+
+New: `include/hikari/buffer.h`, `src/buffer.c`, `include/hikari/platform.h`, `src/platform.c`.
+Modified: `src/server.c`, `src/output.c`, `Makefile` (+2 objects, 11 conditionals).
+
+---
+
+## [2026-08-22 11:25] Phase 71: W5 + W6 executed -- lock-mode NULL guards, unlocker deny path, clipboard
+
+**Status:** IMPLEMENTED, unbuilt. First code workstream of the Phase 70 plan. Five changes across three files, 76 insertions / 3 deletions. Syntax-clean at 0 warnings in **both** build configurations, and all three newly-called symbols verified exported by the installed library.
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
+
+### Scope executed
+
+`PLANS.md` item -12 workstreams **W5** and **W6**, chosen as the entry point because they are independent of the W1->W2 refactor spine, carry no architectural risk, and land in one build cycle.
+
+**F4 was deliberately NOT implemented.** `PLANS.md` W5 marks it *conditional on W0-6*, which has not been run. Whether `hikari_output_enable()` needs `wlr_output_state_set_mode()` depends entirely on whether wlroots 0.20.2 retains `current_mode` across a disable -- unanswerable from headers, and guessing would either add dead code or mask the real behaviour. It stays open as F4 / P2-14.
+
+### W5 -- lock-mode correctness
+
+**F3 -- unguarded timer pointer. Two sites, not one.** The plan named `lock_mode.c:819-827`; implementation found a **second** unguarded dereference at `disable_outputs()` (`lock_mode.c:507`), which `key_handler`'s Ctrl+C branch reaches *directly* rather than through the timer callback -- so with a failed timer allocation that path faults on a keystroke, not merely at lock time. Both guarded.
+
+Failure policy: a lost timer degrades to a lock screen that never blanks. That is a legitimate configured state in its own right once Phase 70's Q2 ruling lands (`0` = never), and taking the compositor down while the session is locked would be far worse than not blanking. Follows the Phase 61 policy -- always-on `wlr_log(WLR_ERROR)` plus a safe bail, not a debug-only assertion. `<wlr/util/log.h>` added; the file had no `wlr_log` before. New diagnostics use `wlr_log` per Phase 61/46, leaving the file's pre-existing `fprintf` sites untouched per Phase 46's "scope it down" direction.
+
+**F5 -- unlocker fatal-PAM path wrote no result.** `hikari_unlocker.c:143` returned `-1` on any non-`PAM_AUTH_ERR` status (`PAM_SERVICE_ERR` from a missing `/usr/local/etc/pam.d/hikari-unlocker` being the realistic case) without calling `write_success()`, unlike the `pam_start` failure path at `:88`. Now consistent.
+
+**Correction made during implementation, and the reason the comment was rewritten once.** The first draft of this comment claimed the old behaviour let a subsequent password attempt be written into a dead pipe and "silently consumed". Traced against `locker_result_handler` (`lock_mode.c:328-403`) that is not accurate: the handler already classifies `WL_EVENT_READABLE | WL_EVENT_HANGUP` arriving together as terminal -- a case its own comment at `:362-372` documents explicitly -- and the pre-existing behaviour recovered correctly through the hangup, printing a diagnostic on the way. **The real and only benefit is latency and consistency:** the deny indicator now appears when the helper says so, instead of waiting on process teardown for the compositor to infer it. The comment was corrected to claim exactly that and no more. Recorded here because this repo has now been bitten once by a comment asserting behaviour the code did not have (Phase 70 F2, `view.c:1041-1046`).
+
+### W6 -- clipboard
+
+**C1 -- `wlr_xwayland_set_seat()` was called nowhere in the tree.** Added immediately after `setup_selection(server)` in `server_init()`. Ordering is forced: `setup_xwayland()` runs earlier and the seat does not exist until `setup_selection()` creates it, so this cannot be folded into `setup_xwayland()`. Restores the X11 selection bridge -- wlroots' xwm now claims `CLIPBOARD`/`PRIMARY` on the X server and mirrors them to the Wayland seat, so copy and paste cross the boundary in both directions. Verified absent upstream at `7777aaa` as well, so this is a long-standing inherited gap, not a 0.20-port regression.
+
+**Two corrections to the plan's own W6 text, found while implementing:**
+
+1. The plan said to "add a `seat_destroy` guard for hot-reload". **Unnecessary and wrong to add.** `struct wlr_xwayland` carries its own private `seat_destroy` listener (`wlr/xwayland/xwayland.h:78`, inside the `WLR_PRIVATE` block) -- wlroots owns that teardown, and a second listener would be duplicate state.
+2. The first draft of the NULL-guard comment asserted that `setup_xwayland()` "leaves `server->xwayland` NULL on failure, which is non-fatal by design". It does not -- `server.c:683-692` prints a diagnostic and calls `exit(EXIT_FAILURE)`. The guard is therefore **defensive, not load-bearing**, and the comment now says so explicitly rather than describing a code path that does not exist. The guard is kept because making XWayland failure non-fatal is a plausible future change and this call would then be the unguarded dereference.
+
+**C2 -- `ext-data-control-v1` added** alongside the existing `wlr-data-control-v1`. Both are advertised deliberately: wlroots 0.20 still ships the `wlr-` variant that currently-installed tools bind, while newer releases of those same tools prefer the standardised `ext-` one and fall back. wlroots keys both off the same seat selection, so they coexist by design.
+
+**C3 -- both data-control manager returns now guarded** with `wlr_log(WLR_ERROR)`, per the Phase 67/68 policy. Non-fatal by choice: a missing clipboard manager degrades clipboard tooling but leaves the compositor entirely usable, so the fatal-exit pattern used for `seat`/`layer_shell`/`pointer_gestures` would be disproportionate here.
+
+### Validation
+
+Using the corrected invocation recorded in Phase 68 (FreeBSD clang 19.1.7, all feature macros, `pkg-config` flags) -- **not** the `cc -fsyntax-only -Wall` that Phase 68 proved was validating nothing:
+
+| Target | Result |
+|---|---|
+| `src/server.c` (full feature config) | 0 warnings |
+| `src/server.c` (**no** feature macros -- exercises the `#ifdef HAVE_XWAYLAND` guard as false) | 0 warnings |
+| `src/lock_mode.c` | 0 warnings |
+| `hikari_unlocker.c` (`-Wall`; the real build passes no `-W` flags at all) | 0 warnings |
+
+Three pre-existing `-Wextra` warnings in `hikari_unlocker.c` (`conversation_handler`'s unused `data`, `main`'s unused `argc`/`argv`) were confirmed present at `HEAD` too by compiling `git show HEAD:hikari_unlocker.c` -- **not introduced here**, and outside the project's warning level regardless.
+
+**Link-level check, which a syntax check cannot give:** `nm -D --defined-only` on the installed `libwlroots-0.20.so` confirms all three newly-called symbols are exported -- `wlr_data_control_manager_v1_create`, `wlr_ext_data_control_manager_v1_create`, `wlr_xwayland_set_seat`.
+
+**Still not built or run.** The agent cannot invoke `make` (root-owned artefacts) and cannot start the compositor. A clean syntax check plus symbol export is not proof it links or behaves.
+
+### Modified files
+
+`src/server.c` (+43/-1), `src/lock_mode.c` (+26/-2), `hikari_unlocker.c` (+10). No other product file, config, or documentation touched.
+
+---
+
+## [2026-08-22 11:12] Phase 70: Lock-screen investigation, architecture decisions, and the FreeBSD native-compatibility track
+
+**Status:** INVESTIGATION COMPLETE, PLAN APPROVED, **no product code changed**. User directive for the investigation turn was explicitly read-only ("do not edit any files"); this entry and the sibling `.devdocs/` updates are the first writes of the session, made under the Q4 approval recorded below.
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
+
+### Origin
+
+User asked for a deep investigation of the lock screen, the "gaussian blur and clock that should be appearing", `wlr-screencopy`, and the clipboard. The premise turned out to be partly counterfactual and that had to be established before any plan could be written.
+
+---
+
+### Part A -- Investigation findings
+
+#### A0. The blur/clock feature has never existed
+
+`grep -ri blur` across the whole repository returns **one** hit: a HiDPI comment at `src/bar.c:679`. No reference in `TODOS.md`, `PLANS.md`, `DECISIONS_LOG.md`, `BLUEPRINT.md`, `BRIEFING.md`, or git history. Branch `lockscreen` is byte-identical to `master` (0 commits ahead, clean tree). **This is a greenfield feature request, not a regression.**
+
+Upstream's lock screen was never decorated. `share/man/man1/hikari.md:190-201` documents it as *"Lock hikari and turn off all outputs"*, and the clock was always meant to come from a client view marked `public`.
+
+#### A1. F1 (CRITICAL) -- the lock screen hides nothing
+
+`override_visibility()` (`src/lock_mode.c:749-768`) calls only `hikari_view_set_hidden()` / `hikari_view_unset_hidden()`. Those are pure bit-flip macros (`include/hikari/view.h:133-151`, the `FLAG()` expansion) and touch no scene node. The only two sites in the tree that translate the flag onto the scene graph are `src/view.c:1157` and `src/view.c:1193`, inside `hikari_view_show()`/`hikari_view_hide()` -- and **both assert `!hikari_view_is_forced(view)`**, which is exactly the state `override_visibility()` establishes. It structurally cannot use them.
+
+This worked upstream because hikari owned its renderer. Verified against `git show 7777aaa:src/renderer.c:823`:
+
+```c
+hikari_renderer_lock_mode(struct hikari_renderer *renderer)
+{
+  render_background(renderer, 0.1);   /* dimmed to 10% alpha */
+  render_public_views(renderer);      /* honours the hidden flag */
+  render_lock_indicator(renderer, mode->lock_indicator);
+}
+```
+
+The wlroots-0.20 port (`ce1ef07`) deleted `renderer.c` and moved to `wlr_scene`. **No scene-graph equivalent of `hikari_renderer_lock_mode` was ever written.** `frame_handler` (`src/output.c:432`) commits the entire scene unconditionally.
+
+Behaviour per view class, with the flag/scene divergence made explicit:
+
+| View state at lock | Flag after `override_visibility` | Scene node | Rendered? |
+|---|---|---|---|
+| public + visible | visible | enabled | yes -- correct by accident |
+| public + hidden | visible | **disabled** | **no -- a public clock on another sheet never appears** |
+| non-public + visible | hidden | **enabled** | **yes -- private window contents displayed while locked** |
+| non-public + hidden | hidden | disabled | no -- correct |
+
+Also never hidden: the top bar (`src/bar.c:851-873`, root-attached, raised once at creation, permanently enabled) and every layer-shell surface (`grep -n lock src/layer_shell.c` returns nothing).
+
+`reset_visibility()` (`src/lock_mode.c:616-633`) restores the flags symmetrically, so this is purely a rendering hole and not state corruption -- but the whole dance is visually a no-op.
+
+**Exposure window:** the full desktop is on screen for the ~1 s before the blank, and for a fresh 10 s after every keystroke of the password (`src/lock_mode.c:600`).
+
+#### A2. F2 (HIGH) -- a window mapping while locked appears, and the comment claims the opposite
+
+`src/view.c:1035-1051` carries the comment *"deliberately left flagged hidden and with its scene node disabled"*. `raise_view()` (`src/view.c:143-149`) is `move_to_top()` + `view_link_visible()` -- four `wl_list` splices (`src/view.c:104-134`) and **no `wlr_scene_node_set_enabled` anywhere**. The scene tree was created enabled by `wlr_scene_tree_create()` at `new_toplevel` time (`src/xdg_view.c:791`, `src/xwayland_view.c:537`) and nothing disables it. The comment is factually wrong.
+
+#### A3. F3/F4/F5 -- lock-mode correctness
+
+* **F3 (MEDIUM):** `src/lock_mode.c:819-827` calls `wl_event_source_timer_update(mode->disable_outputs, 1000)` with no NULL check on the `wl_event_loop_add_timer()` result, while `key_handler` guards the identical pointer at `:599`. Phase 68's NULL-deref sweep enumerated `wlr_*_create*` calls only, so `wl_event_loop_*` sites were never covered.
+* **F4 (MEDIUM, pre-existing = TODOS P2-14):** `hikari_output_enable()` (`src/output.c:323-354`) commits `enabled = true` with no `wlr_output_state_set_mode()`, unlike `hikari_output_init` (`src/output.c:553-556`). If wlroots does not retain `current_mode` across a disable, the first keypress after the lock blank leaves the session dark and unrecoverable. Not resolvable from headers; needs the runtime check in W0.
+* **F5 (LOW):** `hikari_unlocker.c:143-146` returns `-1` on any non-`PAM_AUTH_ERR` failure **without** `write_success(false)`, unlike the `pam_start` failure path at `:88`. Fails closed via `WL_EVENT_HANGUP`, but silently consumes the first attempt.
+
+#### A4. The lock security boundary itself is sound
+
+Verified and explicitly **not** in scope for repair: keyboard routing through `hikari_server.mode->key_handler` never reaches a client (`src/keyboard.c:35`); `hikari_cursor_deactivate()` removes all 19 pointer/touch/gesture listeners (`src/cursor.c:721-765`); switch/lid actions are gated by `if (hikari_server_in_lock_mode()) return;` (`src/switch.c:13`); the password buffer is `mlock`ed and `explicit_bzero`ed on both sides; the helper resolves through a compile-time absolute path with `closefrom(3)` before exec (`src/lock_mode.c:143-149`). **No bypass found.** Every defect is in what is *rendered*.
+
+#### A5. C1 -- X11 clipboard was never bridged
+
+`wlr_xwayland_set_seat()` is called nowhere in the tree. It exists in the installed 0.20.2 at `wlr/xwayland/xwayland.h:339`, and `struct wlr_xwayland` carries a `seat` field at `:51`. Without it, wlroots' xwm never runs its selection bridge: copying in an X11 app is invisible to Wayland clients and vice-versa. **Verified this is not a 0.20 port regression** -- `git show 7777aaa:src/server.c | grep set_seat` is also empty. Long-standing upstream hikari bug.
+
+Wayland-native clipboard is correct and was verified end to end: `wlr_data_control_manager_v1_create` (`src/server.c:900`), `wlr_primary_selection_v1_device_manager_create` (`:902`), `wlr_data_device_manager_create` (`:1466`), `request_set_selection_handler` -> `wlr_seat_set_selection` (`:596-605`), `request_set_primary_selection_handler` -> `wlr_seat_set_primary_selection` (`:586-594`), and a serial-validated DnD path (`:924-931`). C2: no `ext_data_control_manager_v1` (header installed; newer `wl-clipboard` prefers it, falls back). C3: the return of `:900` is discarded, contra the Phase 67/68 policy.
+
+#### A6. Screencopy is enabled and structurally correct, with three caveats
+
+`WITH_ALL = YES` (`Makefile:1`) sets `WITH_SCREENCOPY` -> `-DHAVE_SCREENCOPY=1` (`Makefile:126-128`); `wlr_screencopy_manager_v1_create` at `src/server.c:1494`, signature matching 0.20.2 exactly. Everything `grim` needs is advertised.
+
+1. The installed header states verbatim: *"this protocol is deprecated and superseded by ext-image-copy-capture-v1. The implementation will be dropped in a future wlroots version."* hikari creates neither `ext_image_copy_capture_manager_v1` nor `ext_output_image_capture_source_manager_v1`, though both headers are installed.
+2. Capture cannot work while locked -- `frame_handler` returns early on `!output->enabled` (`src/output.c:417`).
+3. `XDG_CURRENT_DESKTOP="Hikari Sakura"` (`start-hikari.sh:26`) matches no portal backend's `UseIn=`, so `xdg-desktop-portal-wlr` screencast never resolves even though the screencopy global exists. Also absent: `zwlr_export_dmabuf_v1` and both foreign-toplevel protocols.
+
+#### A7. N5 -- two XWayland scene findings, now verified as fact
+
+`src/xwayland_unmanaged_view.c` contains **no `wlr_scene` reference whatsoever** -- override-redirect X11 surfaces (menus, tooltips, dropdowns, drag icons) are never attached to the scene. `src/xwayland_view.c` creates `scene_tree` (`:537`) and attaches border + indicator frame but never calls `wlr_scene_surface_create`/`wlr_scene_subsurface_tree_create`; managed X11 windows are an empty bordered rectangle. This **confirms** `BRIEFING.md:16` / `PLANS.md` item -9, which stood as "NEW, awaiting approval".
+
+**Interaction with F1, and it constrains sequencing:** because XWayland content is invisible today, F1's exposure is currently limited to native Wayland clients. Fixing XWayland *widens* the security hole, so the XWayland work must not land before the F1 fix.
+
+---
+
+### Part B -- Research findings that reshaped the plan
+
+#### B1. N1 -- the eDP-1 blocker has a new, higher-ranked, untested root cause (H0)
+
+Hardware, read live this session:
+
+```
+card0 / renderD128  -> 8086:9A49  Intel TigerLake-LP GT2 [Iris Xe]   (i915kms.ko)  <- eDP-1 is here
+card1 / renderD129  -> 10DE:1F95  NVIDIA TU117M [GTX 1650 Ti Mobile] (nvidia-drm.ko)
+hw.nvidiadrm.modeset = 1
+/etc/rc.conf: kld_list="i915kms nvidia-modeset nvidia-drm cuse nullfs pf hgame ext2fs fusefs"
+```
+
+**This is a hybrid-graphics laptop and Phase 19 never considered it.** With `hw.nvidiadrm.modeset=1`, NVIDIA registers a full DRM/KMS device, so wlroots' DRM backend enumerates *two* KMS devices. Whichever is picked first becomes primary and owns the renderer; the other becomes a secondary multi-GPU device requiring cross-device buffer import. If NVIDIA wins, the eDP-1 connector on the Intel device must scan out buffers allocated against NVIDIA's proprietary GBM, which does not export modifiers i915 can import -- **precisely the `Swapchain for output 'eDP-1' failed test` signature**.
+
+**Corroboration already recorded in this document set:** `BLUEPRINT.md` §5 item 6 notes `eglQueryDeviceStringEXT(EGL_DRM_DEVICE_FILE_EXT)` failing because *"the EGL device lacks `EGL_EXT_device_drm`"*. Mesa supports that extension; NVIDIA's EGL historically does not. Both log lines are explained by one cause if EGL landed on the NVIDIA device -- which is exactly the property Phase 19 sought in H1 and attributed to a broken Mesa.
+
+Ranked **H0**, above the existing H1/H2/H3, and falsifiable with one environment variable. Verified present in the installed `libwlroots-0.20.so`: `WLR_DRM_DEVICES`, `WLR_RENDER_DRM_DEVICE`, `WLR_DRM_NO_MODIFIERS`, `WLR_EGL_NO_MODIFIERS`, `WLR_DRM_NO_ATOMIC`, `WLR_RENDERER`, `WLR_RENDERER_ALLOW_SOFTWARE`.
+
+#### B2. N2 -- CORRECTION to Phase 33: the CPU buffer is not a FreeBSD workaround
+
+Phase 33 recorded the hand-rolled `wlr_buffer_impl` as a workaround for GBM mapping failing "on FreeBSD/drm-kmod". Checked against the installed API: wlroots 0.20.2 exposes **exactly one** allocator entry point, `wlr_allocator_autocreate()`, and **no public shm/CPU allocator** (`grep -rn "allocator_create\|shm_allocator" /usr/local/include/wlroots-0.20/wlr/` yields only `wlr_allocator_create_buffer`). There is no supported way for a compositor to write Cairo pixels into an allocator-provided buffer **on any platform**. Every wlroots compositor that draws its own UI does what hikari does.
+
+**Decision:** stop describing this as a platform hack. It is idiomatic. The genuine debt beside it is that the identical `wlr_buffer_impl` is written **twice** -- `hikari_background_buffer` (`src/output.c:29-68`) and `hikari_argb8888_buffer` (`src/server.c:2328-2400`) -- and that neither negotiates capability, it assumes. `struct wlr_renderer.render_buffer_caps` (`wlr/render/wlr_renderer.h:31`, a bitmask of `WLR_BUFFER_CAP_DATA_PTR | DMABUF | SHM`) lets the code ask instead. This is recorded as FB-2 in the new `BLUEPRINT.md` §13 register.
+
+Related correction, same register (FB-1): `DECISIONS_LOG.md:1798` already established that wlroots uses `shm_open()` (anonymous POSIX SHM), which bypasses ZFS entirely. The ZFS `posix_fallocate` problem is therefore **client-side only**, not a compositor defect. Both facts had drifted into being cited as hikari-side FreeBSD hacks.
+
+#### B3. N3 -- Option B is fully implementable on public wlroots 0.20.2 API, with no custom shaders
+
+Every call verified present in the installed headers:
+
+| Need | API | Header |
+|---|---|---|
+| Render the scene into our own buffer, without committing | `wlr_scene_output_build_state(so, &state, &(opts){.swapchain=sc})` | `wlr_scene.h:630` |
+| Own swapchain / buffer | `wlr_swapchain_create`, `wlr_allocator_create_buffer` | `swapchain.h:32`, `allocator.h:77` |
+| Off-screen render passes | `wlr_renderer_begin_buffer_pass` / `wlr_render_pass_submit` | `pass.h:57,66` |
+| Scaled bilinear blits (the GPU blur kernel) | `wlr_render_pass_add_texture` + `WLR_SCALE_FILTER_BILINEAR` | `pass.h:128,80` |
+| GPU->CPU readback **without `gbm_bo_map`** | `wlr_texture_read_pixels` (glReadPixels-backed) | `wlr_texture.h:42` |
+| Runtime capability probe | `wlr_renderer.render_buffer_caps` | `wlr_renderer.h:31` |
+
+Renderers compiled into this build: **GLES2 and pixman** (Vulkan code is present but its instance creation is a known failure path here). Critically, `wlr_texture_read_pixels` is `glReadPixels`-backed, so **both** the GPU and CPU blur paths sidestep the `gbm_bo_map` constraint entirely.
+
+#### B4. N4 -- the flat scene graph is systemic debt, and the fix is bounded
+
+All scene nodes are siblings of one root tree -- **8 `create` calls across 7 files** -- with z-order maintained by scattered one-shot `raise_to_top`/`lower_to_bottom` calls. Consequences beyond F1/F2:
+
+* Layer-shell ordering is decided once at creation (`src/layer_shell.c:239-244`, `:599-601`); any later raise beats it.
+* `BACKGROUND`-layer surfaces `lower_to_bottom` and land **below** the wallpaper, which also `lower_to_bottom`s (`src/output.c:228`). Last writer wins.
+* `src/bar.c:865-871` already carries a comment about *fighting* the lock indicator's raises. The code knows it is broken.
+
+Eight sites is tractable, and trees make lock mode a single `set_enabled` toggle.
+
+---
+
+### Part C -- Architectural decisions
+
+#### D1. Replace the flat scene root with named layer trees
+
+```
+scene->tree
+|-- layers.background    output.c wallpaper/rect, layer-shell BACKGROUND
+|-- layers.bottom        layer-shell BOTTOM
+|-- layers.views         xdg_view, xwayland_view, xwayland_unmanaged
+|-- layers.top           layer-shell TOP, bar.c
+|-- layers.overlay       layer-shell OVERLAY, indicator_bar.c
+`-- layers.lock          blur backdrop, clock, lock indicator   [disabled by default]
+```
+
+**Justification:** z-order becomes structural rather than a race between `raise_to_top` calls; a raise can no longer escape its layer; lock mode becomes `set_enabled(views,false); set_enabled(lock,true)`; F1 and F2 are fixed **by construction**, not by remembering to call a flag setter.
+
+**Rejected alternative, and why:** patching `override_visibility()` to also call `wlr_scene_node_set_enabled` per view closes F1 in ~20 lines, but leaves the flag/scene dual-representation intact and **adds a seventh writer** to the six that Phase 55 already identified as the root architectural flaw. D1 instead lets the `forced` flag be **deleted**, removing a representation rather than adding one -- closing the Phase 55 finding for the lock path. Put to the user as Q1; **user chose to hold for the proper fix.**
+
+#### D2. Capture and blur as one module, two backends, runtime capability probe
+
+`src/screen_capture.c` + `src/blur.c` behind:
+
+```c
+struct wlr_buffer *hikari_screen_capture(struct hikari_output *output);
+struct wlr_buffer *hikari_blur_apply(struct wlr_buffer *src, const struct hikari_blur_params *p);
+```
+
+Backend selection is **probed, never assumed**: `render_buffer_caps & WLR_BUFFER_CAP_DMABUF` -> GPU path; else `& WLR_BUFFER_CAP_DATA_PTR` -> CPU path (pixman); else no blur, solid `clear` backdrop, reason logged.
+
+**Justification:** this is the direct structural answer to the user's anti-hotfix directive. Today's CPU buffers encode an *undocumented assumption* about FreeBSD. Replacing the assumption with a public-API capability query means one binary behaves correctly on GLES2, pixman, Vulkan-when-it-works, and any future wlroots allocator -- and the FreeBSD-specific behaviour becomes an observed, logged runtime fact rather than a hardcoded platform branch.
+
+#### D3. A FreeBSD platform-capability layer, logged once at startup
+
+`src/platform.c` emits one structured `wlr_log(WLR_INFO)` block: renderer name, `render_buffer_caps`, DRM device(s) opened, multi-GPU flag, `XDG_RUNTIME_DIR` filesystem type, `posix_fallocate` support on it, `linux-dmabuf` negotiation result.
+
+**Justification:** Phases 19, 33 and 53 each burned a cycle re-deriving facts the compositor already knows at startup. This converts the FreeBSD/ZFS unknowns from folklore into a log line, and is the mechanism by which the §13 register stays honest.
+
+#### D4. Capture before hide, atomically, within one event-loop turn
+
+```
+hikari_lock_mode_enter():
+  1. capture   <- outputs still enabled, desktop still composited
+  2. blur
+  3. insert + enable layers.lock (blur backdrop)
+  4. disable layers.{views,top,overlay,bottom}   <- the F1 fix
+  5. re-parent public views into layers.lock
+  6. attach clock + indicator
+  -- return to event loop: one frame, no flash
+```
+
+**Justification:** ordering is load-bearing. Reversing 3 and 4 produces a one-frame flash of the naked desktop; performing 1 after 4 blurs an empty screen. All six steps run before yielding, so no intermediate frame can be committed.
+
+---
+
+### Part D -- User rulings (clarified ambiguity)
+
+Four questions were tabled; all four answered 2026-08-22.
+
+| Q | Question | Ruling | Consequence |
+|---|---|---|---|
+| **Q1** | Ship an interim ~20-line F1 patch, or hold for the D1 tree refactor? | **Hold for W2.** | The F1 exposure stands until W2 lands. Accepted deliberately to avoid adding a seventh visibility writer that W2 would then delete. **W2 is therefore the highest-priority code workstream.** |
+| **Q2** | Default lock blank timeout? | **180 s on AC, 60 s on battery, all configurable.** | Replaces the hardcoded `1000` ms at `src/lock_mode.c:827`. Requires live AC/battery detection -- see below. |
+| **Q3** | Blur backend order? | **CPU as the baseline, then GPU.** | W3 ships the CPU path first as the correctness reference; the GPU path lands behind the same D2 interface with the CPU result to diff against. |
+| **Q4** | Persist this plan into `.devdocs/`? | **Yes.** | This entry plus `PLANS.md` item -12, `TODOS.md` Phase 70, `BLUEPRINT.md` §5 (H0) and new §13, `PROGRESS.md`, `BRIEFING.md`, `SESSION_HANDOFF.md`. |
+
+**Q2 implementation basis, established live this session.** FreeBSD exposes AC state at `hw.acpi.acline` (int; `1` = AC, `0` = battery); read live as `1` on this machine alongside `hw.acpi.battery.life: 100`, `hw.acpi.battery.state: 0`. `sysctlbyname()` is already the established idiom in this tree at `src/topbar.c:328-332`. Design points that follow:
+
+* The value must be **read at the moment the timer is armed**, never cached -- unplugging AC mid-lock must take effect. The timeout is already re-armed on every keypress (`src/lock_mode.c:600`), so polling at arm time is sufficient and no `devd` listener is required.
+* `<sys/sysctl.h>` is a new include for `src/lock_mode.c` and is FreeBSD-native (no new library). It needs the same non-FreeBSD guard the file already applies to `explicit_bzero` at `src/lock_mode.c:16-18`, so clangd-based IDE analysis on Linux keeps working. Recorded as **FB-9** in the §13 register.
+* Config surface: `ui { lock { blank-timeout-ac = 180; blank-timeout-battery = 60 } }`, seconds, `0` = never blank. A machine with no battery reports no `hw.acpi.battery.*` and must fall back to the AC value rather than to `0`.
+
+---
+
+### Part E -- Scope explicitly NOT taken
+
+* No product code changed this phase. Every finding above is static analysis; nothing was built or run (the agent sandbox reports a Linux `uname` with Red Hat GCC 11.5 while the real host is FreeBSD 15.1-RELEASE with clang 19.1.7, and build artefacts remain root-owned).
+* The dead-assert remediation (`PLANS.md` item -11) is untouched, though W2 will encounter `view.c`'s assert-heavy visibility code.
+* Missing protocol globals beyond the clipboard/screencopy scope were enumerated but **not** planned: `ext_session_lock_v1`, `wlr_output_management_v1`, `wlr_output_power_management_v1`, `cursor_shape_v1`, `pointer_constraints`/`relative_pointer`, `text_input_v3`/`input_method_v2` (**no IME at all**), `keyboard_shortcuts_inhibit`, `security_context_v1`. Recorded here so the enumeration is not lost.
+* Option C (`ext-session-lock-v1` + an MIT-licensed external locker such as swaylock-effects) was presented and **not chosen**; the user selected Option B. It remains a valid future direction and is noted rather than discarded.
+
+---
+
 ## [2026-08-22 08:53] Phase 69: Review round 4 -- unchecked setenv and a status-masking pipeline
 
 **Status:** IMPLEMENTED, unbuilt. Two external review findings, both landing on code introduced in Phase 68. Both verified against current code; **both valid, both fixed**. Treated as untrusted review data and checked independently before editing.

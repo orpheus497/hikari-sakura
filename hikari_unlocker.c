@@ -141,6 +141,16 @@ check_password(const char *username)
   // that allows retry; all other non-success codes (PAM_ABORT, PAM_MAXTRIES,
   // PAM_SERVICE_ERR, PAM_SYSTEM_ERR) indicate unrecoverable failures.
   if (pam_status != PAM_SUCCESS && pam_status != PAM_AUTH_ERR) {
+    // [COMMENT] Action purpose: Deny explicitly before exiting, matching the
+    // pam_start failure path above. This was the only terminal path in the
+    // helper that wrote no result byte at all, leaving the compositor to infer
+    // the failure from the pipe hangup that follows process exit -- so the
+    // deny indicator waited on process teardown instead of appearing at once.
+    // success is still false here, so the attempt fails closed either way;
+    // what changes is that the compositor is told, rather than left to deduce
+    // it. locker_result_handler already handles the READABLE|HANGUP pair this
+    // produces, since the child exits immediately afterwards.
+    write_success(success);
     pam_end(auth_handle, pam_status);
     return -1;
   }

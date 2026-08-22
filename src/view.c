@@ -5,6 +5,8 @@
 
 #include <wlr/types/wlr_cursor.h>
 #include <wlr/types/wlr_compositor.h>
+#include <wlr/types/wlr_scene.h>
+#include <wlr/util/log.h>
 #include <wlr/types/wlr_subcompositor.h>
 
 #include <hikari/color.h>
@@ -146,6 +148,18 @@ raise_view(struct hikari_view *view)
 
   move_to_top(view);
   view_link_visible(view, view->sheet->workspace);
+
+  /* [COMMENT] Action purpose: Restack the view in the scene graph too.
+  move_to_top() and view_link_visible() only reorder hikari's own lists, which
+  drive focus and cycling; until this call existed nothing ever reordered the
+  scene node, so window stacking was fixed at map time and hikari_view_raise()
+  had no visual effect at all -- clicking a partially covered window raised it
+  for focus purposes while it stayed drawn underneath. Scoped to the view's
+  parent tree, so a raise cannot lift a window out of its layer: while locked,
+  public views live in the lock layer and raise among themselves there. */
+  if (view->scene_node != NULL) {
+    wlr_scene_node_raise_to_top(view->scene_node);
+  }
 }
 
 static void
@@ -529,6 +543,13 @@ hikari_view_init(
   guard on `scene_node != NULL`. Leaving it indeterminate lets uninitialised
   garbage pass those guards and be dereferenced as a scene node. */
   view->scene_node = NULL;
+
+  /* [COMMENT] Action purpose: No foreign-toplevel handle until the view maps.
+  Established here because hikari_view_fini() releases it unconditionally, and
+  three init-failure paths in the shell wrappers call fini directly -- see
+  BLUEPRINT.md section 15. */
+  view->foreign_toplevel = NULL;
+
   view->use_csd = false;
   view->child = child;
   view->current_geometry = &view->geometry;
@@ -571,6 +592,15 @@ hikari_view_fini(struct hikari_view *view)
     wl_list_remove(&view->decoration.destroy.link);
   }
 
+  /* [COMMENT] Action purpose: Release the handle if it somehow outlived the
+  unmap that owns it. hikari_view_unmap() destroys it on every ordinary path,
+  but the shell wrappers also call fini directly from their init-failure paths,
+  where the view never mapped at all -- so this must tolerate both. */
+  if (view->foreign_toplevel != NULL) {
+    wlr_ext_foreign_toplevel_handle_v1_destroy(view->foreign_toplevel);
+    view->foreign_toplevel = NULL;
+  }
+
   hikari_free(view->title);
   hikari_free(view->id);
 
@@ -601,6 +631,12 @@ hikari_view_fini(struct hikari_view *view)
   cancel_tile(view);
 }
 
+// [COMMENT] Action purpose: Defined below alongside the rest of the
+// foreign-toplevel handling, but needed by the title and app_id setters above
+// it.
+static void
+publish_foreign_toplevel(struct hikari_view *view);
+
 void
 hikari_view_set_title(struct hikari_view *view, const char *title)
 {
@@ -615,9 +651,37 @@ hikari_view_set_title(struct hikari_view *view, const char *title)
       struct hikari_output *output = view->output;
       hikari_indicator_update_title(&hikari_server.indicator, output, title);
     }
+
+    // [COMMENT] Action purpose: Push the new title out to anything listing
+    // windows. No-ops before the view maps, when there is no handle yet.
+    publish_foreign_toplevel(view);
   } else {
     view->title = NULL;
   }
+}
+
+/* [COMMENT] Function purpose: Publish this view's current title and app_id to
+whatever is watching the foreign-toplevel list -- a dock, a panel, a taskbar.
+
+wlroots copies both strings into the handle, so passing view-owned pointers is
+safe. Empty strings rather than NULL: `id` is only populated by
+hikari_view_configure(), which has not run when the very first title arrives,
+and a client reading the list should see a window with no app_id rather than
+nothing at all. */
+static void
+publish_foreign_toplevel(struct hikari_view *view)
+{
+  if (view->foreign_toplevel == NULL) {
+    return;
+  }
+
+  struct wlr_ext_foreign_toplevel_handle_v1_state state = {
+    .title = view->title != NULL ? view->title : "",
+    .app_id = view->id != NULL ? view->id : "",
+  };
+
+  wlr_ext_foreign_toplevel_handle_v1_update_state(
+      view->foreign_toplevel, &state);
 }
 
 static void
@@ -629,6 +693,8 @@ set_app_id(struct hikari_view *view, const char *id)
   view->id = hikari_malloc(strlen(id) + 1);
 
   strcpy(view->id, id);
+
+  publish_foreign_toplevel(view);
 }
 
 struct hikari_damage_data {
@@ -1032,6 +1098,53 @@ hikari_view_map(struct hikari_view *view, struct wlr_surface *surface)
   wl_list_insert(&group->views, &view->group_views);
   wl_list_insert(&output->views, &view->output_views);
 
+  /* [COMMENT] Action purpose: Publish this window to the foreign-toplevel list
+  so docks, panels and taskbars can see it. Created on map and destroyed on
+  unmap, which is what makes an unmapped window correctly vanish from a taskbar
+  rather than lingering as a dead entry.
+
+  Placed after hikari_view_configure() has run (the shells call it from
+  first_map, before this) so `id` already holds the app_id. Guarded because
+  wlr_ext_foreign_toplevel_handle_v1_create() allocates an identifier string and
+  returns NULL on failure -- losing the taskbar entry is not a reason to fail
+  the map. */
+  if (view->foreign_toplevel == NULL &&
+      hikari_server.foreign_toplevel_list != NULL) {
+    struct wlr_ext_foreign_toplevel_handle_v1_state state = {
+      .title = view->title != NULL ? view->title : "",
+      .app_id = view->id != NULL ? view->id : "",
+    };
+
+    view->foreign_toplevel = wlr_ext_foreign_toplevel_handle_v1_create(
+        hikari_server.foreign_toplevel_list, &state);
+
+    if (view->foreign_toplevel == NULL) {
+      wlr_log(WLR_ERROR,
+          "could not create a foreign-toplevel handle; this window will not "
+          "appear in taskbars");
+    }
+  }
+
+  /* [COMMENT] Action purpose: Decide the view's layer before anything shows or
+  raises it, and do so unconditionally rather than only in the lock-mode case.
+
+  A view's scene tree outlives an unmap -- it is destroyed in the shell's
+  destroy_handler, not here -- so a view can carry a stale parent across a
+  map/unmap cycle. A public view that unmapped while the screen was locked
+  would otherwise still be parented to the lock layer when it remapped after
+  the unlock, and stay invisible forever because that layer is disabled.
+  Deriving the parent here on every map makes the layer a property of the
+  view's current state rather than of whatever happened to be true when it was
+  first constructed. */
+  if (view->scene_node != NULL) {
+    struct wlr_scene_tree *layer =
+        (hikari_server_in_lock_mode() && hikari_view_is_public(view))
+            ? hikari_server.layers.lock
+            : hikari_server.layers.views;
+
+    wlr_scene_node_reparent(view->scene_node, layer);
+  }
+
   if (!hikari_server_in_lock_mode() || hikari_view_is_public(view)) {
     hikari_view_show(view);
 
@@ -1041,11 +1154,17 @@ hikari_view_map(struct hikari_view *view, struct wlr_surface *surface)
 
     hikari_server_cursor_focus();
   } else {
-    /* [COMMENT] Action purpose: Under lock mode a non-public view is linked
-    into the visible lists but deliberately left flagged hidden and with its
-    scene node disabled -- "forced". raise_view() performs the linkage through
-    view_link_visible(), which is the same single writer the normal path uses;
-    the flag and the scene node are intentionally not touched here. */
+    /* [COMMENT] Action purpose: A non-public view mapping while the screen is
+    locked. It is linked into the visible lists and flagged hidden/forced, which
+    is what the rest of view.c expects, but its invisibility comes from the
+    scene graph: the tree it was parented to at construction is the view layer,
+    which override_visibility() has disabled, and wlr_scene disables every child
+    of a disabled node.
+
+    This used to claim the scene node was disabled here. It was not -- nothing
+    in this path ever touched it, and raise_view() only reorders hikari's own
+    lists -- so a window mapping while locked drew itself straight onto the lock
+    screen. See DECISIONS_LOG Phase 70 F2. */
     hikari_view_set_forced(view);
     raise_view(view);
   }
@@ -1088,6 +1207,15 @@ hikari_view_unmap(struct hikari_view *view)
   freed moments later by destroy_handler. view_unlink_visible() sets the hidden
   flag itself, so the flag can no longer diverge from the linkage. See
   DECISIONS_LOG Phase 55. */
+  /* [COMMENT] Action purpose: Withdraw the window from the foreign-toplevel
+  list. Destroying the handle sends `closed` to every listening dock, so an
+  unmapped window disappears from a taskbar instead of remaining as an entry
+  that can no longer be acted on. A later remap creates a fresh handle. */
+  if (view->foreign_toplevel != NULL) {
+    wlr_ext_foreign_toplevel_handle_v1_destroy(view->foreign_toplevel);
+    view->foreign_toplevel = NULL;
+  }
+
   if (hikari_view_is_forced(view)) {
     view_unlink_visible(view);
     hikari_view_unset_forced(view);
@@ -1231,6 +1359,15 @@ hikari_view_lower(struct hikari_view *view)
   to be kept in agreement with them by hand. See DECISIONS_LOG Phase 55. */
   move_to_bottom(view);
   view_link_visible_at(view, view->sheet->workspace, false);
+
+  /* [COMMENT] Action purpose: The scene-graph half of the mirror. Counterpart
+  to the raise in raise_view(); without it lowering reordered hikari's lists
+  while the window stayed drawn exactly where it was. Scoped to the view's
+  parent tree, so this can only reorder among views, never sink one below the
+  wallpaper or out of the lock layer. */
+  if (view->scene_node != NULL) {
+    wlr_scene_node_lower_to_bottom(view->scene_node);
+  }
 
   hikari_view_damage_whole(view);
 }

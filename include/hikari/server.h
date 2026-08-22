@@ -72,6 +72,30 @@ struct hikari_server {
   struct wlr_allocator *allocator;
   struct wlr_scene *scene;
   struct wlr_scene_output_layout *scene_layout;
+
+  /* [COMMENT] Class purpose: The scene graph's top-level stacking order, made
+  structural.
+
+  Everything used to hang directly off scene->tree as one flat list of
+  siblings, with z-order maintained by scattered one-shot raise_to_top() and
+  lower_to_bottom() calls that fought each other -- src/bar.c carried a comment
+  about the bar being pulled above the lock indicator, and layer-shell
+  BACKGROUND surfaces sank below the wallpaper because both called
+  lower_to_bottom() and the last writer won.
+
+  With named trees a raise can no longer escape its layer, so ordering stops
+  depending on the order in which unrelated subsystems happen to run. It also
+  makes lock mode a boundary rather than a convention: wlr_scene disables every
+  child of a disabled node, so switching to the lock layer cannot leave a
+  window rendered by accident. Fields are declared bottom-to-top. */
+  struct {
+    struct wlr_scene_tree *background;
+    struct wlr_scene_tree *bottom;
+    struct wlr_scene_tree *views;
+    struct wlr_scene_tree *top;
+    struct wlr_scene_tree *overlay;
+    struct wlr_scene_tree *lock;
+  } layers;
   struct wlr_xdg_output_manager_v1 *output_manager;
   struct wlr_data_device_manager *data_device_manager;
 
@@ -115,6 +139,12 @@ struct hikari_server {
 
   struct wlr_xdg_shell *xdg_shell;
   struct wlr_layer_shell_v1 *layer_shell;
+
+  /* [COMMENT] Class purpose: ext-foreign-toplevel-list-v1. Lets docks, panels
+  and taskbars enumerate open windows -- without it nothing outside the
+  compositor can discover them at all. Each mapped view publishes one handle;
+  see hikari_view_map()/unmap(). */
+  struct wlr_ext_foreign_toplevel_list_v1 *foreign_toplevel_list;
 
   struct wlr_xdg_activation_v1 *xdg_activation;
   struct wl_listener request_activate;
@@ -207,8 +237,6 @@ void
 hikari_server_migrate_focus_view(
     struct hikari_output *output, double lx, double ly, bool center);
 
-struct wlr_buffer *
-hikari_server_create_argb8888_buffer(int width, int height, unsigned char *data, int stride);
 
 void
 hikari_server_prepare_privileged(void);

@@ -1,6 +1,15 @@
+# [COMMENT] Action purpose: Every WITH_* switch below is tested with
+# `defined(X) && ${X:tu} != "NO"` rather than the shorter `.ifdef X`, because
+# `.ifdef` tests whether a variable is DEFINED, not what it is set to -- so
+# `make WITH_XWAYLAND=NO` previously still compiled XWayland in, and there was
+# no way to turn any feature off from the command line at all. `:tu` upper-cases
+# the value first so `no`, `No` and `NO` all work. Command-line variables cannot
+# be removed with `.undef` (verified: bmake keeps them in the cmdline scope and
+# the subsequent `.ifdef` still matches), which is why the check has to be made
+# at each site rather than normalised once up here.
 WITH_ALL = YES
 
-.ifdef WITH_ALL
+.if defined(WITH_ALL) && ${WITH_ALL:tu} != "NO"
 WITH_XWAYLAND = YES
 WITH_SCREENCOPY = YES
 WITH_GAMMACONTROL = YES
@@ -20,7 +29,9 @@ OBJS = \
 	binding_config.o \
 	binding_group.o \
 	bar.o \
+	blur.o \
 	border.o \
+	buffer.o \
 	command.o \
 	completion.o \
 	configuration.o \
@@ -44,6 +55,8 @@ OBJS = \
 	layout.o \
 	layout_config.o \
 	layout_select_mode.o \
+	lock_clock.o \
+	lock_config.o \
 	lock_indicator.o \
 	lock_mode.o \
 	main.o \
@@ -56,10 +69,12 @@ OBJS = \
 	normal_mode.o \
 	output.o \
 	output_config.o \
+	platform.o \
 	pointer.o \
 	pointer_config.o \
 	position_config.o \
 	resize_mode.o \
+	screen_capture.o \
 	server.o \
 	sheet.o \
 	sheet_assign_mode.o \
@@ -73,7 +88,7 @@ OBJS = \
 	workspace.o \
 	xdg_view.o
 
-.ifdef WITH_XWAYLAND
+.if defined(WITH_XWAYLAND) && ${WITH_XWAYLAND:tu} != "NO"
 OBJS += \
 	xwayland_unmanaged_view.o \
 	xwayland_view.o
@@ -88,7 +103,7 @@ WAYLAND_PROTOCOLS != ${PKG_CONFIG} --variable pkgdatadir wayland-protocols
 CFLAGS += ${CFLAGS_EXTRA}
 LDFLAGS += ${LDFLAGS_EXTRA}
 
-.ifdef DEBUG
+.if defined(DEBUG) && ${DEBUG:tu} != "NO"
 # [COMMENT] Action purpose: Debug build — full symbols, no optimisation, strict
 # warnings. ASan is deliberately excluded from the base debug build because
 # wlroots/GBM maps DMA buffers via mmap(2) directly; ASan intercepts those
@@ -105,39 +120,57 @@ CFLAGS += -DNDEBUG
 .endif
 
 # [COMMENT] Action purpose: Snapshot the shared DEBUG/ASAN/warning/hardening
-# flags for hikari-topbar before WITH_POSIX_C_SOURCE is applied below.
-# topbar.c deliberately requires __BSD_VISIBLE to stay set (u_int, IFF_UP,
-# usleep at 200809L) -- see the comment atop src/topbar.c -- so it must not
-# inherit -D_POSIX_C_SOURCE the way the compositor's own CFLAGS does.
+# flags for hikari-topbar here, before the feature macros and the pkg-config
+# include paths are appended to CFLAGS below. The `:=` is load-bearing: with a
+# deferred `=` this would expand at use time and the topbar build would inherit
+# every -DHAVE_* and every wlroots/pango include it has no use for.
 TOPBAR_CFLAGS := ${CFLAGS} -std=gnu11 -Wall
 
-.ifdef WITH_POSIX_C_SOURCE
-CFLAGS += -D_POSIX_C_SOURCE=200809L
-.endif
-
-.ifdef WITH_XWAYLAND
+.if defined(WITH_XWAYLAND) && ${WITH_XWAYLAND:tu} != "NO"
 CFLAGS += -DHAVE_XWAYLAND=1
 .endif
 
-.ifdef WITH_GAMMACONTROL
+.if defined(WITH_GAMMACONTROL) && ${WITH_GAMMACONTROL:tu} != "NO"
 CFLAGS += -DHAVE_GAMMACONTROL=1
 .endif
 
-.ifdef WITH_SCREENCOPY
+.if defined(WITH_SCREENCOPY) && ${WITH_SCREENCOPY:tu} != "NO"
 CFLAGS += -DHAVE_SCREENCOPY=1
 .endif
 
-.ifdef WITH_LAYERSHELL
+# [COMMENT] Action purpose: ext-image-copy-capture-v1 is OPT-IN and deliberately
+# excluded from WITH_ALL, which is why it is tested here rather than being set
+# above with the others.
+#
+# It is the modern replacement for wlr-screencopy and wlroots' own header says
+# screencopy "will be dropped in a future wlroots version", so hikari wants it
+# eventually. But xdg-desktop-portal-wlr PREFERS it the moment a compositor
+# advertises it (it logs "wayland: using ext_image_copy_capture"), and on this
+# hardware that path produces black frames while wlr-screencopy captures
+# correctly -- verified by `grim`, which uses screencopy and works. Advertising
+# it therefore makes screen sharing WORSE on a machine where the older protocol
+# is fine, because the client silently switches to the broken path.
+#
+# The implementation is entirely inside wlroots; hikari only creates the two
+# globals, so there is nothing here to fix. Enable with
+# `make WITH_EXT_IMAGE_CAPTURE=YES` to re-test when wlroots or the graphics
+# stack moves on -- most likely once the hybrid-GPU dmabuf issue tracked as
+# FB-3 in BLUEPRINT.md section 13 is resolved.
+.if defined(WITH_EXT_IMAGE_CAPTURE) && ${WITH_EXT_IMAGE_CAPTURE:tu} != "NO"
+CFLAGS += -DHAVE_EXT_IMAGE_CAPTURE=1
+.endif
+
+.if defined(WITH_LAYERSHELL) && ${WITH_LAYERSHELL:tu} != "NO"
 CFLAGS += -DHAVE_LAYERSHELL=1
 .endif
 
-.ifdef WITH_SUID
+.if defined(WITH_SUID) && ${WITH_SUID:tu} != "NO"
 PERMS = 4555
 .else
 PERMS = 555
 .endif
 
-.ifdef WITH_VIRTUAL_INPUT
+.if defined(WITH_VIRTUAL_INPUT) && ${WITH_VIRTUAL_INPUT:tu} != "NO"
 CFLAGS += -DHAVE_VIRTUAL_INPUT=1
 .endif
 
@@ -202,7 +235,7 @@ LIBS = \
 
 PROTOCOL_HEADERS = xdg-shell-protocol.h
 
-.ifdef WITH_LAYERSHELL
+.if defined(WITH_LAYERSHELL) && ${WITH_LAYERSHELL:tu} != "NO"
 PROTOCOL_HEADERS += wlr-layer-shell-unstable-v1-protocol.h
 .endif
 
@@ -236,11 +269,11 @@ hikari-unlocker: hikari_unlocker.c
 # binary. It is deliberately NOT linked into the compositor: it samples sensors
 # with blocking popen() calls, which would stall the Wayland event loop if run
 # in-process. hikari reads its swaybar-protocol output over a non-blocking pipe.
-# It shares the project's DEBUG/ASAN/warning/hardening/GNU11 settings but has
-# its own feature-test-macro handling: topbar.c explicitly relies on
-# __BSD_VISIBLE (u_int, IFF_UP) staying set, which _POSIX_C_SOURCE clears, so
-# WITH_POSIX_C_SOURCE is deliberately NOT inherited here (see the comment atop
-# src/topbar.c).
+# It shares the project's DEBUG/ASAN/warning/hardening/GNU11 settings via the
+# TOPBAR_CFLAGS snapshot above, but none of the compositor's feature macros or
+# wlroots include paths. Note that topbar.c relies on __BSD_VISIBLE staying set
+# for u_int, IFF_UP and usleep -- no feature-test macro may be defined for this
+# target (see the comment atop src/topbar.c).
 hikari-topbar: src/topbar.c
 	${CC} ${LDFLAGS} ${TOPBAR_CFLAGS} -o hikari-topbar src/topbar.c
 

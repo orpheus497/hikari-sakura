@@ -18,12 +18,19 @@ unset DISPLAY
 export XDG_SESSION_TYPE=wayland
 export XDG_SESSION_CLASS=user
 
-# [COMMENT] Action purpose: Export XDG_CURRENT_DESKTOP so that xdg-desktop-portal
-# selects the correct portal backend for Hikari Sakura. Without this, portal clients
-# (file picker, screen share, secret service) fall back to the GTK or generic
-# portal which may reject compositor-specific requests. Matches the DesktopNames
-# field in hikari.desktop so display-manager and TTY sessions are consistent.
-export XDG_CURRENT_DESKTOP="Hikari Sakura"
+# [COMMENT] Action purpose: Export XDG_CURRENT_DESKTOP so xdg-desktop-portal can
+# select a backend. The value is a COLON-SEPARATED list, and both entries matter:
+#
+#   Hikari Sakura  keeps this desktop's own identity, for anything that matches
+#                  on it and for consistency with hikari.desktop's DesktopNames.
+#   wlroots        is what xdg-desktop-portal-wlr lists in its portal file's
+#                  UseIn= field.
+#
+# With the identity alone, NO portal backend matched at all -- so screen sharing
+# and screencast silently found no provider even though the compositor
+# advertises the capture protocols they rely on. Appending the generic name is
+# what makes the wlroots backend eligible without giving up the specific one.
+export XDG_CURRENT_DESKTOP="Hikari Sakura:wlroots"
 
 # [COMMENT] Action purpose: Bootstrap XDG_RUNTIME_DIR if the system (pam_xdg,
 # systemd, or elogind) did not provide one. FreeBSD with seatd typically

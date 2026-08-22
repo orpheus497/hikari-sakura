@@ -1,5 +1,7 @@
 #include <hikari/lock_indicator.h>
 
+#include <hikari/buffer.h>
+
 #include <drm_fourcc.h>
 
 #include <wlr/backend.h>
@@ -49,7 +51,7 @@ init_indicator_circle(float color[static 4])
   unsigned char *data = cairo_image_surface_get_data(surface);
   int stride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, size);
 
-  wlr_buffer = hikari_server_create_argb8888_buffer(size, size, data, stride);
+  wlr_buffer = hikari_buffer_create_argb8888(size, size, data, stride);
 
   cairo_surface_destroy(surface);
   g_object_unref(layout);
@@ -213,7 +215,7 @@ hikari_lock_indicator_damage(struct hikari_lock_indicator *lock_indicator)
       // [COMMENT] Action purpose: Create new scene buffer node if none exists.
       if (output->lock_indicator_node == NULL) {
         output->lock_indicator_node = wlr_scene_buffer_create(
-            &hikari_server.scene->tree, lock_indicator->current);
+            hikari_server.layers.lock, lock_indicator->current);
       } else {
         wlr_scene_buffer_set_buffer(
             output->lock_indicator_node, lock_indicator->current);

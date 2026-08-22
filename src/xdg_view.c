@@ -788,7 +788,7 @@ hikari_xdg_view_init(struct hikari_xdg_view *xdg_view,
   to wlroots and leave hikari holding dangling pointers. Owning the parent
   ourselves keeps hikari's nodes under hikari's control, matching the structure
   hikari_xwayland_view_init already uses. */
-  xdg_view->scene_tree = wlr_scene_tree_create(&hikari_server.scene->tree);
+  xdg_view->scene_tree = wlr_scene_tree_create(hikari_server.layers.views);
   if (xdg_view->scene_tree == NULL) {
     fprintf(stderr, "error: could not create scene tree for xdg view\n");
     hikari_view_fini(&xdg_view->view);
