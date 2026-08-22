@@ -1,8 +1,99 @@
 # Forward Strategy & Plans
 
-*Last Updated:* 2026-08-22 02:28
+*Last Updated:* 2026-08-22 11:12
 
 ## Implementations to be Fully Implemented
+
+-12. **Phase 70: Lock-Screen Overhaul (Option B) + FreeBSD Native-Compatibility Track -- APPROVED IN PRINCIPLE, no step yet approved for execution.** Derives from the Phase 70 investigation; see DECISIONS_LOG Phase 70 for the findings (F1-F5, C1-C3, N1-N5), the four architectural decisions (D1-D4) and the user's four rulings (Q1-Q4). Nine workstreams.
+
+   **Sequencing.** `W0` is user-run and gates nothing but re-ranks several items. `W5`/`W6` are small, independent and land any time. `W1 -> W2 -> W3 -> W4` is the lock-screen spine. `W7` and `W8` both depend on `W2`; **`W8` must not precede `W2`** or it widens the F1 security hole (XWayland content is invisible today, so fixing it exposes more).
+
+   ```
+   W0 ────────────────────────────────────► (re-ranks W5-F4; may close FB-3/FB-4)
+   W1 ──┬── W2 ──┬── W3 ── W4    ← lock screen
+        │        ├── W7
+        │        └── W8          ← must not precede W2
+        └── W5, W6               ← independent
+   ```
+
+   **Recommended order:** W0 (user) -> W5 + W6 -> W1 -> W2 -> W3 -> W4 -> W7 -> W8. Rationale: W5/W6 are small and independently verifiable, giving one clean build/test cycle before the two large refactors. Per the Q1 ruling there is **no interim F1 patch**, which makes W2 the highest-priority code workstream.
+
+   ---
+
+   **W0. FreeBSD/GPU diagnostic matrix -- USER-RUN, ~30 min, read-only.** Each run from a TTY with `HIKARI_LOG=/tmp/hikari-$N.log` (Phase 68's capture, now that Phase 69 made its exit status trustworthy). Full rationale in DECISIONS_LOG Phase 70 §B1.
+
+   | # | Command | Tests | If it fixes eDP-1 |
+   |---|---|---|---|
+   | 1 | `WLR_DRM_DEVICES=/dev/dri/card0 start-hikari` | **H0 multi-GPU (new, prime suspect)** | Root cause found; fix is device pinning + docs |
+   | 2 | `WLR_RENDER_DRM_DEVICE=/dev/dri/renderD128 start-hikari` | render-node split | Renderer was on the wrong GPU |
+   | 3 | `WLR_DRM_NO_MODIFIERS=1 start-hikari` | H2 `IN_FORMATS` | Modifier negotiation; i915 linear fallback |
+   | 4 | `WLR_RENDERER=pixman WLR_RENDERER_ALLOW_SOFTWARE=1 start-hikari` | H1 Mesa/GBM | GBM/EGL layer at fault, not KMS |
+   | 5 | `WLR_DRM_NO_ATOMIC=1 start-hikari` | atomic KMS | drm-kmod atomic path |
+   | 6 | Lock, wait 4 min, press a key | **F4 / P2-14** | Screen returns => F4 is a non-issue |
+
+   Also one line each: `sysctl kern.vt.machine_terminal`, `pkg info -x mesa drm-kmod`, `stat -f '%T' "$XDG_RUNTIME_DIR"`. The agent cannot run these -- the sandbox reports a Linux `uname` with Red Hat GCC while the host is FreeBSD 15.1-RELEASE with clang, and it cannot build. **Run 1 alone likely settles a blocker open since Phase 19.**
+
+   **W1. Platform capability layer + buffer consolidation.** New: `include/hikari/platform.h`, `src/platform.c`, `include/hikari/buffer.h`, `src/buffer.c`. Modified: `src/output.c`, `src/server.c`, `Makefile` (+2 objects).
+   1. Move `hikari_argb8888_buffer` verbatim from `src/server.c:2328-2400` into `buffer.c` as `hikari_buffer_create_argb8888()`. Keep `hikari_server_create_argb8888_buffer` as a thin wrapper for one release, then retire it.
+   2. Delete `hikari_background_buffer` (`src/output.c:29-68`) -- byte-for-byte the same design -- and route `src/output.c:199-222` through the shared helper.
+   3. `hikari_platform_probe()` per D3: renderer name, `render_buffer_caps`, DRM fd/device path, multi-GPU flag, `XDG_RUNTIME_DIR` fs type + `posix_fallocate` probe, dmabuf status. One `wlr_log(WLR_INFO)` block at startup.
+   4. Settle **FB-6** while in the area: `WITH_POSIX_C_SOURCE=YES` currently yields 3 implicit-declaration warnings (2 security-relevant, incl. `explicit_bzero` at `src/lock_mode.c:70`) and fails `-Werror` (TODOS P3). Either feature-test-detect or retire the flag.
+   5. Fold in **FB-8**: `.ifdef` tests definedness, not value, so `make WITH_XWAYLAND=NO` still enables XWayland. Use `.if defined(X) && ${X} != "NO"`.
+
+   *Acceptance:* one `wlr_buffer_impl` in the tree; startup log names renderer + caps + DRM device; background and indicators render unchanged.
+
+   **W2. Scene layer trees (D1) -- fixes F1 and F2. HIGHEST-PRIORITY CODE WORKSTREAM.** Modified: `include/hikari/server.h` (+`struct hikari_scene_layers`), `src/server.c` `setup_scene_graph` (`:953`), and the 8 root-attachment sites in `output.c`, `bar.c`, `indicator_bar.c`, `lock_indicator.c`, `layer_shell.c`, `xdg_view.c`, `xwayland_view.c`, plus `src/lock_mode.c` and `src/view.c`.
+   1. Create the six trees in `setup_scene_graph`, in order, each guarded with the Phase 67/68 fatal-exit pattern.
+   2. Repoint all 8 sites. **Delete** the ad-hoc ordering calls at `layer_shell.c:241-243`, `:599-601`, `bar.c:870`, `lock_indicator.c:229`, `output.c:228`, `:254`. Layer-shell maps to its four trees by `layer->layer`.
+   3. Rewrite `override_visibility()`/`reset_visibility()` (`lock_mode.c:749`, `:616`) as tree toggles plus `wlr_scene_node_reparent` of public views into `layers.lock`. **Delete the `forced` flag entirely** -- with trees it has no remaining job, which removes a visibility representation rather than adding one and closes the Phase 55 finding for the lock path.
+   4. Fix the false comment at `view.c:1041-1046` and make the lock-map branch reparent into `layers.lock` (**F2**).
+
+   *Risk:* `hikari_view_show/hide` (`view.c:1144`, `:1175`) still drive per-node enable for sheet switching -- correct, and stays. Residual risk is a view left enabled inside a disabled tree; mitigated because a disabled ancestor wins in `wlr_scene`. Watch the assert-heavy visibility code (see item -11).
+   *Acceptance:* lock with a terminal showing text -- only backdrop and indicator visible; `xterm` mapped while locked stays invisible; waybar submenus render above windows and below the lock layer.
+
+   **W3. Screen capture + blur (D2, Option B). Per the Q3 ruling: CPU baseline first, GPU second.** New: `include/hikari/screen_capture.h`, `src/screen_capture.c`, `include/hikari/blur.h`, `src/blur.c`.
+
+   *Capture*, per output, while still enabled:
+   ```c
+   sc = wlr_swapchain_create(server->allocator, w, h, &fmt);   /* XRGB8888 */
+   wlr_output_state_init(&state);
+   wlr_scene_output_build_state(output->scene_output, &state,
+       &(struct wlr_scene_output_state_options){ .swapchain = sc });
+   /* state.buffer holds the composited frame -- lock it, never commit */
+   ```
+
+   > **SPIKE, flagged rather than buried.** wlroots 0.20.2 exposes `wlr_renderer_get_texture_formats()` but **no** public render-format query, so the swapchain's `struct wlr_drm_format` must be chosen without one. Escalation ladder, each rung logged: implicit-modifier `XRGB8888` (`len=0`) -> explicit `DRM_FORMAT_MOD_LINEAR` -> `ARGB8888` -> abort capture and fall back to a solid `clear` backdrop. This is the one item that cannot be de-risked without building.
+
+   *Blur -- CPU backend (baseline, ships first):* `wlr_texture_from_buffer` -> `wlr_texture_read_pixels` into `malloc`'d ARGB8888 -> three separable box-blur passes (standard Gaussian approximation) -> `hikari_buffer_create_argb8888`. `wlr_texture_read_pixels` is `glReadPixels`-backed, so this avoids `gbm_bo_map` (FB-2).
+
+   *Blur -- GPU backend (second, same interface):* N-level bilinear downsample then upsample via `wlr_renderer_begin_buffer_pass` + `wlr_render_pass_add_texture` with `WLR_SCALE_FILTER_BILINEAR` and `blend_mode = WLR_RENDER_BLEND_MODE_NONE`. Dual-Kawase approximation; **no custom shaders**, no CPU mapping. Selected by the D2 probe, with the CPU result as the reference to diff against.
+
+   *Config:* `ui { lock { blur = { radius = 12; passes = 3 } } }`; `blur = false` disables.
+   *Acceptance:* locking yields a recognisably blurred still of the desktop on every output; `WLR_RENDERER=pixman` produces the same image via the CPU path; capture failure degrades to solid `clear` with a logged reason, never a black screen.
+
+   **W4. Lock-screen composition (D4).** New: `src/lock_clock.c`. Modified: `lock_mode.c`, `lock_indicator.c`, `configuration.c`, `etc/hikari/hikari.conf`, `share/man/man1/hikari.md`.
+   1. Backdrop node: blurred buffer -> `wlr_scene_buffer_create(layers.lock, buf)`, positioned at output origin, `set_dest_size` to logical size, lowered within `layers.lock`.
+   2. Clock: cairo + Pango, same idiom as `bar.c` -- **render at `wlr_output->scale` and `set_dest_size` down**, per the HiDPI lesson at `bar.c:679`. Timer ticks on the minute boundary, not per second. Config: `format`, `date-format`, `font`, `color`, `position`.
+   3. Indicator repositioned below the clock; `get_geometry` (`lock_indicator.c:183`) gains a vertical offset.
+   4. **Q2 ruling -- power-aware blank timeout.** Replace the hardcoded `1000` at `lock_mode.c:827`. `ui { lock { blank-timeout-ac = 180; blank-timeout-battery = 60 } }`, seconds, `0` = never. Read `hw.acpi.acline` via `sysctlbyname()` (idiom already at `topbar.c:328-332`) **at arm time, never cached**, so unplugging mid-lock takes effect; the timer is already re-armed on every keypress (`lock_mode.c:600`), so no `devd` listener is needed. A machine with no battery falls back to the AC value, not to `0`. `<sys/sysctl.h>` needs the same non-FreeBSD guard the file applies to `explicit_bzero` at `lock_mode.c:16-18` (**FB-9**).
+   5. Output hotplug while locked: capture+blur the new output in `hikari_output_init` (`output.c:580-583`), else solid `clear`.
+
+   **W5. Lock-mode correctness -- independent, ~2 h.**
+   * **F3:** NULL-guard `mode->disable_outputs` between `lock_mode.c:819` and `:827`, matching the existing guard at `:599`.
+   * **F4:** *conditional on W0 run 6.* If the screen stays dark, add `wlr_output_state_set_mode()` to `hikari_output_enable` (`output.c:334`), mirroring `hikari_output_init` (`:553-556`). Closes TODOS **P2-14**.
+   * **F5:** `write_success(false)` before the fatal return at `hikari_unlocker.c:143-146`, matching `:88`.
+
+   **W6. Clipboard -- independent, ~2 h.**
+   * **C1:** `wlr_xwayland_set_seat(server->xwayland, server->seat)` immediately after `setup_selection(server)` (`server.c:1541`). Ordering matters -- the seat does not exist at `setup_xwayland` (`:1498`). Add a `seat_destroy` guard for hot-reload. Restores X11 <-> Wayland copy/paste, broken since upstream.
+   * **C2:** add `wlr_ext_data_control_manager_v1_create(display, 1)` alongside the `wlr-` variant; both coexist by design.
+   * **C3:** guard the discarded return of `server.c:900` per the Phase 67/68 policy.
+
+   **W7. Screencopy modernisation -- depends on W2.**
+   1. Add `wlr_ext_output_image_capture_source_manager_v1_create` + `wlr_ext_image_copy_capture_manager_v1_create` beside the existing screencopy global. Keep screencopy for `grim` / `xdg-desktop-portal-wlr`.
+   2. **Portal fix:** change `XDG_CURRENT_DESKTOP` (`start-hikari.sh:26`) to `"Hikari Sakura:wlroots"` -- colon-separated, so hikari keeps its identity *and* `xdg-desktop-portal-wlr`'s `UseIn=wlroots` matches. Mirror in `share/wayland-sessions/hikari.desktop`'s `DesktopNames`.
+   3. Add `ext_foreign_toplevel_list_v1` so screen-share window pickers have something to enumerate.
+
+   **W8. XWayland scene integration (N5) -- depends on W2, MUST NOT PRECEDE IT.** Supersedes and subsumes item -9 below, which is now **confirmed fact rather than a hypothesis**: `xwayland_unmanaged_view.c` contains no `wlr_scene` reference at all, and `xwayland_view.c:537` attaches only border and indicator frame. Add `wlr_scene_surface_create`/`wlr_scene_subsurface_tree_create` under the existing `scene_tree` at map time (not init -- the `wlr_surface` does not exist until `associate` fires), and give `xwayland_unmanaged_view.c` a tree in `layers.views` (or `layers.overlay` for override-redirect). Tear down on unmap so a dissociate/re-associate cycle neither leaks nor double-attaches.
 
 -10. **Phase 68 build + runtime verification -- USER-RUN, single cycle, everything else is blocked behind it.**
 

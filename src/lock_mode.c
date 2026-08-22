@@ -21,6 +21,7 @@ extern void explicit_bzero(void *, size_t);
 #include <errno.h>
 #include <wayland-server-core.h>
 #include <wlr/backend.h>
+#include <wlr/util/log.h>
 
 #include <hikari/cursor.h>
 #include <hikari/keyboard.h>
@@ -504,7 +505,14 @@ disable_outputs(void)
 {
   struct hikari_lock_mode *mode = get_mode();
 
-  wl_event_source_timer_update(mode->disable_outputs, 0);
+  /* [COMMENT] Action purpose: Disarm the pending blank so the timer cannot
+  fire again against outputs that are already down. Guarded because
+  hikari_lock_mode_enter() tolerates a failed timer allocation and leaves this
+  NULL -- and this function is reachable in that state through key_handler's
+  Ctrl+C branch, which calls it directly rather than through the timer. */
+  if (mode->disable_outputs != NULL) {
+    wl_event_source_timer_update(mode->disable_outputs, 0);
+  }
 
   struct hikari_output *output;
   wl_list_for_each (output, &hikari_server.outputs, server_outputs) {
@@ -824,5 +832,19 @@ hikari_lock_mode_enter(void)
     hikari_output_damage_whole(output);
   }
 
-  wl_event_source_timer_update(mode->disable_outputs, 1000);
+  /* [COMMENT] Action purpose: Arm the blank, but only if the timer was
+  actually created -- wl_event_loop_add_timer returns NULL on allocation
+  failure and wl_event_source_timer_update dereferences its argument. Losing
+  the timer degrades to a lock screen that never blanks, which is a legitimate
+  configured state anyway; taking the whole compositor down while the session
+  is locked would be far worse. Follows the Phase 61 policy of an always-on
+  wlr_log(WLR_ERROR) plus a safe bail rather than a debug-only assertion.
+  key_handler and cancel() already guard the same pointer. */
+  if (mode->disable_outputs != NULL) {
+    wl_event_source_timer_update(mode->disable_outputs, 1000);
+  } else {
+    wlr_log(WLR_ERROR,
+        "lock_mode: could not create the output blanking timer; the lock "
+        "screen will stay lit until unlocked");
+  }
 }

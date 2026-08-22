@@ -12,11 +12,7 @@
 #include <unistd.h>
 #include <wayland-server-core.h>
 
-#include <drm_fourcc.h>
 #include <wlr/backend.h>
-// [COMMENT] Action purpose: wlr_buffer_init and struct wlr_buffer_impl are
-// declared here; required for the CPU-backed ARGB8888 buffer below.
-#include <wlr/interfaces/wlr_buffer.h>
 #include <wlr/backend/headless.h>
 #include <wlr/backend/libinput.h>
 #include <wlr/backend/session.h>
@@ -27,6 +23,7 @@
 #include <wlr/types/wlr_cursor.h>
 #include <wlr/types/wlr_data_control_v1.h>
 #include <wlr/types/wlr_data_device.h>
+#include <wlr/types/wlr_ext_data_control_v1.h>
 #include <wlr/types/wlr_fractional_scale_v1.h>
 #include <wlr/types/wlr_idle_inhibit_v1.h>
 #include <wlr/types/wlr_idle_notify_v1.h>
@@ -69,6 +66,7 @@
 #endif
 
 #include <hikari/border.h>
+#include <hikari/buffer.h>
 #include <hikari/command.h>
 #include <hikari/configuration.h>
 #include <hikari/decoration.h>
@@ -79,6 +77,7 @@
 #include <hikari/mark.h>
 #include <hikari/memory.h>
 #include <hikari/output.h>
+#include <hikari/platform.h>
 #include <hikari/pointer.h>
 #include <hikari/pointer_config.h>
 #include <hikari/sheet.h>
@@ -897,7 +896,25 @@ request_start_drag_handler(struct wl_listener *listener, void *data)
 static void
 setup_selection(struct hikari_server *server)
 {
-  wlr_data_control_manager_v1_create(server->display);
+  /* [COMMENT] Action purpose: Clipboard managers (wl-clipboard, cliphist) read
+  and write the seat selection through a data-control protocol rather than
+  through wl_data_device, which only serves focused surfaces. Both generations
+  are advertised deliberately: wlroots 0.20 still ships the wlr- variant that
+  existing tools bind, while newer releases of those same tools prefer the
+  standardised ext- one and fall back. They coexist by design -- wlroots keys
+  both off the same seat selection -- so offering both is what keeps old and
+  new clipboard tooling working against one compositor. */
+  if (wlr_data_control_manager_v1_create(server->display) == NULL) {
+    wlr_log(WLR_ERROR,
+        "could not create wlr-data-control manager; clipboard managers "
+        "binding this protocol will not function");
+  }
+
+  if (wlr_ext_data_control_manager_v1_create(server->display, 1) == NULL) {
+    wlr_log(WLR_ERROR,
+        "could not create ext-data-control manager; clipboard managers "
+        "binding this protocol will not function");
+  }
 
   wlr_primary_selection_v1_device_manager_create(server->display);
 
@@ -1513,6 +1530,14 @@ server_init(struct hikari_server *server, char *config_path)
     wlr_scene_set_linux_dmabuf_v1(server->scene, linux_dmabuf);
   }
 
+  /* [COMMENT] Action purpose: Record what the machine actually provides, now
+  that the renderer exists and linux-dmabuf has either been created or failed.
+  Placed here rather than later because subsequent code may want to branch on
+  the result, and because logging it early means a session that dies during
+  startup still leaves the platform facts in the log. */
+  hikari_platform_probe(server->renderer, linux_dmabuf != NULL);
+  hikari_platform_log();
+
   /* [COMMENT] Action purpose: Protocols browsers and media players rely on for
   video subsurface scaling, frame timing, and HiDPI. wlr_scene picks up
   viewporter and presentation automatically once the globals exist. */
@@ -1541,6 +1566,28 @@ server_init(struct hikari_server *server, char *config_path)
     exit(EXIT_FAILURE);
   }
   setup_selection(server);
+#ifdef HAVE_XWAYLAND
+  /* [COMMENT] Action purpose: Hand the seat to XWayland so its window manager
+  runs the X11 selection bridge. Without this, wlroots' xwm never claims
+  CLIPBOARD/PRIMARY on the X server and never mirrors them to the Wayland
+  seat, so copy and paste do not cross the X11/Wayland boundary in either
+  direction -- a long-standing gap inherited from upstream, not a wlroots 0.20
+  regression.
+
+  This cannot move up into setup_xwayland(): that runs earlier in
+  server_init() and the seat does not exist until setup_selection() creates it
+  immediately above. wlroots owns the teardown -- struct wlr_xwayland keeps its
+  own private seat_destroy listener -- so hikari must not add one of its own.
+
+  The NULL check is defensive, not load-bearing: setup_xwayland() currently
+  exits the process when wlr_xwayland_create() returns NULL, so the pointer is
+  non-NULL by the time control reaches here. It is kept because making that
+  failure non-fatal is a plausible future change, and this call would then
+  dereference NULL with no other guard in the path. */
+  if (server->xwayland != NULL) {
+    wlr_xwayland_set_seat(server->xwayland, server->seat);
+  }
+#endif
   setup_xdg_shell(server);
   setup_xdg_activation(server);
   setup_idle_inhibit(server);
@@ -2316,113 +2363,18 @@ move_resize_view(int dx, int dy, int dwidth, int dheight)
   }
 }
 
-/* [COMMENT] Class purpose: CPU-backed ARGB8888 buffer holding a copy of
-caller-rendered cairo pixels. This exists because allocating through
-wlr_allocator does not work on the target platform: GBM buffer mapping fails on
-FreeBSD/ZFS, so wlr_allocator_create_buffer() (or the subsequent
-begin_data_ptr_access for write) returns failure and every UI element built this
-way silently disappears. output.c already worked around this for the background
-with its own wlr_buffer_impl (DECISIONS_LOG Phase 33); this brings the shared
-helper -- and therefore the indicator bars, lock indicator, and top bar -- onto
-the same footing. */
-struct hikari_argb8888_buffer {
-  struct wlr_buffer base;
-  unsigned char *data;
-  uint32_t format;
-  size_t stride;
-};
+/* [COMMENT] Function purpose: Compatibility shim over
+hikari_buffer_create_argb8888().
 
-static void
-argb8888_buffer_destroy(struct wlr_buffer *wlr_buffer)
-{
-  struct hikari_argb8888_buffer *buffer =
-      wl_container_of(wlr_buffer, buffer, base);
-  hikari_free(buffer->data);
-  hikari_free(buffer);
-}
-
-static bool
-argb8888_buffer_begin_data_ptr_access(struct wlr_buffer *wlr_buffer,
-    uint32_t flags,
-    void **data,
-    uint32_t *format,
-    size_t *stride)
-{
-  struct hikari_argb8888_buffer *buffer =
-      wl_container_of(wlr_buffer, buffer, base);
-
-  // [COMMENT] Action purpose: The pixels are a snapshot owned by the buffer;
-  // callers re-render and create a new buffer rather than mutating this one.
-  if (flags & WLR_BUFFER_DATA_PTR_ACCESS_WRITE) {
-    return false;
-  }
-
-  *data = buffer->data;
-  *format = buffer->format;
-  *stride = buffer->stride;
-
-  return true;
-}
-
-static void
-argb8888_buffer_end_data_ptr_access(struct wlr_buffer *wlr_buffer)
-{}
-
-static const struct wlr_buffer_impl argb8888_buffer_impl = {
-  .destroy = argb8888_buffer_destroy,
-  .begin_data_ptr_access = argb8888_buffer_begin_data_ptr_access,
-  .end_data_ptr_access = argb8888_buffer_end_data_ptr_access,
-};
-
+The implementation this used to carry lives in src/buffer.c now, so the output
+background and the cairo-drawn UI elements share one wlr_buffer_impl instead of
+two byte-identical copies. Existing callers (bar.c, indicator_bar.c,
+lock_indicator.c) keep working unchanged; they should move to the buffer.h entry
+point directly, after which this can go. */
 struct wlr_buffer *
 hikari_server_create_argb8888_buffer(int width, int height, unsigned char *data, int stride)
 {
-  // [COMMENT] Action purpose: Reject degenerate geometry and guard the size
-  // computation against overflow before allocating.
-  if (width <= 0 || height <= 0 || stride <= 0 || data == NULL) {
-    return NULL;
-  }
-
-  // [COMMENT] Action purpose: ARGB8888 is 4 bytes/pixel; a stride shorter than
-  // that would make the flat memcpy below (stride * height bytes) read past
-  // the end of the source buffer. Guard the width*4 multiplication against
-  // overflow before comparing.
-  size_t min_stride = (size_t)width * 4;
-  if (min_stride / 4 != (size_t)width || (size_t)stride < min_stride) {
-    return NULL;
-  }
-
-  size_t byte_count = (size_t)stride * (size_t)height;
-  if (byte_count / (size_t)stride != (size_t)height) {
-    return NULL;
-  }
-
-  // [COMMENT] Action purpose: Graceful-degradation allocation. This helper's
-  // contract is already "return NULL on failure" (see the geometry/overflow
-  // guards above), and every caller (hikari_bar_refresh, hikari_indicator_bar_
-  // update) already handles a NULL return by skipping that one UI element's
-  // repaint rather than crashing -- aborting here would have defeated that
-  // contract for the one failure mode that actually matters. See
-  // DECISIONS_LOG Finding 4.
-  struct hikari_argb8888_buffer *buffer =
-      hikari_try_malloc(sizeof(struct hikari_argb8888_buffer));
-  if (buffer == NULL) {
-    return NULL;
-  }
-
-  unsigned char *buffer_data = hikari_try_malloc(byte_count);
-  if (buffer_data == NULL) {
-    hikari_free(buffer);
-    return NULL;
-  }
-
-  wlr_buffer_init(&buffer->base, &argb8888_buffer_impl, width, height);
-  buffer->format = DRM_FORMAT_ARGB8888;
-  buffer->stride = (size_t)stride;
-  buffer->data = buffer_data;
-  memcpy(buffer->data, data, byte_count);
-
-  return &buffer->base;
+  return hikari_buffer_create_argb8888(width, height, data, stride);
 }
 
 void

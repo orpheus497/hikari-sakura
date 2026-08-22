@@ -2,6 +2,89 @@
 
 *Note: Most recent entries are listed at the top.*
 
+## Session Date: 2026-08-22 11:43 -- Phase 72: W1 executed (platform capability layer, buffer consolidation, FB-8)
+
+**Timestamp:** 2026-08-22 11:43
+**Current Status:** W1 implemented except FB-6, which is held for a user decision. Syntax-clean at 0 warnings across 60 files in **both** build configurations. Not built, not linked. **W2/W3/W4/W7/W8 remain unapproved.**
+
+**Accomplishments:**
+
+* **One `wlr_buffer_impl` in the tree, down from two.** `src/buffer.c` + `include/hikari/buffer.h` created; `hikari_argb8888_buffer` moved out of `server.c` essentially verbatim (sole change: `data` is now `const unsigned char *`), and `output.c`'s byte-identical `hikari_background_buffer` deleted. `output.c` -66/+5, `server.c` -108/+60, 115 shared lines in `buffer.c`. `hikari_server_create_argb8888_buffer()` kept as a one-line shim so `bar.c`/`indicator_bar.c`/`lock_indicator.c` are untouched -- deliberately leaving their migration to a later pass so this diff stays a pure move.
+* **Phase 33's framing retired in the code, not just the register.** The moved comment no longer says "GBM buffer mapping fails on FreeBSD/ZFS"; it states the actual reason -- wlroots exposes no allocator a compositor can write pixels into, on any platform -- and cites BLUEPRINT section 13 FB-2. FB-2 is now marked RESOLVED.
+* **Seven dead includes removed, one false comment with them.** With the implementations gone, `output.c` no longer referenced `DRM_FORMAT_*`, `wlr_buffer_init`, `wlr_allocator_*` or `wlr_drm_format`, so five wlroots/libdrm includes were dead; `server.c` shed two more. One of those carried a comment reading "required for the CPU-backed ARGB8888 buffer below", false the moment the buffer moved out -- deleted rather than left to mislead, on the Phase 70 F2 precedent.
+* **Platform capability layer (D3) is live.** `hikari_platform_probe()` / `hikari_platform_log()` run in `server_init()` immediately after linux-dmabuf, deliberately early so a session dying during startup still leaves the facts in the log -- the exact gap that made Phases 19/33/53 expensive. It records `render_buffer_caps` (the D2 probe W3's blur backend will branch on, replacing an undocumented FreeBSD assumption with a public-API question), the renderer's DRM node **resolved by `st_rdev` match against `/dev/dri` rather than guessed**, the `card*` count, and a **live** `posix_fallocate()` probe on `XDG_RUNTIME_DIR` -- probing rather than pattern-matching "zfs", so it stays correct for any filesystem with the same limitation. With more than one GPU present it names the `WLR_DRM_DEVICES` override in the log directly beside the symptom, putting the FB-3 fix where the reporter will see it.
+* **FB-8 fixed and verified.** `.ifdef` tests whether a variable is *defined*, not what it holds, so **no feature could be disabled from the command line at all**. Reproduced first (`make WITH_XWAYLAND=NO -V CFLAGS` emitted `-DHAVE_XWAYLAND=1`), then all 11 switches converted to `.if defined(X) && ${X:tu} != "NO"` and verified by direct `make -V` evaluation across the matrix -- including that the **default configuration is unchanged**, which is the non-regression property that matters.
+* **A tidier approach was tried and rejected on evidence.** Normalising once with `.for` + `.undef` would have avoided repeating the condition 11 times, but a standalone test showed `.undef` does **not** remove a command-line variable in bmake -- the tidier form would have silently not worked. Recorded in the Makefile comment so it is not re-attempted.
+
+**Held, deliberately, for user decisions:**
+
+* **FB-6.** Root cause is deeper than the plan's one-line description: all three symbols (`explicit_bzero`, `setgroups`, `usleep`) sit behind `__BSD_VISIBLE`, which FreeBSD's `<sys/cdefs.h>` clears whenever `_POSIX_C_SOURCE` is defined, and `lock_mode.c`'s existing shim is guarded `!defined(__FreeBSD__)` so it never fires for this case. **Opt 1 (recommended): retire `WITH_POSIX_C_SOURCE`** -- 4 lines, a config `WITH_ALL` never sets and that has been broken all along. **Opt 2: keep and fix** with three `__BSD_VISIBLE`-guarded declarations across three files. Neither taken unilaterally: Opt 1 removes a feature (AGENTS.md section 3), Opt 2 spreads a workaround over three files (standing anti-debt directive).
+* **libdrm as an explicit dependency.** `drmGetVersion(fd)->name` would report `i915` vs `nvidia-drm` directly instead of an inferred path -- strictly better FB-3 evidence, MIT-licensed, headers already reachable via wlroots' cflags. But `pkg-config --libs wlroots-0.20` does not export `-ldrm`, so it is a real new link dependency and outside approved W1 scope.
+
+**Modified files:** new `include/hikari/buffer.h`, `src/buffer.c`, `include/hikari/platform.h`, `src/platform.c`; modified `src/server.c`, `src/output.c`, `Makefile`. Trackers: `DECISIONS_LOG.md` (Phase 72), `TODOS.md`, `BLUEPRINT.md` (FB-2/FB-6/FB-8 + assessment), `PROGRESS.md`, `BRIEFING.md`, `SESSION_HANDOFF.md`.
+
+**Next steps:**
+1. **User build.** `rm -f *.o && make DEBUG=YES && sudo make DEBUG=YES install`. The new startup log block is the thing to read: expect 2 card nodes and `zfs` on this machine, and note which DRM node the renderer resolved to -- that alone may settle FB-3 without running the full W0 matrix.
+2. **Answer the two tabled decisions** (FB-6, libdrm).
+3. **Approve W2**, still the priority -- per the Q1 ruling there is no interim patch, so the F1 exposure stands until it lands. W1's `render_buffer_caps` probe is now in place for W3 to build on.
+4. Sequencing constraint unchanged: **W8 must not precede W2.**
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
+
+## Session Date: 2026-08-22 11:25 -- Phase 71: W5 + W6 executed (lock-mode guards, unlocker deny path, clipboard)
+
+**Timestamp:** 2026-08-22 11:25
+**Current Status:** First code workstream of the Phase 70 plan is implemented and syntax-clean. Not built, not run. **W1/W2/W3/W4/W7/W8 remain unapproved for execution.**
+
+**Accomplishments:**
+
+* **F3 -- two unguarded dereferences, not the one the plan named.** Besides `lock_mode.c:819-827`, `disable_outputs()` (`:507`) dereferences `mode->disable_outputs` unguarded and is reached **directly** from `key_handler`'s Ctrl+C branch rather than through the timer callback -- so with a failed allocation the fault landed on a keystroke, not at lock time. Both guarded. A lost timer now degrades to a lock screen that never blanks plus an always-on `wlr_log(WLR_ERROR)` (Phase 61 policy); that is a legitimate configured state once Q2's `0 = never` lands, and far better than killing the compositor while the session is locked. Added `<wlr/util/log.h>`, which the file lacked.
+* **F5 -- unlocker fatal-PAM path now denies explicitly** (`hikari_unlocker.c:143`), matching `:88`. **The plan's justification for this was wrong and has been corrected in the log:** `locker_result_handler` already recovered through `WL_EVENT_HANGUP` -- its own comment at `lock_mode.c:362-372` documents the `READABLE|HANGUP` pairing -- so nothing was "silently consumed". The genuine benefit is narrower: deny appears when the helper says so instead of waiting on process teardown. The code comment was rewritten to claim only that, deliberately, because this repo has already been bitten once by a comment asserting behaviour the code did not have (Phase 70 F2).
+* **C1 -- X11 clipboard restored.** `wlr_xwayland_set_seat()` was called nowhere in the tree, and verified absent upstream at `7777aaa` too, so copy/paste has never crossed the X11/Wayland boundary in either direction. Added after `setup_selection()`, which is the earliest point the seat exists -- it cannot be folded into `setup_xwayland()`, which runs earlier.
+* **Corrected a second plan instruction while implementing.** W6 said to "add a `seat_destroy` guard for hot-reload"; `struct wlr_xwayland` already owns a private `seat_destroy` listener (`wlr/xwayland/xwayland.h:78`, `WLR_PRIVATE`), so a second one would be duplicate state. Not added. Separately, the first draft of the NULL-guard comment claimed `setup_xwayland()` leaves the pointer NULL on failure; it does not -- it `exit(EXIT_FAILURE)`s -- so the comment now states plainly that the guard is defensive rather than load-bearing.
+* **C2 -- `ext-data-control-v1` advertised** beside `wlr-data-control-v1`; both keyed off the same seat selection, so old and new clipboard tooling both work. **C3 -- both manager returns guarded**, non-fatally by choice.
+* **F4 deliberately NOT implemented.** `PLANS.md` W5 marks it conditional on W0-6, which has not been run. Whether `hikari_output_enable()` needs `wlr_output_state_set_mode()` depends on whether wlroots retains `current_mode` across a disable -- unanswerable from headers, and guessing would either add dead code or mask the real behaviour.
+* **Validation used the Phase-68-corrected invocation, not the one Phase 68 proved was validating nothing.** 0 warnings on all three files, including `src/server.c` compiled **without** feature macros so the `#ifdef HAVE_XWAYLAND` region is exercised as false. Because a syntax check cannot prove linkage, `nm -D --defined-only` was additionally run against the installed `libwlroots-0.20.so` and confirms all three newly-called symbols are exported. The three `-Wextra` warnings in `hikari_unlocker.c` were confirmed pre-existing by compiling `git show HEAD:hikari_unlocker.c`.
+
+**Modified files:** `src/server.c` (+43/-1), `src/lock_mode.c` (+26/-2), `hikari_unlocker.c` (+10). Trackers: `DECISIONS_LOG.md` (Phase 71), `TODOS.md`, `PROGRESS.md`, `BRIEFING.md`, `SESSION_HANDOFF.md` (this entry).
+
+**Next steps:**
+1. **User build + runtime test.** `rm -f *.o && make DEBUG=YES && sudo make DEBUG=YES install`. Then: copy in `xterm`, paste into a Wayland app and the reverse; `wl-paste --watch` should observe selections from both worlds. F3/F5 are failure-path only and correctly invisible in a healthy run.
+2. **User-run W0** (still outstanding, 7 read-only commands). W0-1 may close FB-3/FB-4; W0-6 unblocks F4.
+3. **Await approval for W1, then W2.** W2 remains the priority -- per the Q1 ruling there is no interim patch, so the F1 exposure stands until it lands.
+4. Sequencing constraint unchanged: **W8 must not precede W2.**
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
+
+## Session Date: 2026-08-22 11:12 -- Phase 70: Lock-screen investigation, Option B plan, FreeBSD native-compatibility track
+
+**Timestamp:** 2026-08-22 11:12
+**Current Status:** Investigation complete, plan approved in principle, **no product code changed**. The user's directive for the investigation turn was explicitly read-only; the `.devdocs/` updates listed below were made afterwards under the Q4 approval and are the only writes of the session. **No workstream is yet approved for execution.**
+
+**Accomplishments:**
+
+* **Established the premise was partly counterfactual.** The blurred lock screen with a clock has never existed: one `grep -ri blur` hit tree-wide (a HiDPI comment at `bar.c:679`), nothing in `TODOS`/`PLANS`/`DECISIONS_LOG`/`BLUEPRINT`/`BRIEFING`, nothing in git history, and branch `lockscreen` byte-identical to `master`. Greenfield feature request, not a regression. Upstream's lock screen was never decorated — `hikari.md:190-201` documents it as "turn off all outputs", and the clock was always meant to come from a client view marked `public`.
+* **F1 (CRITICAL) — the lock screen hides nothing.** `override_visibility()` (`lock_mode.c:749-768`) flips flag bits only; the flag reaches the scene graph solely through `view.c:1157`/`:1193`, and both `assert(!hikari_view_is_forced(view))` — exactly the state lock mode establishes, so it structurally cannot use them. Traced the cause to the wlroots-0.20 port: `git 7777aaa:renderer.c:823` shows `hikari_renderer_lock_mode()` compositing the lock screen itself (dimmed background at 0.1 alpha + public views + indicator); commit `ce1ef07` deleted `renderer.c` and **never wrote a scene-graph equivalent**. Result: private windows, the top bar and every layer surface are on screen for ~1 s after locking and for a fresh 10 s after each password keystroke.
+* **F2 (HIGH)** — a window mapping while locked renders, and `view.c:1041-1046`'s comment asserts the opposite; `raise_view()` (`view.c:143-149`) does list bookkeeping only. **F3** unguarded timer pointer (`lock_mode.c:819-827`). **F4** = the existing P2-14, now deduplicated. **F5** unlocker fatal-PAM path writes no result (`hikari_unlocker.c:143-146`).
+* **C1 — `wlr_xwayland_set_seat()` is called nowhere in the tree,** so X11↔Wayland clipboard and primary selection have never worked. Verified this is **not** a 0.20-port regression (`git show 7777aaa:src/server.c | grep set_seat` is also empty). Plus C2 (no `ext_data_control`) and C3 (discarded return at `server.c:900`).
+* **Verified the lock security boundary is sound and explicitly out of scope for repair** — keyboard routing never reaches a client (`keyboard.c:35`), `hikari_cursor_deactivate()` removes all 19 pointer/touch/gesture listeners, switch/lid actions are gated (`switch.c:13`), password buffer `mlock`ed and `explicit_bzero`ed both sides, helper resolved by absolute path with `closefrom` before exec. **No bypass found; every defect is in rendering.**
+* **N5 promoted from hypothesis to fact.** `xwayland_unmanaged_view.c` contains **no `wlr_scene` reference at all**; `xwayland_view.c:537` attaches only border and indicator frame. Confirms `PLANS.md` item -9 / `BRIEFING.md`'s "awaiting approval" entry — and constrains sequencing, since XWayland content being invisible is currently the only thing limiting F1's blast radius.
+* **New §5 H0 — hybrid-graphics root-cause hypothesis for eDP-1, outranking H1/H2/H3.** Read live: `card0` = Intel Iris Xe (`8086:9A49`, i915kms, eDP-1 attached), `card1` = NVIDIA GTX 1650 Ti (`10DE:1F95`, nvidia-drm) with `hw.nvidiadrm.modeset=1`. Phase 19 never considered multi-GPU. Crucially it explains **both** recorded log lines with one cause: the `EGL_EXT_device_drm` failure at §5 item 6 is expected of NVIDIA's EGL and not of Mesa's — the very property Phase 19 sought in H1 and misattributed to a broken Mesa. Falsifiable with one variable, `WLR_DRM_DEVICES=/dev/dri/card0`.
+* **Corrected Phase 33's record.** wlroots 0.20.2 exposes exactly one allocator entry point and **no public shm/CPU allocator**, so the custom `wlr_buffer_impl` is idiomatic on every platform, not a FreeBSD workaround. The real debt is that it is implemented twice (`output.c:29-68`, `server.c:2328-2400`). Likewise re-confirmed that ZFS `posix_fallocate` is client-side only — wlroots uses `shm_open()`.
+* **Verified Option B is buildable on public API before committing to it.** `wlr_scene_output_build_state(.swapchain=…)`, `wlr_swapchain_create`, `wlr_renderer_begin_buffer_pass`, `wlr_render_pass_add_texture` + `WLR_SCALE_FILTER_BILINEAR`, `wlr_texture_read_pixels`, and `wlr_renderer.render_buffer_caps` are all present in the installed 0.20.2. **No custom shaders needed**, and `wlr_texture_read_pixels` is `glReadPixels`-backed so both blur paths sidestep `gbm_bo_map`. One honest open **SPIKE**: 0.20.2 has no public render-format query, so the swapchain format needs a logged escalation ladder.
+* **Recorded four architectural decisions (D1 scene layer trees, D2 probed dual-backend blur, D3 platform capability layer, D4 capture-before-hide ordering) and the user's four rulings (Q1 hold for W2, Q2 180 s AC / 60 s battery, Q3 CPU-then-GPU, Q4 persist).** Established the Q2 mechanism live: `hw.acpi.acline` via `sysctlbyname()`, idiom already at `topbar.c:328-332`.
+* **Opened `BLUEPRINT.md` §13, the FreeBSD/ZFS native-compatibility register (FB-1…FB-9)** — a standing table so platform constraints stop being rediscovered, with the assessment that only FB-3/FB-4 are genuine open defects and FB-3 is probably configuration, not code.
+
+**Modified files:** `.devdocs/DECISIONS_LOG.md` (Phase 70 entry), `.devdocs/PLANS.md` (item -12, W0–W8), `.devdocs/TODOS.md` (Phase 70 section), `.devdocs/BLUEPRINT.md` (§5 H0 + new §13), `.devdocs/PROGRESS.md` (Phase 70 row), `.devdocs/BRIEFING.md` (status + Remaining Work + three stale entries corrected), `.devdocs/SESSION_HANDOFF.md` (this entry). **No product code, Makefile, config or documentation outside `.devdocs/` was touched.**
+
+**Next steps:**
+1. **User-run W0**, seven read-only commands (`TODOS.md` Phase 70). W0-1 is the highest-value single command available and may close FB-3/FB-4; W0-6 resolves F4/P2-14.
+2. **Await approval for the first code workstream.** Recommended entry point is W5 + W6 (~4 h, independent, zero-risk, immediately testable) to get one clean build cycle in before the large refactors, then W1 → W2.
+3. **W2 is the priority** — per the Q1 ruling there is no interim patch, so the F1 exposure stands until it lands.
+4. Sequencing constraint to preserve: **W8 must not precede W2.**
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command. Read-only against product code; `.devdocs/` updated under the Q4 approval.)*
+
 ## Session Date: 2026-08-22 08:53 -- Phase 69: Review round 4 (unchecked setenv, status-masking log pipeline)
 
 **Timestamp:** 2026-08-22 08:53

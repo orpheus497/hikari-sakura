@@ -1,6 +1,15 @@
+# [COMMENT] Action purpose: Every WITH_* switch below is tested with
+# `defined(X) && ${X:tu} != "NO"` rather than the shorter `.ifdef X`, because
+# `.ifdef` tests whether a variable is DEFINED, not what it is set to -- so
+# `make WITH_XWAYLAND=NO` previously still compiled XWayland in, and there was
+# no way to turn any feature off from the command line at all. `:tu` upper-cases
+# the value first so `no`, `No` and `NO` all work. Command-line variables cannot
+# be removed with `.undef` (verified: bmake keeps them in the cmdline scope and
+# the subsequent `.ifdef` still matches), which is why the check has to be made
+# at each site rather than normalised once up here.
 WITH_ALL = YES
 
-.ifdef WITH_ALL
+.if defined(WITH_ALL) && ${WITH_ALL:tu} != "NO"
 WITH_XWAYLAND = YES
 WITH_SCREENCOPY = YES
 WITH_GAMMACONTROL = YES
@@ -21,6 +30,7 @@ OBJS = \
 	binding_group.o \
 	bar.o \
 	border.o \
+	buffer.o \
 	command.o \
 	completion.o \
 	configuration.o \
@@ -56,6 +66,7 @@ OBJS = \
 	normal_mode.o \
 	output.o \
 	output_config.o \
+	platform.o \
 	pointer.o \
 	pointer_config.o \
 	position_config.o \
@@ -73,7 +84,7 @@ OBJS = \
 	workspace.o \
 	xdg_view.o
 
-.ifdef WITH_XWAYLAND
+.if defined(WITH_XWAYLAND) && ${WITH_XWAYLAND:tu} != "NO"
 OBJS += \
 	xwayland_unmanaged_view.o \
 	xwayland_view.o
@@ -88,7 +99,7 @@ WAYLAND_PROTOCOLS != ${PKG_CONFIG} --variable pkgdatadir wayland-protocols
 CFLAGS += ${CFLAGS_EXTRA}
 LDFLAGS += ${LDFLAGS_EXTRA}
 
-.ifdef DEBUG
+.if defined(DEBUG) && ${DEBUG:tu} != "NO"
 # [COMMENT] Action purpose: Debug build — full symbols, no optimisation, strict
 # warnings. ASan is deliberately excluded from the base debug build because
 # wlroots/GBM maps DMA buffers via mmap(2) directly; ASan intercepts those
@@ -111,33 +122,33 @@ CFLAGS += -DNDEBUG
 # inherit -D_POSIX_C_SOURCE the way the compositor's own CFLAGS does.
 TOPBAR_CFLAGS := ${CFLAGS} -std=gnu11 -Wall
 
-.ifdef WITH_POSIX_C_SOURCE
+.if defined(WITH_POSIX_C_SOURCE) && ${WITH_POSIX_C_SOURCE:tu} != "NO"
 CFLAGS += -D_POSIX_C_SOURCE=200809L
 .endif
 
-.ifdef WITH_XWAYLAND
+.if defined(WITH_XWAYLAND) && ${WITH_XWAYLAND:tu} != "NO"
 CFLAGS += -DHAVE_XWAYLAND=1
 .endif
 
-.ifdef WITH_GAMMACONTROL
+.if defined(WITH_GAMMACONTROL) && ${WITH_GAMMACONTROL:tu} != "NO"
 CFLAGS += -DHAVE_GAMMACONTROL=1
 .endif
 
-.ifdef WITH_SCREENCOPY
+.if defined(WITH_SCREENCOPY) && ${WITH_SCREENCOPY:tu} != "NO"
 CFLAGS += -DHAVE_SCREENCOPY=1
 .endif
 
-.ifdef WITH_LAYERSHELL
+.if defined(WITH_LAYERSHELL) && ${WITH_LAYERSHELL:tu} != "NO"
 CFLAGS += -DHAVE_LAYERSHELL=1
 .endif
 
-.ifdef WITH_SUID
+.if defined(WITH_SUID) && ${WITH_SUID:tu} != "NO"
 PERMS = 4555
 .else
 PERMS = 555
 .endif
 
-.ifdef WITH_VIRTUAL_INPUT
+.if defined(WITH_VIRTUAL_INPUT) && ${WITH_VIRTUAL_INPUT:tu} != "NO"
 CFLAGS += -DHAVE_VIRTUAL_INPUT=1
 .endif
 
@@ -202,7 +213,7 @@ LIBS = \
 
 PROTOCOL_HEADERS = xdg-shell-protocol.h
 
-.ifdef WITH_LAYERSHELL
+.if defined(WITH_LAYERSHELL) && ${WITH_LAYERSHELL:tu} != "NO"
 PROTOCOL_HEADERS += wlr-layer-shell-unstable-v1-protocol.h
 .endif
 
