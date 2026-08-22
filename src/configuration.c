@@ -1663,6 +1663,173 @@ parse_font(
   return true;
 }
 
+/* [COMMENT] Function purpose: Parse `ui { lock { blur { ... } } }`.
+
+Blur is expressed as an object rather than a bare number so that turning it off
+and tuning it use the same key: `blur = false` disables it outright, while
+`blur = { radius = 20 }` keeps it on and adjusts it. A bare `radius` with no way
+to say "off" would have forced a second key that could contradict it. */
+static bool
+parse_lock_blur(
+    struct hikari_lock_config *lock_config, const ucl_object_t *blur_obj)
+{
+  if (ucl_object_type(blur_obj) == UCL_BOOLEAN) {
+    bool blur;
+
+    if (!ucl_object_toboolean_safe(blur_obj, &blur)) {
+      fprintf(stderr, "configuration error: expected boolean for \"blur\"\n");
+      return false;
+    }
+
+    lock_config->blur = blur;
+
+    return true;
+  }
+
+  if (ucl_object_type(blur_obj) != UCL_OBJECT) {
+    fprintf(stderr,
+        "configuration error: expected boolean or object for \"blur\"\n");
+    return false;
+  }
+
+  bool success = false;
+  ucl_object_iter_t it = ucl_object_iterate_new(blur_obj);
+
+  const ucl_object_t *cur;
+  while ((cur = ucl_object_iterate_safe(it, false)) != NULL) {
+    const char *key = ucl_object_key(cur);
+
+    if (!strcmp(key, "radius") || !strcmp(key, "passes")) {
+      int64_t value;
+
+      if (!ucl_object_toint_safe(cur, &value) || value < 0 || value > 512) {
+        fprintf(stderr,
+            "configuration error: expected integer between 0 and 512 for "
+            "\"%s\"\n",
+            key);
+        goto done;
+      }
+
+      if (!strcmp(key, "radius")) {
+        lock_config->blur_radius = (int)value;
+      } else {
+        lock_config->blur_passes = (int)value;
+      }
+    } else {
+      fprintf(stderr, "configuration error: unknown \"blur\" key \"%s\"\n", key);
+      goto done;
+    }
+  }
+
+  success = true;
+
+done:
+  ucl_object_iterate_free(it);
+
+  return success;
+}
+
+/* [COMMENT] Function purpose: Parse `ui { lock { ... } }` -- the clock, the
+blur, and how long the screen stays lit while locked. */
+static bool
+parse_lock(
+    struct hikari_lock_config *lock_config, const ucl_object_t *lock_obj)
+{
+  bool success = false;
+  ucl_object_iter_t it = ucl_object_iterate_new(lock_obj);
+
+  const ucl_object_t *cur;
+  while ((cur = ucl_object_iterate_safe(it, false)) != NULL) {
+    const char *key = ucl_object_key(cur);
+
+    if (!strcmp(key, "blur")) {
+      if (!parse_lock_blur(lock_config, cur)) {
+        goto done;
+      }
+    } else if (!strcmp(key, "clock")) {
+      bool clock;
+
+      if (!ucl_object_toboolean_safe(cur, &clock)) {
+        fprintf(stderr, "configuration error: expected boolean for \"clock\"\n");
+        goto done;
+      }
+
+      lock_config->clock = clock;
+    } else if (!strcmp(key, "clock-format") || !strcmp(key, "date-format")) {
+      const char *format;
+
+      if (!ucl_object_tostring_safe(cur, &format)) {
+        fprintf(stderr,
+            "configuration error: expected string for \"%s\"\n",
+            key);
+        goto done;
+      }
+
+      /* [COMMENT] Action purpose: Copy rather than borrow. The ucl_object_t is
+      released when the parser is torn down at the end of the load, while these
+      strings are read every minute for the life of the session. */
+      char **target = !strcmp(key, "clock-format") ? &lock_config->clock_format
+                                                   : &lock_config->date_format;
+
+      hikari_free(*target);
+      *target = hikari_malloc(strlen(format) + 1);
+      strcpy(*target, format);
+    } else if (!strcmp(key, "clock-font") || !strcmp(key, "date-font")) {
+      const char *font;
+
+      if (!ucl_object_tostring_safe(cur, &font)) {
+        fprintf(stderr,
+            "configuration error: expected string for \"%s\"\n",
+            key);
+        goto done;
+      }
+
+      struct hikari_font *target = !strcmp(key, "clock-font")
+          ? &lock_config->clock_font
+          : &lock_config->date_font;
+
+      hikari_font_fini(target);
+      hikari_font_init(target, font);
+    } else if (!strcmp(key, "clock-color")) {
+      if (!parse_color(cur, key, lock_config->clock_color)) {
+        goto done;
+      }
+    } else if (!strcmp(key, "blank-timeout-ac") ||
+        !strcmp(key, "blank-timeout-battery")) {
+      int64_t seconds;
+
+      /* [COMMENT] Action purpose: 0 means never blank, which is a legitimate
+      choice now that there is something worth looking at on the lock screen.
+      The upper bound is a day -- anything longer is indistinguishable from
+      never and is more likely a typo. */
+      if (!ucl_object_toint_safe(cur, &seconds) || seconds < 0 ||
+          seconds > 86400) {
+        fprintf(stderr,
+            "configuration error: expected integer between 0 and 86400 for "
+            "\"%s\"\n",
+            key);
+        goto done;
+      }
+
+      if (!strcmp(key, "blank-timeout-ac")) {
+        lock_config->blank_timeout_ac = (int)seconds;
+      } else {
+        lock_config->blank_timeout_battery = (int)seconds;
+      }
+    } else {
+      fprintf(stderr, "configuration error: unknown \"lock\" key \"%s\"\n", key);
+      goto done;
+    }
+  }
+
+  success = true;
+
+done:
+  ucl_object_iterate_free(it);
+
+  return success;
+}
+
 static bool
 parse_ui(struct hikari_configuration *configuration, const ucl_object_t *ui_obj)
 {
@@ -1692,6 +1859,10 @@ parse_ui(struct hikari_configuration *configuration, const ucl_object_t *ui_obj)
       }
     } else if (!strcmp(key, "step")) {
       if (!parse_step(configuration, cur)) {
+        goto done;
+      }
+    } else if (!strcmp(key, "lock")) {
+      if (!parse_lock(&configuration->lock, cur)) {
         goto done;
       }
     }
@@ -1950,6 +2121,8 @@ hikari_configuration_init(struct hikari_configuration *configuration)
 
   hikari_font_init(&configuration->font, "monospace 10");
 
+  hikari_lock_config_init(&configuration->lock);
+
   configuration->border = 1;
   configuration->gap = 5;
   configuration->step = 100;
@@ -1962,6 +2135,8 @@ hikari_configuration_init(struct hikari_configuration *configuration)
 void
 hikari_configuration_fini(struct hikari_configuration *configuration)
 {
+  hikari_lock_config_fini(&configuration->lock);
+
   struct hikari_view_config *view_config, *view_config_temp;
   wl_list_for_each_safe (
       view_config, view_config_temp, &configuration->view_configs, link) {

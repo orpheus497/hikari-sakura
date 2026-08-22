@@ -23,8 +23,13 @@ extern void explicit_bzero(void *, size_t);
 #include <wlr/backend.h>
 #include <wlr/util/log.h>
 
+#include <hikari/blur.h>
+#include <hikari/buffer.h>
+#include <hikari/configuration.h>
 #include <hikari/cursor.h>
 #include <hikari/keyboard.h>
+#include <hikari/lock_clock.h>
+#include <hikari/screen_capture.h>
 #include <hikari/lock_indicator.h>
 #include <hikari/output.h>
 
@@ -63,6 +68,13 @@ get_mode(void)
 
   return mode;
 }
+
+// [COMMENT] Action purpose: The lock screen's backdrop is created during entry
+// and torn down during cancel(), which sit at opposite ends of this file with
+// the mode's vtable between them. Forward-declared rather than reordered so the
+// entry and teardown paths stay where a reader expects to find them.
+static void
+destroy_backdrops(void);
 
 static void
 clear_buffer(void)
@@ -500,6 +512,30 @@ submit_password(void)
   }
 }
 
+/* [COMMENT] Function purpose: (Re)arm the countdown to powering the outputs
+down, using the timeout for the current power source.
+
+The power state is read here, on every arm, rather than cached at lock time --
+so unplugging the mains while the screen is locked takes effect on the very next
+keystroke. Since the timer is re-armed on every keypress anyway, that costs one
+sysctl per keystroke and needs no devd listener.
+
+A timeout of 0 means never blank, which is a reasonable thing to want now that
+the lock screen has a blurred backdrop and a clock worth looking at; it disarms
+the timer rather than arming it for zero, which would fire immediately. */
+static void
+arm_blank_timer(struct hikari_lock_mode *mode)
+{
+  if (mode->disable_outputs == NULL) {
+    return;
+  }
+
+  int seconds = hikari_lock_config_blank_timeout(&hikari_configuration->lock);
+
+  wl_event_source_timer_update(
+      mode->disable_outputs, seconds > 0 ? seconds * 1000 : 0);
+}
+
 static void
 disable_outputs(void)
 {
@@ -604,9 +640,12 @@ key_handler(
       }
     }
 
-    if (mode->disable_outputs != NULL) {
-      wl_event_source_timer_update(mode->disable_outputs, 10 * 1000);
-    }
+    /* [COMMENT] Action purpose: Every keystroke pushes the blank back by
+    the full configured timeout, and re-reads the power source while doing
+    so -- someone typing a password should never have the screen die
+    mid-word, and a machine unplugged while locked should start using the
+    battery timeout without waiting for the next lock. */
+    arm_blank_timer(mode);
   }
 }
 
@@ -719,6 +758,14 @@ cancel(void)
   hikari_free(mode->lock_indicator);
   mode->lock_indicator = NULL;
 
+  /* [COMMENT] Action purpose: Drop the clock and the backdrops before the
+  layers are handed back. Both are parented to the lock layer, which is reused
+  by the next lock rather than recreated -- leaving them attached would show the
+  next lock screen a stale photograph of an old session and a clock frozen at
+  the time this one ended. */
+  hikari_lock_clock_fini(&mode->clock);
+  destroy_backdrops();
+
   // [COMMENT] Action purpose: Reset outputs_disabled flag so re-entry into
   // lock mode starts with clean state.
   mode->outputs_disabled = false;
@@ -781,6 +828,92 @@ hikari_lock_mode_fini(struct hikari_lock_mode *lock_mode)
   try_reap_locker();
 
   munlock(input_buffer, BUFFER_SIZE);
+}
+
+/* [COMMENT] Function purpose: Photograph one output, blur the photograph, and
+hang it on the lock layer as that output's backdrop.
+
+This is what makes the lock screen show the workspace the user was actually
+looking at rather than a generic image. It has to run before override_visibility()
+disables the desktop layers -- afterwards the scene renders nothing to capture.
+
+Every failure path is non-fatal by design. A machine whose renderer cannot
+satisfy the off-screen render still locks; it simply shows the wallpaper behind
+the clock, which is what the lock screen looked like before this existed. */
+static void
+create_backdrop(struct hikari_output *output)
+{
+  struct hikari_lock_config *lock_config = &hikari_configuration->lock;
+
+  if (!lock_config->blur) {
+    return;
+  }
+
+  struct hikari_screen_capture capture;
+  if (!hikari_screen_capture_init(&capture, output)) {
+    return;
+  }
+
+  /* [COMMENT] Action purpose: Blur in place. A failed blur is not a reason to
+  discard the capture -- an unblurred still of the desktop is a worse lock
+  screen than a blurred one, but a far better one than no backdrop, and the
+  password prompt is unaffected either way. */
+  if (!hikari_blur_argb8888(capture.data,
+          capture.width,
+          capture.height,
+          capture.stride,
+          lock_config->blur_radius,
+          lock_config->blur_passes)) {
+    wlr_log(WLR_ERROR,
+        "lock_mode: could not blur the capture for output %s; showing it "
+        "unblurred",
+        output->wlr_output->name);
+  }
+
+  struct wlr_buffer *buffer = hikari_buffer_create_argb8888(
+      capture.width, capture.height, capture.data, capture.stride);
+
+  hikari_screen_capture_fini(&capture);
+
+  if (buffer == NULL) {
+    return;
+  }
+
+  output->lock_backdrop_node =
+      wlr_scene_buffer_create(hikari_server.layers.lock, buffer);
+
+  wlr_buffer_drop(buffer);
+
+  if (output->lock_backdrop_node == NULL) {
+    return;
+  }
+
+  /* [COMMENT] Action purpose: The capture is in physical pixels while the scene
+  works in logical coordinates, so a scaled output must be scaled back down here
+  or the backdrop would overhang the screen by the scale factor. Lowered to the
+  bottom of the lock layer so the clock, the public views and the password
+  indicator all draw over it. */
+  wlr_scene_node_set_position(&output->lock_backdrop_node->node,
+      output->geometry.x,
+      output->geometry.y);
+  wlr_scene_buffer_set_dest_size(output->lock_backdrop_node,
+      output->geometry.width,
+      output->geometry.height);
+  wlr_scene_node_lower_to_bottom(&output->lock_backdrop_node->node);
+}
+
+/* [COMMENT] Function purpose: Tear down every backdrop. Paired with
+create_backdrop(); the clock owns its own teardown. */
+static void
+destroy_backdrops(void)
+{
+  struct hikari_output *output;
+  wl_list_for_each (output, &hikari_server.outputs, server_outputs) {
+    if (output->lock_backdrop_node != NULL) {
+      wlr_scene_node_destroy(&output->lock_backdrop_node->node);
+      output->lock_backdrop_node = NULL;
+    }
+  }
 }
 
 /* [COMMENT] Function purpose: Take the screen away from the desktop and give it
@@ -895,29 +1028,34 @@ hikari_lock_mode_enter(void)
   // setup fails here, submit_password() will retry start_unlocker() on the
   // first password submission attempt.
   start_unlocker();
+
+  /* [COMMENT] Action purpose: Photograph every output BEFORE override_visibility()
+  disables the desktop layers. The order is the whole trick: capture first and
+  the backdrop shows the workspace the user was looking at, capture afterwards
+  and it shows an empty screen. Both run before returning to the event loop, so
+  no frame is ever committed between them and the transition is atomic. */
+  struct hikari_output *output;
+  wl_list_for_each (output, &hikari_server.outputs, server_outputs) {
+    create_backdrop(output);
+  }
+
   override_visibility();
+
+  hikari_lock_clock_init(&mode->clock);
+  hikari_lock_clock_refresh(&mode->clock);
 
   mode->disable_outputs = wl_event_loop_add_timer(
       hikari_server.event_loop, disable_outputs_handler, NULL);
 
-  struct hikari_output *output;
   wl_list_for_each (output, &hikari_server.outputs, server_outputs) {
     hikari_output_damage_whole(output);
   }
 
-  /* [COMMENT] Action purpose: Arm the blank, but only if the timer was
-  actually created -- wl_event_loop_add_timer returns NULL on allocation
-  failure and wl_event_source_timer_update dereferences its argument. Losing
-  the timer degrades to a lock screen that never blanks, which is a legitimate
-  configured state anyway; taking the whole compositor down while the session
-  is locked would be far worse. Follows the Phase 61 policy of an always-on
-  wlr_log(WLR_ERROR) plus a safe bail rather than a debug-only assertion.
-  key_handler and cancel() already guard the same pointer. */
-  if (mode->disable_outputs != NULL) {
-    wl_event_source_timer_update(mode->disable_outputs, 1000);
-  } else {
+  if (mode->disable_outputs == NULL) {
     wlr_log(WLR_ERROR,
         "lock_mode: could not create the output blanking timer; the lock "
         "screen will stay lit until unlocked");
   }
+
+  arm_blank_timer(mode);
 }

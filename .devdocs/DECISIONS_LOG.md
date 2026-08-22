@@ -1,3 +1,188 @@
+## [2026-08-22 13:39] Phase 76: Second crash root-caused -- stop hand-building wlr_drm_format, and a correction to Phase 75
+
+**Status:** FIXED, unbuilt. `src/screen_capture.c` rewritten to construct the format through the allocating API instead of by hand. **Includes a correction to a change Phase 75 made in the wrong direction.**
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
+
+### Symptom and root cause
+
+The Phase 75 fix was built and the compositor still aborted on locking. `hikari.4102.1001.core` (13:35, after the 13:29 install) resolved cleanly:
+
+```
+#4  wlr_drm_format_copy
+#5  wlr_swapchain_create
+#6  render_output_offscreen  (src/screen_capture.c:100)
+```
+
+Assertion recovered the same way, by disassembling the call site:
+**`render/drm_format_set.c:144: assert(src->len <= src->capacity)`**
+
+Phase 75 changed `.len` from 0 to 1 and **left `.capacity` at 0**. `1 <= 0` is false.
+
+### The real lesson: this was the second malformed struct in two attempts
+
+Two crashes, two different invariants of the same hand-constructed `struct wlr_drm_format`:
+
+| Attempt | Violation | Assert |
+|---|---|---|
+| Phase 74 | `len = 0` | `format->len > 0` (gbm.c:66) |
+| Phase 75 | `len = 1, capacity = 0` | `src->len <= src->capacity` (drm_format_set.c:144) |
+
+The struct's own header documents `capacity` as **"The capacity of the array; do not use."** That is wlroots stating plainly that a compositor is not meant to fill this in. Patching one field at a time in response to each successive assert was treating symptoms; the defect was building the struct at all.
+
+**Fixed properly:** the format is now built with `wlr_drm_format_set_add()`, retrieved with `wlr_drm_format_set_get()`, and released with `wlr_drm_format_set_finish()` once `wlr_swapchain_create()` has deep-copied it. The API allocates the modifier array and keeps `len` and `capacity` consistent, so there is no invariant left for this code to violate. `grep` confirms no hand-built `wlr_drm_format` and no `.capacity` assignment remains anywhere in `src/`.
+
+### Correction to Phase 75
+
+Phase 75 also changed the swapchain sizing from `wlr_output_transformed_resolution()` to `wlr_output->width/height`, on the reasoning that wlroots applies the output transform at scanout. **That was backwards, and it has been reverted.**
+
+Scanning the stripped library's assertion strings turned up `buffer->width == resolution_width && buffer->height == resolution_height` -- and `resolution_width`/`resolution_height` is wlroots' variable naming for the output of `wlr_output_transformed_resolution()`. The rotation is baked into the rendered buffer, not applied afterwards, so a 90/270 degree output renders into a buffer with width and height swapped relative to its mode. The original code was right; Phase 75 introduced a latent regression for rotated outputs while claiming to fix one, and the unrotated laptop panel under test could never have revealed either version as wrong.
+
+Recorded because the shape matters: a change justified by plausible reasoning about an API's semantics, shipped without evidence, in the same edit as a fix that *was* evidence-backed. The evidence for the real fix lent unearned credibility to the speculative one.
+
+### Method note
+
+An attempt to enumerate every assertion in the call path up front -- to stop fixing these one crash at a time -- failed: the installed `libwlroots-0.20.so` is stripped and the available `objdump` cannot disassemble this FreeBSD ELF. What did work was `strings` over the library, which lists assertion *expressions* even without symbols. That is how the `resolution_width` assert above was found, and it is the technique to reach for next time rather than another disassembly attempt.
+
+### Validation
+
+0 warnings across 64 files in both build configurations. All four newly-used symbols confirmed exported. **Not rebuilt** -- confirmation is the user's build, and the test is simply whether locking still aborts.
+
+---
+
+## [2026-08-22 13:28] Phase 75: Phase 74 crash root-caused from a core dump -- empty modifier list aborts the GBM allocator
+
+**Status:** FIXED, unbuilt. One-line class of fix in `src/screen_capture.c`. **Root cause proven from a core dump, not inferred.**
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
+
+### Symptom
+
+User built Phase 74 and reported the compositor crashing. Two hikari cores were present in `/var/coredumps`; the 12:56 one predates the rebuild and does not resolve against the current binary, but `hikari.26797.1001.core` at 13:24 is post-build and resolved cleanly.
+
+### Root cause, proven
+
+```
+#3  __assert
+#4  ??? in libwlroots-0.20.so
+#5  wlr_allocator_create_buffer
+#6  wlr_swapchain_acquire
+#7  wlr_scene_output_build_state
+#8  render_output_offscreen  (src/screen_capture.c:114)
+#9  hikari_screen_capture_init
+#10 create_backdrop          (src/lock_mode.c:853)
+#11 hikari_lock_mode_enter
+#12 hikari_server_lock
+```
+
+`SIGABRT`, not a segfault. The assertion arguments were recoverable by disassembling the call site in frame 4 -- the registers themselves were clobbered by `raise`/`abort`, but the `lea` instructions that load `__assert`'s operands are still there:
+
+```
+lea rsi,[rip+...]   # "render/allocator/gbm.c"
+lea rcx,[rip+...]   # "format->len > 0"
+mov edx,0x42        # line 66
+```
+
+**wlroots' GBM allocator requires a non-empty modifier list**: `render/allocator/gbm.c:66` opens with `assert(format->len > 0)`.
+
+Phase 74's format escalation ladder made rungs 1 and 3 `len = 0, modifiers = NULL`, intending that to mean "implicit modifier / let the allocator choose". It does not mean that -- it is simply invalid, and since rung 1 is tried first the compositor aborted on the very first lock attempt, before the ladder could reach the LINEAR rungs that *were* well-formed.
+
+The correct way to request implicit-modifier allocation is a **one-entry list containing `DRM_FORMAT_MOD_INVALID`**. wlroots' allocator tries `gbm_bo_create_with_modifiers2()` first and, on finding `INVALID` in the list, is permitted to fall back to a plain modifier-less `gbm_bo_create()`.
+
+### Fix
+
+All four rungs now carry exactly one modifier and never an empty list:
+
+| Rung | Format | Modifier |
+|---|---|---|
+| 1 | `XRGB8888` | `DRM_FORMAT_MOD_INVALID` (implicit) |
+| 2 | `XRGB8888` | `DRM_FORMAT_MOD_LINEAR` |
+| 3 | `ARGB8888` | `DRM_FORMAT_MOD_INVALID` |
+| 4 | `ARGB8888` | `DRM_FORMAT_MOD_LINEAR` |
+
+### The design lesson, recorded because it generalises
+
+**The escalation ladder can only recover from *returned* failures, never from assertions.** An `assert()` inside a dependency is not a recoverable error -- it takes the process down before the caller sees anything. So a fallback chain is only as safe as its *first* rung: every rung must be independently well-formed, and a malformed one cannot be rescued by the next.
+
+Phase 74's ladder was written on the assumption that a bad format would return NULL and move on. That assumption was never checked against wlroots' preconditions, and the ladder's apparent robustness actively disguised the danger -- it read as defensive code while containing a guaranteed abort. This is the same shape as the Phase 70 F2 finding (a comment asserting a safety property the code did not have), one level down.
+
+A second bug in the same function was found and fixed while investigating, though it would not have caused this crash:
+`wlr_output_transformed_resolution()` was used to size the swapchain, but the buffer the scene renders into is in the output's **untransformed** orientation -- wlroots applies the transform at scanout. On a 90 or 270 degree rotated output the swapchain would have been created with its dimensions swapped. The unrotated laptop panel this was tested on could never have shown it. Now uses `wlr_output->width/height`.
+
+### Validation
+
+`src/screen_capture.c` syntax-clean. **Not rebuilt** -- the fix needs the user's build to confirm, and the confirmation is simply that locking no longer aborts.
+
+Neither of these two bugs was reachable by any check available in this environment: both live in the capture path, which needs a live renderer, a real output and a composited scene. The core dump was the only instrument that could have found the first one, and it found it immediately -- which vindicates the Phase 68 diagnostics work that made cores and `HIKARI_LOG` usable.
+
+---
+
+## [2026-08-22 13:11] Phase 74: W3 + W4 executed -- the native blurred lock screen with a clock
+
+**Status:** IMPLEMENTED, unbuilt. Six new files, eight modified. Syntax-clean at 0 warnings across 64 files in both build configurations. The blur was additionally unit-tested standalone under ASan/UBSan.
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
+
+### Origin, and a correction to how this was scoped
+
+**Phase 73 was confirmed working on real hardware by the user** -- F1, F2, the stacking fix and the layer trees all verified. The user then clarified the requirement that had been mis-scoped since Phase 70: *"i do not know how to add the clock - this was supposed to be a native function of the lockscreen - it blurs the active workspace and shows a clock"*.
+
+The Phase 70 investigation established that upstream's answer to "a clock on the lock screen" was a client view marked `public`, and W4 was written around that being the fallback. That reading was **too deferential to upstream**. The user's intent was always a compositor-drawn clock, and marking a client `public` is a workaround for the absence of one, not a design. This phase implements it natively: the clock and the blur are both drawn by the compositor, so they are present with no session running, survive a client crash, and cannot be impersonated by a window that merely looks like a clock. The `public` mechanism is retained and still works -- Total Feature Retention -- it is simply no longer the answer to this question.
+
+### W3 -- capture and blur (Option B, CPU baseline per the Q3 ruling)
+
+**Capture (`src/screen_capture.c`).** wlroots has no "give me a picture of this output" call for compositors -- screencopy serves clients. What it does have is `wlr_scene_output_build_state()`'s `swapchain` option: supply a swapchain of our own, and the scene renders into it and reports the buffer through the output state. Building a state and never committing it is the supported way to render an output off-screen.
+
+**The format spike from the plan is resolved as an escalation ladder**, since wlroots 0.20.2 exposes `wlr_renderer_get_texture_formats()` but no equivalent query for render *target* formats -- the right choice cannot be looked up, only tried. Four rungs, each logged on success: `XRGB8888` implicit-modifier, `XRGB8888` LINEAR, `ARGB8888` implicit, `ARGB8888` LINEAR. Exhausting all four returns NULL and the lock screen falls back to a plain backdrop.
+
+**A failure mode caught by reasoning rather than testing, and fixed.** `wlr_scene_output_build_state()` tracks damage, and an idle desktop -- the normal state of a screen at the moment someone locks it -- has none. The capture would therefore have worked while something on screen was animating and silently produced nothing the rest of the time: **the worst possible failure shape, indistinguishable from an intermittent bug**. Fixed with `wlr_output_update_needs_frame()` before building the state. That function lives in wlroots' backend-implementer header rather than the compositor-facing one; the tree already sets that precedent (`src/buffer.c` uses `<wlr/interfaces/wlr_buffer.h>`), and setting the flag on our own output is benign -- at worst one extra render, and the lock screen needs a frame immediately afterwards anyway.
+
+**Readback avoids `gbm_bo_map` entirely.** `wlr_texture_from_buffer()` + `wlr_texture_read_pixels()` is `glReadPixels`-backed on GLES2, so it never requires the buffer to be CPU-mappable -- which matters because a GBM scanout buffer generally is not. This is the same constraint that shaped FB-2, approached from the other side.
+
+**Alpha is forced opaque after readback.** The capture is usually allocated `XRGB8888`, which carries no alpha at all, so what the readback writes into that byte is driver-dependent -- and a backdrop returning alpha 0 would simply be invisible, a hard thing to diagnose from a screenshot of a lock screen that merely looks unblurred. Normalising also makes the blur arithmetically correct: `ARGB8888` is premultiplied by wlr_scene's convention, and averaging premultiplied and straight pixels differs -- but at full alpha the two coincide, so the blur can average channels directly without knowing which it was handed.
+
+**Blur (`src/blur.c`).** Three passes of a separable box blur, which is the standard Gaussian approximation and runs in time independent of the radius via a running sum. A true Gaussian convolution at radius 12 would be roughly two orders of magnitude slower for no perceptible gain, and this runs once per lock, not per frame. Edges are **clamped** rather than wrapped or zero-padded: wrapping bleeds the right edge of the screen into the left, zero-padding darkens the borders into a vignette.
+
+**A heap overflow in this phase's own work, caught on re-read before it shipped.** `box_blur_line()` originally took one `pixel_stride` used for both source and destination. That is correct for the horizontal pass (both contiguous) but wrong for the vertical pass, which walks a **column** in the image while writing into a **compact** scratch line -- so it would have written at column stride into a buffer sized for one line, overrunning the heap by roughly the image height. Split into `src_stride` and `dst_stride`.
+
+### W4 -- backdrop, clock, and the power-aware blank timeout
+
+**Ordering is the whole trick.** `hikari_lock_mode_enter()` now captures every output **before** `override_visibility()` disables the desktop layers. Capture first and the backdrop shows the workspace the user was looking at; capture afterwards and it shows an empty screen. Both run before returning to the event loop, so no frame is committed between them and the transition is atomic -- the D4 decision, now load-bearing rather than theoretical.
+
+**Clock (`src/lock_clock.c`).** cairo/Pango into a CPU buffer per output via the shared `hikari_buffer_create_argb8888()`, attached to the lock layer. Two things worth recording:
+
+* **It ticks on the minute boundary, not every 60 seconds.** A fixed interval drifts against the wall clock, so the displayed minute would change up to a minute late. The timer re-arms to `(60 - tm_sec)` seconds each time, keeping the change simultaneous with the actual rollover. The default format has no seconds field, so a per-second repaint would re-shape text sixty times an hour to produce identical pixels.
+* **The text is drawn with a soft shadow, and that is not decoration.** The clock sits over a blurred photograph of the user's own desktop, whose brightness is entirely unknown -- white text alone disappears against a pale wallpaper. Drawing the same glyphs in translucent black at a small offset first guarantees an edge whatever is behind it, which is cheaper and far more predictable than sampling the backdrop and choosing a colour.
+
+**Stacking within the lock layer** falls out of creation order: backdrops are lowered to the bottom, public views are reparented in above them, the clock is created next, and the password indicator raises itself to the top when damaged.
+
+**Blank timeout, per the Q2 ruling: 180 s on AC, 60 s on battery, both configurable, 0 = never.** The two hardcoded values (`1000` at entry, `10 * 1000` per keystroke) are replaced by a single `arm_blank_timer()`. The power source is read **at every arm** rather than cached at lock time, so unplugging the mains while the screen is locked takes effect on the very next keystroke; since the timer is re-armed on every keypress anyway, that costs one `sysctl` per keystroke and needs no `devd` listener. `hw.acpi.acline` is absent on a desktop or a VM, and a failed read falls through to the **AC** timeout deliberately -- a machine that cannot be on battery should not inherit the battery's aggressive blanking.
+
+**Configuration.** A new `ui { lock { ... } }` block: `blur` (boolean to disable, or an object with `radius`/`passes`), `clock`, `clock-format`, `date-format`, `clock-font`, `date-font`, `clock-color`, `blank-timeout-ac`, `blank-timeout-battery`. `blur` accepts both forms deliberately so that turning it off and tuning it use the same key -- a bare `radius` would have forced a second key that could contradict it. Format strings are **copied**, not borrowed, because the `ucl_object_t` is released when the parser is torn down while these are read every minute for the life of the session.
+
+### Validation
+
+| Target | Result |
+|---|---|
+| All 64 `src/*.c`, full feature config | 0 warnings |
+| All 64 `src/*.c`, default config | 0 warnings |
+| `src/topbar.c` | 0 warnings |
+| New wlroots symbols exported (`nm -D`) | 11/11 present |
+| `etc/hikari/hikari.conf` parsed with **real libucl** | `ui.lock` found, all 9 keys present |
+| `hikari_blur_argb8888()` unit test | edges clamped (left 0, right 255 -- no vignette, no wraparound), gradient monotonic across the seam, alpha preserved |
+| Blur under **ASan + UBSan**, 6 geometries incl. 1x1 and radius 999 | clean |
+
+The config check used the installed libucl rather than a brace count, and the blur was compiled standalone and executed -- so the two pieces of genuinely new logic that could be exercised without a compositor, were.
+
+**Everything else remains unbuilt and unrun.** The capture path in particular cannot be tested here: it needs a live renderer, a real output and a composited scene.
+
+### Modified files
+
+New: `include/hikari/screen_capture.h`, `src/screen_capture.c`, `include/hikari/blur.h`, `src/blur.c`, `include/hikari/lock_clock.h`, `src/lock_clock.c`, `include/hikari/lock_config.h`, `src/lock_config.c`.
+Modified: `src/lock_mode.c`, `include/hikari/lock_mode.h`, `src/configuration.c`, `include/hikari/configuration.h`, `src/output.c`, `include/hikari/output.h`, `Makefile`, `etc/hikari/hikari.conf`.
+
+---
+
 ## [2026-08-22 11:59] Phase 73: FB-6 retired, and W2 executed -- scene layer trees, F1 and F2 fixed
 
 **Status:** IMPLEMENTED, unbuilt. The largest change of the project so far: 261 insertions / 50 deletions across 12 files. **F1 (CRITICAL) and F2 (HIGH) are fixed structurally.** Syntax-clean at 0 warnings across 60 files in both build configurations.

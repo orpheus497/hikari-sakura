@@ -29,6 +29,7 @@ OBJS = \
 	binding_config.o \
 	binding_group.o \
 	bar.o \
+	blur.o \
 	border.o \
 	buffer.o \
 	command.o \
@@ -54,6 +55,8 @@ OBJS = \
 	layout.o \
 	layout_config.o \
 	layout_select_mode.o \
+	lock_clock.o \
+	lock_config.o \
 	lock_indicator.o \
 	lock_mode.o \
 	main.o \
@@ -71,6 +74,7 @@ OBJS = \
 	pointer_config.o \
 	position_config.o \
 	resize_mode.o \
+	screen_capture.o \
 	server.o \
 	sheet.o \
 	sheet_assign_mode.o \

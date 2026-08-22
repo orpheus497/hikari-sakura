@@ -1,8 +1,49 @@
 # Granular Task List
 
-*Last Updated:* 2026-08-22 11:59
+*Last Updated:* 2026-08-22 13:39
 
 ## Active List
+
+### Phase 76: Second crash fixed — stop hand-building `wlr_drm_format` (see DECISIONS_LOG Phase 76)
+
+- [x] **ROOT CAUSE from `hikari.4102.1001.core`** (13:35, post-install): **`render/drm_format_set.c:144: assert(src->len <= src->capacity)`**. Phase 75 set `.len = 1` and left `.capacity = 0`.
+- [x] **Two crashes, two invariants of the same hand-built struct** — `len > 0` (Phase 74), then `len <= capacity` (Phase 75). The header documents `capacity` as **"do not use"**; patching one field per crash was treating symptoms. **The defect was constructing the struct at all.**
+- [x] **Fixed properly:** format built via `wlr_drm_format_set_add()` → `wlr_drm_format_set_get()` → `wlr_drm_format_set_finish()`. The API keeps `len`/`capacity` consistent, so no invariant is left for this code to violate. `grep` confirms no hand-built `wlr_drm_format` and no `.capacity` assignment remains in `src/`.
+- [x] **CORRECTION to Phase 75:** its change from `wlr_output_transformed_resolution()` to `wlr_output->width/height` was **backwards and is reverted**. The library's assert `buffer->width == resolution_width && ...` uses wlroots' naming for `transformed_resolution`, so rotation *is* baked into the rendered buffer. Phase 75 introduced a latent regression for rotated outputs while claiming to fix one — and shipped it in the same edit as an evidence-backed fix, which lent it unearned credibility.
+- [x] **Method note:** enumerating all asserts up front failed (library stripped, `objdump` cannot read this FreeBSD ELF). **`strings` over the .so does list assertion expressions** even without symbols — that is how the `resolution_width` assert was found, and is the technique to use next time.
+- [ ] **REBUILD AND RETEST (USER-RUN).** If it aborts again, the new core names the next precondition; read it with `gdb -batch -ex 'bt'` then disassemble the frame above `__assert` to recover the expression (registers are clobbered by `raise`/`abort`, but the `lea` operands survive).
+
+### Phase 75: Phase 74 crash root-caused and fixed (see DECISIONS_LOG Phase 75)
+
+- [x] **ROOT CAUSE PROVEN from a core dump**, not inferred. `hikari.26797.1001.core` (13:24, post-build) gave a clean backtrace: `SIGABRT` in `wlr_allocator_create_buffer` <- `wlr_swapchain_acquire` <- `wlr_scene_output_build_state` <- `render_output_offscreen` (`screen_capture.c:114`) <- `create_backdrop` <- `hikari_lock_mode_enter`. The assertion strings were recovered by disassembling the call site (registers were clobbered by `raise`/`abort`): **`render/allocator/gbm.c:66: assert(format->len > 0)`**.
+- [x] **wlroots' GBM allocator requires a non-empty modifier list.** Phase 74's ladder used `len = 0, modifiers = NULL` for rungs 1 and 3 intending "implicit modifier"; that is simply invalid, and since rung 1 runs first the compositor aborted on the **first lock attempt**, before reaching the well-formed LINEAR rungs. Correct spelling is a one-entry list holding `DRM_FORMAT_MOD_INVALID`. All four rungs now carry exactly one modifier.
+- [x] **Second bug fixed while investigating** (would not have caused this crash): the swapchain was sized with `wlr_output_transformed_resolution()`, but the scene renders into the output's **untransformed** orientation — wlroots applies the transform at scanout. A 90/270-rotated output would have got a swapchain with its dimensions swapped. An unrotated laptop panel could never have shown it. Now uses `wlr_output->width/height`.
+- [x] **Design lesson recorded:** an escalation ladder can only recover from *returned* failures, never from assertions — an `assert()` in a dependency takes the process down before the caller sees anything. **A fallback chain is only as safe as its first rung.** Phase 74's ladder read as defensive code while containing a guaranteed abort; same shape as the Phase 70 F2 finding, one level down.
+- [ ] **REBUILD AND RETEST (USER-RUN).** `rm -f *.o && make DEBUG=YES && sudo make DEBUG=YES install`, then lock. Expect the blurred workspace with the clock. Check the log for `screen_capture:` — it now names which rung succeeded. If it still aborts, the core in `/var/coredumps` will name the next precondition and can be read the same way.
+
+### Phase 74: W3 + W4 implemented — the native blurred lock screen with a clock (see DECISIONS_LOG Phase 74)
+
+**User confirmed Phase 73 works on real hardware**, then clarified the requirement: the clock is meant to be a *native compositor function*, not a client marked `public`. That corrects the Phase 70 scoping, which was too deferential to upstream's workaround.
+
+- [x] **W3 capture** (`src/screen_capture.c`) — renders the output off-screen via `wlr_scene_output_build_state()`'s `swapchain` option, then reads back with `wlr_texture_read_pixels()` (glReadPixels-backed, so it never needs a CPU-mappable buffer — the FB-2 constraint from the other side).
+- [x] **The W3 format SPIKE is resolved** as a logged 4-rung escalation ladder (XRGB implicit → XRGB linear → ARGB implicit → ARGB linear), because 0.20.2 has no render-target format query. Exhausting it falls back to a plain backdrop.
+- [x] **Damage early-out caught by reasoning, not testing.** An idle desktop has no pending damage, so `build_state()` would have rendered nothing — the capture would have worked only while something was animating. Fixed with `wlr_output_update_needs_frame()`.
+- [x] **Alpha forced opaque after readback** — XRGB captures carry no alpha, so the value was driver-dependent and a 0 would have made the backdrop invisible. Also makes the blur arithmetically correct (premultiplied and straight coincide at full alpha).
+- [x] **W3 blur** (`src/blur.c`) — 3-pass separable box blur, running sum so cost is radius-independent, edges **clamped** (not wrapped → no bleed; not zero-padded → no vignette).
+- [x] **Heap overflow in this phase's own work, caught before shipping.** `box_blur_line()` used one stride for both source and destination; correct horizontally, but the vertical pass walks a *column* while writing a *compact* scratch line — it would have overrun the heap by ~the image height. Split into `src_stride`/`dst_stride`.
+- [x] **W4 backdrop** — captured **before** `override_visibility()` disables the desktop layers. Capture after, and it photographs an empty screen. Both inside one event-loop turn, so no frame is committed between.
+- [x] **W4 clock** (`src/lock_clock.c`) — cairo/Pango per output. Ticks on the **minute boundary** (a fixed 60 s interval drifts, showing the change up to a minute late). Drawn with a soft shadow because it sits over a photo of the user's own desktop, whose brightness is unknown.
+- [x] **W4 blank timeout, per the Q2 ruling** — 180 s AC / 60 s battery, configurable, `0` = never. Both hardcoded values replaced by `arm_blank_timer()`, which reads `hw.acpi.acline` **at every arm** so unplugging mid-lock takes effect on the next keystroke. A missing sysctl (desktop, VM) falls through to the AC timeout deliberately.
+- [x] **New `ui { lock { ... } }` config block**, documented in `etc/hikari/hikari.conf`. `blur` takes a boolean *or* an object so disabling and tuning share one key. Format strings are copied, not borrowed — the `ucl_object_t` dies with the parser.
+- [x] **Validation:** 0 warnings across 64 files in both configs; 11/11 new wlroots symbols exported; config parsed with **real libucl** (all 9 keys); blur unit-tested standalone (edges clamped, gradient monotonic, alpha preserved) and clean under **ASan+UBSan** across 6 geometries including 1×1 and radius 999.
+- [ ] **RUNTIME VERIFICATION (USER-RUN).** The capture path cannot be tested here — it needs a live renderer, a real output and a composited scene.
+  1. **Lock.** Expect the workspace blurred, with a large clock and date above centre.
+  2. **Check the log for `screen_capture:`** — it names which format rung succeeded, or says the fallback was taken.
+  3. **Wait past the blank timeout** (180 s on AC by default; try `blank-timeout-ac = 10` to test quickly), then press a key — screen returns.
+  4. **Unplug the mains while locked**, press a key — the shorter battery timeout should now apply.
+  5. **Tune it:** `blur = false`, `blur = { radius = 30 }`, `clock = false`, `date-format = ""`, `clock-format = "%H:%M:%S"`.
+  6. **Multi-output**, if available — each screen should show its *own* blurred contents.
+  7. **Lock, unlock, lock again** — the second lock must show a *fresh* capture and a current clock, not the previous session's.
 
 ### Phase 73: FB-6 retired + W2 implemented — F1 and F2 FIXED (see DECISIONS_LOG Phase 73)
 
@@ -75,8 +116,8 @@
 
 - [x] **W1** platform capability layer + buffer consolidation + **FB-8** — implemented Phase 72. **FB-6 held pending a user decision** (see Phase 72 section above).
 - [x] **W2** scene layer trees (D1) -- implemented Phase 73. **The `forced` flag deletion was deferred**, see the Phase 73 deviation note.
-- [ ] **W3** capture + blur. **CPU baseline first, GPU second (Q3 ruling).** Carries one open **SPIKE**: no public render-format query exists in 0.20.2, so the swapchain format needs a logged escalation ladder (implicit XRGB8888 -> LINEAR -> ARGB8888 -> abort to solid `clear`).
-- [ ] **W4** backdrop + cairo/Pango clock + **power-aware blank timeout (Q2 ruling: 180 s AC / 60 s battery, configurable, `0` = never)**. Read `hw.acpi.acline` via `sysctlbyname()` at arm time, never cached.
+- [x] **W3** capture + blur — implemented Phase 74; the format spike is resolved as a logged escalation ladder. Original note: **CPU baseline first, GPU second (Q3 ruling).** Carries one open **SPIKE**: no public render-format query exists in 0.20.2, so the swapchain format needs a logged escalation ladder (implicit XRGB8888 -> LINEAR -> ARGB8888 -> abort to solid `clear`).
+- [x] **W4** backdrop + cairo/Pango clock — implemented Phase 74. + **power-aware blank timeout (Q2 ruling: 180 s AC / 60 s battery, configurable, `0` = never)**. Read `hw.acpi.acline` via `sysctlbyname()` at arm time, never cached.
 - [ ] **W7** `ext-image-copy-capture-v1` + `ext_foreign_toplevel_list_v1`; fix `XDG_CURRENT_DESKTOP` to `"Hikari Sakura:wlroots"` (`start-hikari.sh:26` + `hikari.desktop`) so `xdg-desktop-portal-wlr` matches at all.
 - [ ] **W8** XWayland scene integration (see N5).
 

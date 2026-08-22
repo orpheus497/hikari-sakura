@@ -437,6 +437,8 @@ hikari_output_init(struct hikari_output *output, struct wlr_output *wlr_output)
   output->server = &hikari_server;
   output->scene_output = NULL;
   output->lock_indicator_node = NULL;
+  output->lock_backdrop_node = NULL;
+  output->lock_clock_node = NULL;
   output->background = NULL;
 
   /* [COMMENT] Action purpose: Initialise the bar before output_geometry() runs,
@@ -646,6 +648,20 @@ hikari_output_fini(struct hikari_output *output)
     if (output->lock_indicator_node != NULL) {
       wlr_scene_node_destroy(&output->lock_indicator_node->node);
       output->lock_indicator_node = NULL;
+    }
+
+    /* [COMMENT] Action purpose: The lock screen's own nodes go with the output
+    they were drawn for. Both are sized and positioned against this output's
+    geometry, so leaving them parented to the shared lock layer after the output
+    disappears would strand a snapshot of a monitor that is no longer there. */
+    if (output->lock_backdrop_node != NULL) {
+      wlr_scene_node_destroy(&output->lock_backdrop_node->node);
+      output->lock_backdrop_node = NULL;
+    }
+
+    if (output->lock_clock_node != NULL) {
+      wlr_scene_node_destroy(&output->lock_clock_node->node);
+      output->lock_clock_node = NULL;
     }
 
     if (workspace != next_workspace) {

@@ -23,6 +23,12 @@ struct hikari_output {
   struct wlr_output *wlr_output;
   struct wlr_scene_output *scene_output;
   struct wlr_scene_buffer *lock_indicator_node;
+  /* [COMMENT] Class purpose: The lock screen's own scene nodes, both
+  parented to hikari_server.layers.lock. The backdrop is the blurred
+  snapshot of this output taken at lock time; the clock is drawn above it.
+  Per-output because each has its own resolution and its own picture. */
+  struct wlr_scene_buffer *lock_backdrop_node;
+  struct wlr_scene_buffer *lock_clock_node;
   struct hikari_workspace *workspace;
 
   bool enabled;

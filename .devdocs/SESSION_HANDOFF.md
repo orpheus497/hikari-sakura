@@ -2,6 +2,40 @@
 
 *Note: Most recent entries are listed at the top.*
 
+## Session Date: 2026-08-22 13:11 -- Phase 74: W3 + W4 executed (the native blurred lock screen with a clock)
+
+**Timestamp:** 2026-08-22 13:11
+**Current Status:** The requested feature is implemented. 6 new files, 8 modified. Syntax-clean at 0 warnings across 64 files in both configurations; the blur additionally unit-tested standalone under ASan/UBSan and the config parsed with real libucl. **Unbuilt; the capture path needs a live renderer and cannot be exercised here.**
+
+**Requirement correction that shaped this phase:**
+
+* The user confirmed **Phase 73 works on real hardware**, then said: *"i do not know how to add the clock - this was supposed to be a native function of the lockscreen - it blurs the active workspace and shows a clock"*. The Phase 70 investigation had established that upstream's answer was a client marked `public`, and W4 was scoped around that as the fallback. **That reading was too deferential to upstream.** Marking a client `public` is a workaround for the absence of a compositor-drawn clock, not a design. Both the blur and the clock are now native: present with no session running, surviving a client crash, and impossible for a window that merely looks like a clock to impersonate. The `public` mechanism is retained and still works.
+
+**Accomplishments:**
+
+* **Capture (`src/screen_capture.c`).** Renders the output off-screen through `wlr_scene_output_build_state()`'s `swapchain` option -- wlroots has no compositor-facing screenshot call, screencopy serves clients -- and reads back with `wlr_texture_read_pixels()`, which is glReadPixels-backed and therefore never needs a CPU-mappable buffer. That is the FB-2 constraint approached from the other side.
+* **The W3 format spike is resolved** as a logged four-rung escalation ladder (XRGB implicit modifier, XRGB linear, ARGB implicit, ARGB linear), because 0.20.2 exposes `wlr_renderer_get_texture_formats()` but nothing equivalent for render *targets* -- the right format cannot be looked up, only tried. Exhausting the ladder falls back to a plain backdrop rather than failing the lock.
+* **A failure mode caught by reasoning rather than testing.** `wlr_scene_output_build_state()` tracks damage, and an idle desktop -- the normal state of a screen at the moment somebody locks it -- has none. The capture would have worked while something on screen was animating and silently produced nothing the rest of the time: **the worst possible failure shape**, indistinguishable from an intermittent bug. Fixed with `wlr_output_update_needs_frame()`.
+* **Alpha forced opaque after readback.** XRGB captures carry no alpha, so what the readback writes there is driver-dependent, and a 0 would have made the backdrop invisible. It also makes the blur arithmetically correct: ARGB8888 is premultiplied by wlr_scene's convention, and at full alpha premultiplied and straight coincide, so the blur can average channels without knowing which it was handed.
+* **Blur (`src/blur.c`).** Three-pass separable box blur with a running sum, so cost is independent of radius. Edges **clamped** rather than wrapped (which bleeds the right of the screen into the left) or zero-padded (which darkens the borders into a vignette).
+* **A heap overflow in this phase's own work, caught on re-read.** `box_blur_line()` originally took one `pixel_stride` for both source and destination. Correct for the horizontal pass; wrong for the vertical one, which walks a **column** in the image while writing into a **compact** scratch line -- it would have overrun the heap by roughly the image height. Split into `src_stride`/`dst_stride`.
+* **W4 ordering is load-bearing.** The capture runs **before** `override_visibility()` disables the desktop layers -- capture after, and it photographs an empty screen. Both inside one event-loop turn, so no frame is committed between them. This is the D4 decision finally doing real work.
+* **Clock (`src/lock_clock.c`).** cairo/Pango per output. Ticks on the **minute boundary** rather than every 60 s, because a fixed interval drifts against the wall clock and would show the change up to a minute late. Drawn with a soft shadow -- not decoration: it sits over a blurred photograph of the user's own desktop, whose brightness is unknown, and white text alone vanishes against a pale wallpaper.
+* **Blank timeout, per the Q2 ruling.** 180 s AC / 60 s battery, configurable, 0 = never. Both hardcoded values replaced by `arm_blank_timer()`, which re-reads `hw.acpi.acline` **at every arm**, so unplugging the mains mid-lock takes effect on the next keystroke with no devd listener. A missing sysctl (desktop, VM) falls through to the **AC** value deliberately.
+* **New `ui { lock { ... } }` config block**, documented in `etc/hikari/hikari.conf`. `blur` accepts a boolean *or* an object so that disabling and tuning share one key. Format strings are copied, not borrowed -- the `ucl_object_t` dies with the parser while these are read every minute.
+
+**Validation:** 0 warnings across 64 files in both build configurations plus `topbar.c`; 11/11 new wlroots symbols confirmed exported by `nm -D`; `hikari.conf` parsed with the **installed libucl** (all nine keys found, not a brace count); `hikari_blur_argb8888()` compiled standalone and **executed** -- edges clamped, gradient monotonic across a hard seam, alpha preserved -- and clean under **ASan + UBSan** across six geometries including 1x1 and radius 999.
+
+**Modified files:** new `include/hikari/{screen_capture,blur,lock_clock,lock_config}.h` and `src/{screen_capture,blur,lock_clock,lock_config}.c`; modified `src/lock_mode.c`, `include/hikari/lock_mode.h`, `src/configuration.c`, `include/hikari/configuration.h`, `src/output.c`, `include/hikari/output.h`, `Makefile`, `etc/hikari/hikari.conf`.
+
+**Next steps:**
+1. **Build and lock.** Expect the workspace blurred with a large clock and date above centre. Then read the log for `screen_capture:` -- it names which format rung succeeded, or reports the fallback.
+2. Test the tunables (`blur = false`, `blur = { radius = 30 }`, `clock-format = "%H:%M:%S"`, `blank-timeout-ac = 10` to check blanking quickly), unplug the mains while locked, and lock/unlock/lock again to confirm the second lock takes a fresh capture. Full list in `TODOS.md` Phase 74.
+3. Still outstanding from earlier phases: **W0** (W0-6 gates F4), the **libdrm** question, **W7** and **W8**, and the deferred **`forced` flag removal**.
+4. `share/man/man1/hikari.md` does not yet document the `ui { lock { ... } }` block -- `hikari.conf` does. Worth doing before this is called finished.
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
+
 ## Session Date: 2026-08-22 11:59 -- Phase 73: FB-6 retired, W2 executed (scene layer trees; F1 and F2 fixed)
 
 **Timestamp:** 2026-08-22 11:59
