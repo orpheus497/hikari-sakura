@@ -1,6 +1,6 @@
 # Forward Strategy & Plans
 
-*Last Updated:* 2026-08-22 14:46
+*Last Updated:* 2026-08-22 15:12
 
 ## Implementations to be Fully Implemented
 
@@ -8,7 +8,7 @@
 
    | WS | State |
    |---|---|
-   | **W0** | **OPEN, user-run.** 7 read-only commands. W0-1 tests FB-3 and may close the eDP-1 blocker *and* the residual OBS dmabuf problem; W0-6 gates F4. **Now the single highest-value outstanding item.** |
+   | **W0** | **LARGELY MOOT (Phase 83).** Runs 1-5 discriminated the eDP-1 failure, now closed as stale. **Only W0-6 is still worth running** (~2 min) -- it gates F4/P2-14. |
    | **W1** | Delivered (Phase 72) -- platform capability layer, buffer consolidation, FB-8. |
    | **W2** | Delivered (Phase 73), **confirmed on hardware** -- scene layer trees; F1 and F2 fixed. |
    | **W3** | Delivered (Phases 74-76), **confirmed on hardware** -- capture + blur. |
@@ -21,9 +21,7 @@
 
    **Also outstanding, each needing approval:**
    * The **`forced` flag removal** (W2 step 3; declared deviation in Phase 73). 15 sites, several provably unreachable, in `src/view.c`. Pure cleanup -- F1/F2 are already fixed by the layer trees.
-   * **Man-page documentation** of the `ui { lock { ... } }` block. `etc/hikari/hikari.conf` documents it; `share/man/man1/hikari.md` does not.
-   * **libdrm as an explicit dependency**, to name the driver (`i915` vs `nvidia-drm`) in the startup log instead of an inferred device path -- better FB-3 evidence.
-   * **A configurable clock offset** for the lock screen, so visual tweaks do not each cost a rebuild.
+   *(Resolved 2026-08-22, Phase 82: man page now documents the `lock` block and two stale entries were corrected; **libdrm declined** -- it was never a necessity, the device path already identifies the GPU; **clock offset left fixed** at the user's confirmation.)*
 
    **Left open deliberately (Phase 81):** OBS ScreenCast renders black although the compositor side is verified working end to end. portal-wlr is the adopted backend; the residual failure is in the portal-wlr -> PipeWire -> OBS path, not this project's code. `grim` is the control that isolates the two halves.
 

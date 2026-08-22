@@ -1,3 +1,66 @@
+## [2026-08-22 15:12] Phase 83: The eDP-1 blocker was stale -- closed after ~60 phases of being carried as CRITICAL
+
+**Status:** DOCUMENTATION CORRECTION. No code changes. **BLUEPRINT section 13 now lists no known-open defect.**
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
+
+### The finding
+
+Asked directly whether the laptop's built-in panel works, the user answered that it "has been working for a long time".
+
+**FB-4 -- the eDP-1 scanout swapchain failure -- has therefore not been a live problem for a long time**, despite being carried as an open CRITICAL blocker since Phase 19 and referenced in all seven trackers. It was real when recorded: `Swapchain for output 'eDP-1' failed test` was observed live in Phase 19, with a corroborating `eglQueryDeviceStringEXT(EGL_DRM_DEVICE_FILE_EXT)` failure. It was fixed somewhere below hikari -- Mesa is now 26.1.6 and libdrm 2.4.134 -- and no code change in this project was ever needed or made.
+
+### Why it survived, which is the part worth recording
+
+Nothing ever re-verified it. Every phase that touched the priority list inherited the entry, restated it, and in several cases *reasoned from it* -- Phase 70 built the H0 hybrid-graphics hypothesis on top of it, Phase 72 shaped `hikari_platform_probe()` partly to diagnose it, and as recently as Phase 81 it was called "the single highest-value command available". The documentation treated **recorded** as **still true**, and the entry acquired weight through repetition rather than evidence.
+
+The check that closed it was one question. It should have been asked at any point in the preceding sixty phases, and the reason it was not is that a blocker attributed to "the layer below hikari" reads as someone else's problem and therefore as permanent.
+
+**Process consequence:** an open defect that this project cannot fix, and whose reproduction depends on a dependency stack that moves independently, needs a *re-verification* step, not just a record. Long-lived environmental entries in section 13 should carry the date they were last confirmed, and be re-checked before being cited as a reason to do anything.
+
+### Consequences, applied
+
+* **FB-4: RESOLVED / STALE.** Closed in section 13.
+* **FB-3 (hybrid Intel+NVIDIA): downgraded to PRESENT, no known impact.** It was only ever tracked because it was the prime suspect for FB-4. With eDP-1 working, wlroots is evidently selecting a workable device unaided. **Explicitly do not pin a device pre-emptively** -- that would hard-code a choice the current stack is making correctly, and would itself become a stale workaround. `hikari_platform_log()` already names the DRM node and the `WLR_DRM_DEVICES` override whenever more than one GPU is present, so a recurrence is self-diagnosing.
+* **Section 5 (the eDP-1 failure analysis) marked HISTORICAL**, with a note that none of it describes current behaviour and that the H1/H2/H3 discrimination matrix it calls for should not be run.
+* **The W0 matrix is largely moot.** Runs 1-5 existed to discriminate a failure that no longer occurs. **Only W0-6 remains worth doing** -- lock, wait past the blank timeout, press a key -- which settles F4/P2-14 in about two minutes.
+* **The leading OBS hypothesis is substantially weakened.** Cross-GPU dmabuf was predicated on wlroots rendering on one device and scanning out on another. eDP-1 working argues it is not doing that, so the black frames are less likely to be a multi-GPU problem than Phase 81 recorded. That hypothesis is downgraded rather than deleted -- PipeWire negotiates its own buffers with OBS independently of how the compositor scans out -- but it is no longer the leading explanation, and nothing should be built on it.
+
+### What this does not change
+
+No product code. The lock screen, clipboard, scene layers and XWayland work delivered this session are unaffected. FB-1, FB-2, FB-5 through FB-9 keep their existing status.
+
+---
+
+## [2026-08-22 14:55] Phase 82: Man page documents the lock screen; libdrm declined; clock offset left fixed
+
+**Status:** IMPLEMENTED (documentation). Two user decisions recorded.
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
+
+### Man page updated
+
+`share/man/man1/hikari.md` now documents the `ui { lock { ... } }` block -- all nine keys (`blur`, `clock`, `clock-format`, `date-format`, `clock-font`, `date-font`, `clock-color`, `blank-timeout-ac`, `blank-timeout-battery`), matching `etc/hikari/hikari.conf`. Verified: every key appears in both, and `pandoc --to man` converts cleanly.
+
+**Two existing entries were factually wrong and were corrected, not merely supplemented:**
+
+* **The `lock` action** still read "Lock **hikari** and turn off all outputs" and described `public` views as the way to get a clock on the lock screen. Both statements have been false since Phase 77. It now describes the blurred backdrop and the compositor-drawn clock, states that blanking is deferred and configurable, and -- newly important since Phase 73 -- that **every non-public view is hidden because the whole desktop layer is switched off**, which is the security property F1 established. It also no longer claims the unlocker must be "in the **PATH**"; it is resolved through a compile-time absolute path (Phase 38 hardening).
+* **`view-toggle-public`** still cited "clocks" as the example reason to mark a view public. That was upstream's workaround for having no compositor-drawn clock, and Phase 74 removed the need. The entry now says so and points at the `lock` subsection. The `public` mechanism itself is unchanged and still documented -- Total Feature Retention.
+
+### libdrm: DECLINED, and it was never a necessity
+
+The user asked what the necessity was, having ruled out a non-vendored dependency. **The honest answer is that there is none.** Recording the correction rather than defending the proposal:
+
+`hikari_platform_probe()` (Phase 72) already resolves the renderer's DRM node to a path -- `/dev/dri/renderD128` -- by matching `st_rdev` against `/dev/dri`, with no extra dependency. libdrm's `drmGetVersion(fd)->name` would have printed the *driver* (`i915` / `nvidia-drm`) instead, saving the reader one lookup of which node is which GPU on their machine. That is a convenience, not information the log lacks: the path identifies the device unambiguously.
+
+It was proposed as "strictly better FB-3 evidence", which overstated it -- the marginal gain is one manual mapping step, performed once. Against that it would add a real link dependency to a project whose charter (AGENTS.md section 2) keeps the dependency set minimal, and the user would only accept it vendored, which is disproportionate for a log line. **Declined; removed from the outstanding-decisions list.**
+
+### Lock-screen clock offset: left fixed
+
+User confirmed the current placement is fine, so no configuration key is added. Removed from the outstanding list. The offset remains a real centimetre derived from EDID physical dimensions (Phase 77), so it holds across displays of differing density without needing to be tuned.
+
+---
+
 ## [2026-08-22 14:46] Phase 81: portal-wlr adopted as the supported screen-sharing path; OBS ScreenCast left open
 
 **Status:** DECISION RECORDED. No code changes. Session-end documentation pass.

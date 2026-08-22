@@ -1,8 +1,25 @@
 # Granular Task List
 
-*Last Updated:* 2026-08-22 14:46
+*Last Updated:* 2026-08-22 15:12
 
 ## Active List
+
+### Phase 83: eDP-1 blocker was STALE — closed (see DECISIONS_LOG Phase 83)
+
+- [x] **FB-4 (eDP-1 scanout swapchain failure) CLOSED as stale.** User confirmed the built-in panel "has been working for a long time". Real when recorded in Phase 19; fixed below hikari (Mesa 26.1.6, libdrm 2.4.134); **no code change in this project was ever needed.** It was carried as an open CRITICAL blocker for ~60 phases and referenced in all seven trackers.
+- [x] **Why it survived, recorded as process:** nothing ever re-verified it. Phases *reasoned from* it — Phase 70's H0 hypothesis was built on it, Phase 72 shaped the platform probe partly to diagnose it, Phase 81 called it "the single highest-value command available". **The documentation treated *recorded* as *still true*.** A blocker attributed to "the layer below hikari" reads as permanent and so never gets re-checked. **Long-lived environmental entries in BLUEPRINT §13 should carry a last-confirmed date and be re-verified before being cited as a reason to act.**
+- [x] **FB-3 downgraded to PRESENT, no known impact.** Only ever tracked as the prime suspect for FB-4. **Explicitly do not pin a DRM device pre-emptively** — that would hard-code a choice the stack is currently making correctly, and become a stale workaround in its own right.
+- [x] **BLUEPRINT §5 marked HISTORICAL** — none of it describes current behaviour; the H1/H2/H3 matrix it calls for should not be run.
+- [x] **BLUEPRINT §13 now lists no known-open defect.**
+- [ ] **W0 matrix largely MOOT.** Runs 1–5 discriminated a failure that no longer occurs. **Only W0-6 is still worth doing** (~2 min): lock, wait past the blank timeout, press a key → settles F4/P2-14.
+- [ ] **OBS hypothesis weakened, not deleted.** Cross-GPU dmabuf assumed wlroots renders and scans out on different devices; eDP-1 working argues otherwise. PipeWire still negotiates its own buffers with OBS independently of scanout, so it is not impossible — but it is **no longer the leading explanation and nothing should be built on it.**
+
+### Phase 82: Man page updated; libdrm declined; clock offset left fixed (see DECISIONS_LOG Phase 82)
+
+- [x] **Man page documents `ui { lock { ... } }`** — all nine keys, matching `hikari.conf`. Verified both ways; `pandoc --to man` converts cleanly.
+- [x] **Two man-page entries corrected, not just supplemented.** The **`lock` action** still said "turn off all outputs" and pointed at `public` views for a clock — both false since Phase 77. Now describes the blurred backdrop, the compositor-drawn clock, deferred/configurable blanking, and (since Phase 73) that **every non-public view is hidden because the desktop layer is switched off**. Also dropped the stale claim that the unlocker must be "in the **PATH**" — it is resolved by compile-time absolute path. **`view-toggle-public`** no longer cites clocks as the reason to mark a view public; that was upstream's workaround, and it now points at the `lock` subsection. The mechanism itself is unchanged (Total Feature Retention).
+- [x] **libdrm DECLINED — and it was never a necessity.** `hikari_platform_probe()` already resolves the DRM node to a path with no dependency; libdrm would only have printed the *driver name* instead, saving one manual lookup. Proposing it as "strictly better evidence" overstated it. Removed from outstanding decisions.
+- [x] **Clock offset left fixed** — user confirmed the placement is fine. No config key added. The offset is already a real centimetre derived from EDID, so it holds across display densities.
 
 ### Phase 81: portal-wlr adopted; OBS ScreenCast left open (see DECISIONS_LOG Phase 81)
 

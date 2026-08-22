@@ -4,7 +4,7 @@
 
 ## Description
 
-*Hikari Sakura* is a FreeBSD-focused revamp and modernization of the original Hikari taken from https://github.com/antaz/hikari (which has since been abandoned upstream). It is very different from the original and is focused on being a comprehensive desktop environment specifically built for FreeBSD as the first purpose-built Wayland desktop environment for FreeBSD.
+*Hikari Sakura* is a FreeBSD-focused revamp and modernization of the original Hikari taken from https://github.com/antaz/hikari (which has since been abandoned upstream) and was originally created by `raichoo`. It is very different from the original and is focused on being a comprehensive desktop environment specifically built for FreeBSD as the first purpose-built Wayland desktop environment for FreeBSD.
 
 It is a stacking Wayland compositor with additional tiling capabilities,
 it is heavily inspired by the Calm Window manager (cwm(1)). Its core concepts

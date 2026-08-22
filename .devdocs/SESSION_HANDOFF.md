@@ -2,6 +2,39 @@
 
 *Note: Most recent entries are listed at the top.*
 
+## Session Date: 2026-08-22 15:12 -- Phases 82-83: man page, libdrm declined, and a stale CRITICAL blocker closed
+
+**Timestamp:** 2026-08-22 15:12
+**Current Status:** Documentation complete and corrected. **BLUEPRINT section 13 now lists no known-open defect.** No product code changed in these two phases beyond the man page.
+
+**Accomplishments:**
+
+* **Man page documents the lock screen** (Phase 82). All nine `ui { lock { ... } }` keys, matching `hikari.conf`; verified both ways and `pandoc --to man` converts cleanly. **Two existing entries were factually wrong and were corrected, not merely supplemented:** the `lock` action still read "turn off all outputs" and pointed at `public` views as the way to get a clock -- both false since Phase 77 -- and it also claimed the unlocker must be "in the **PATH**", which Phase 38 replaced with a compile-time absolute path. `view-toggle-public` no longer cites clocks as a reason to mark a view public. The `public` mechanism itself is untouched.
+* **libdrm declined, and the proposal was withdrawn as overstated** (Phase 82). `hikari_platform_probe()` already resolves the DRM node to a path with no dependency; libdrm would only have printed the driver name instead, saving one lookup performed once. Calling it "strictly better FB-3 evidence" oversold it against a real link dependency the user would only accept vendored.
+* **Clock offset left fixed** (Phase 82) at the user's confirmation. It is already a real centimetre derived from EDID, so it holds across display densities.
+* **The eDP-1 blocker was STALE and is closed** (Phase 83). One direct question -- does the built-in panel work? -- retired an open CRITICAL blocker carried since Phase 19 across all seven trackers. It was real when recorded and was fixed below hikari (Mesa 26.1.6, libdrm 2.4.134); no code change here was ever needed.
+
+**The lesson from Phase 83, which is the most valuable thing in this entry:**
+
+Nothing ever re-verified FB-4, and later phases *reasoned from* it -- Phase 70 built its H0 hybrid-graphics hypothesis on top of it, Phase 72 shaped the platform probe partly to diagnose it, and Phase 81 called it "the single highest-value command available". **The documentation treated *recorded* as *still true*, and the entry gained weight through repetition rather than evidence.** A blocker attributed to "the layer below hikari" reads as someone else's problem and therefore as permanent. **Long-lived environmental entries in BLUEPRINT section 13 should carry a last-confirmed date and be re-verified before being cited as a reason to act.**
+
+**Knock-on corrections applied:**
+* **FB-3 downgraded to present-but-harmless.** It was only ever tracked as FB-4's prime suspect. **Pinning a DRM device pre-emptively is explicitly rejected** -- it would hard-code a choice the stack is making correctly and become a stale workaround itself.
+* **Section 5 marked HISTORICAL**; its H1/H2/H3 discrimination matrix should not be run.
+* **W0 is largely moot.** Only **W0-6** (~2 min) is still worth running; it settles F4/P2-14.
+* **The leading OBS hypothesis is substantially weakened.** Cross-GPU dmabuf assumed wlroots renders and scans out on different devices, which eDP-1 working argues against. Downgraded rather than deleted -- PipeWire negotiates its own buffers with OBS independently of scanout -- but **no longer the leading explanation, and nothing should be built on it.**
+
+**Modified files:** `share/man/man1/hikari.md`. Trackers: `DECISIONS_LOG.md` (82, 83), `TODOS.md`, `PROGRESS.md`, `BRIEFING.md`, `PLANS.md`, `BLUEPRINT.md` (sections 5 and 13).
+
+**Outstanding after this session:**
+* **W7b** (`ext-foreign-toplevel-list-v1`) -- the only undelivered workstream; needs approval and its own build cycle.
+* **The deferred `forced`-flag removal** -- pure cleanup, needs approval.
+* **W0-6** -- user-run, ~2 minutes, gates F4/P2-14.
+* **PAM unlocker live verification**; Phase 50 touch/gesture checks.
+* **OBS ScreenCast** -- open, downstream of this project, portal-wlr adopted as the backend. `grim` is the control.
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
+
 ## Session Date: 2026-08-22 14:46 -- Phases 79-81: screen sharing diagnosed, ext-capture made opt-in, portal-wlr adopted
 
 **Timestamp:** 2026-08-22 14:46
