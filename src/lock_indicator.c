@@ -1,5 +1,7 @@
 #include <hikari/lock_indicator.h>
 
+#include <hikari/buffer.h>
+
 #include <drm_fourcc.h>
 
 #include <wlr/backend.h>
@@ -49,7 +51,7 @@ init_indicator_circle(float color[static 4])
   unsigned char *data = cairo_image_surface_get_data(surface);
   int stride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, size);
 
-  wlr_buffer = hikari_server_create_argb8888_buffer(size, size, data, stride);
+  wlr_buffer = hikari_buffer_create_argb8888(size, size, data, stride);
 
   cairo_surface_destroy(surface);
   g_object_unref(layout);

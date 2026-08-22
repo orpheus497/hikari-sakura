@@ -231,8 +231,6 @@ void
 hikari_server_migrate_focus_view(
     struct hikari_output *output, double lx, double ly, bool center);
 
-struct wlr_buffer *
-hikari_server_create_argb8888_buffer(int width, int height, unsigned char *data, int stride);
 
 void
 hikari_server_prepare_privileged(void);

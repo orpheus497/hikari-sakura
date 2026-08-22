@@ -2479,19 +2479,6 @@ move_resize_view(int dx, int dy, int dwidth, int dheight)
   }
 }
 
-/* [COMMENT] Function purpose: Compatibility shim over
-hikari_buffer_create_argb8888().
-
-The implementation this used to carry lives in src/buffer.c now, so the output
-background and the cairo-drawn UI elements share one wlr_buffer_impl instead of
-two byte-identical copies. Existing callers (bar.c, indicator_bar.c,
-lock_indicator.c) keep working unchanged; they should move to the buffer.h entry
-point directly, after which this can go. */
-struct wlr_buffer *
-hikari_server_create_argb8888_buffer(int width, int height, unsigned char *data, int stride)
-{
-  return hikari_buffer_create_argb8888(width, height, data, stride);
-}
 
 void
 hikari_server_decrease_view_size_down(void *arg)

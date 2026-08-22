@@ -4,6 +4,8 @@
 
 #include <hikari/bar.h>
 
+#include <hikari/buffer.h>
+
 #include <assert.h>
 #include <ctype.h>
 #include <errno.h>
@@ -41,12 +43,13 @@ Any wider request cannot be displayed and would overflow the int accumulator
 used for right-aligned layout. */
 #define HIKARI_BAR_MAX_BLOCK_WIDTH 8192
 
-/* [COMMENT] Action purpose: The bar uses the shared
-hikari_server_create_argb8888_buffer(), which is CPU-backed rather than
-allocator-backed. That distinction matters here: allocating through
-wlr_allocator fails on the target platform (GBM buffer mapping on FreeBSD/ZFS),
-which silently produced a NULL buffer and an invisible bar. See
-DECISIONS_LOG Phase 33 and the implementation in src/server.c. */
+/* [COMMENT] Action purpose: The bar draws with cairo and hands the pixels to
+hikari_buffer_create_argb8888(), which is CPU-backed rather than
+allocator-backed. That is not a platform workaround: wlroots exposes no
+allocator a compositor can write pixels into, on any platform, so every
+compositor that draws its own UI supplies a wlr_buffer_impl of its own. See
+BLUEPRINT.md section 13, FB-2, which corrects the earlier Phase 33 framing, and
+the implementation in src/buffer.c. */
 
 // [COMMENT] Function purpose: Release the strings owned by the current block
 // set and reset the count.
@@ -833,7 +836,7 @@ hikari_bar_refresh(struct hikari_bar *bar)
   int stride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, pixel_width);
 
   struct wlr_buffer *buffer =
-      hikari_server_create_argb8888_buffer(pixel_width, pixel_height, data, stride);
+      hikari_buffer_create_argb8888(pixel_width, pixel_height, data, stride);
 
   if (buffer == NULL) {
     /* [COMMENT] Action purpose: Report rather than fail silently. An invisible

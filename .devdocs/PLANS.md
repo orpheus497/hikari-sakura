@@ -1,8 +1,129 @@
 # Forward Strategy & Plans
 
-*Last Updated:* 2026-08-22 15:12
+*Last Updated:* 2026-08-22 15:24
 
 ## Implementations to be Fully Implemented
+
+-14. **REMAINING WORK PROGRAMME -- proposed 2026-08-22 15:16, AWAITING APPROVAL. No step is approved for execution.**
+
+   Everything still open after Phases 70-83, scoped and sequenced. The lock-screen programme (W1-W6), the scene-graph restructure, XWayland integration and the portal work are all delivered and hardware-confirmed; what follows is the remainder.
+
+   **Sequencing principles, all learned the hard way this session:**
+   * **One risky change per build cycle.** Phase 78 bundled two and a crash would have been ambiguous; Phase 75 bundled a guess with an evidence-backed fix and the guess survived a whole cycle on borrowed credibility.
+   * **`src/view.c` gets its own cycle, always.** It is the file behind eight crash phases (42, 44, 45, 55, 56, 57, 61, 63). R2 and R3 both touch it and **must not ship together**.
+   * **Re-verify before acting on any recorded environmental claim.** FB-4 was carried as CRITICAL for ~60 phases after it stopped being true (Phase 83). R1 exists because of this.
+   * **Use a library's constructors; never hand-build its structs.** Two crashes, one root cause (Phase 76).
+
+   ```
+   R1 ─────────────────────────────► independent, do first (cheap, unblocks accurate prioritisation)
+   R7 ─────────────────────────────► user-run verification, independent
+   R6 ── R2 ── (separate cycle) ── R3
+   R4 ◄── gated on R7-a (W0-6)
+   R5 ─────────────────────────────► large, needs its own scoping decision
+   R8, R9 ─────────────────────────► hygiene, any time
+   ```
+
+   ---
+
+   **R1. Tracker stale-sweep -- DO FIRST. Agent work, ~1 h, zero risk.**
+
+   `TODOS.md` carries roughly 30 unchecked items, and a sample shows **many are already resolved** -- the Phase 64/70 "XWayland renders no content" entries (fixed in Phase 78), "XWayland does not start" (fixed Phase 68), W0-1..W0-5 (moot since Phase 83), the libdrm and clock-offset questions (settled Phase 82), FB-6 (resolved Phase 73), and a P2 claiming `setup_idle_inhibit` is unguarded (it is guarded, verified 2026-08-22).
+
+   This is the FB-4 disease at file scale: entries treated as open because nobody re-read them. Every subsequent prioritisation reasons from a list that is partly fiction.
+
+   1. Walk every unchecked box in `TODOS.md`; for each, verify against current code or mark as superseded, citing the phase that closed it.
+   2. Same pass over `PLANS.md` items -10 through 4 -- several describe work long since done.
+   3. Add a **last-verified date** to each `BLUEPRINT.md` section 13 row, per the Phase 83 process note.
+   *Acceptance:* every remaining unchecked item is confirmed live against the current tree.
+
+   **R2. W7b -- `ext-foreign-toplevel-list-v1`. ~4-6 h. Own build cycle.**
+
+   The only undelivered workstream. Serves taskbars (waybar `wlr/taskbar`) and future window-selection portals; **not** required for screen sharing (verified Phase 78: portal-wlr captures outputs and has no window picker).
+
+   1. `wlr_ext_foreign_toplevel_list_v1_create(display, 1)` in `server.c`.
+   2. `struct hikari_view` gains a handle pointer and a stored `app_id` -- views currently receive `app_id` in `hikari_view_configure()` but do not retain it.
+   3. Handle lifecycle: create in `hikari_view_map()`, destroy in `hikari_view_unmap()`, update in `hikari_view_set_title()`, release in `hikari_view_fini()`.
+   *Risk:* six touch points in `view.c`. Follow the Phase 78 pattern -- audit every new listener/pointer for exactly-once release, and check destroy ordering.
+   *Acceptance:* a taskbar client lists windows and tracks title changes; open/close/retitle leaks nothing.
+
+   **R3. Remove the `forced` flag. ~4-6 h. MUST NOT share a cycle with R2.**
+
+   The declared Phase 73 deviation. 15 sites, several in **provably unreachable** branches given the `view.c:108` invariant (`forced` implies `hidden`). With the layer trees, the flag no longer decides visibility -- it is pure bookkeeping.
+
+   1. Enumerate all 15 and classify: live, dead-given-invariant, or redundant-with-trees.
+   2. Remove the dead branches **first, as a separate reviewable step**, before deleting the flag.
+   3. Delete `FLAG(forced, 4UL)` and simplify `commit_pending_operation()` and `hikari_view_migrate_to_sheet()`.
+   *Risk:* highest of any item here. Pure cleanup with no user-visible gain -- **defer indefinitely if the appetite for risk is low.** F1/F2 are already fixed by the trees.
+   *Acceptance:* the Phase 73 lock-screen test list passes unchanged.
+
+   **R4. F4 / P2-14 -- `hikari_output_enable()` sets no mode. ~30 min. GATED on R7-a.**
+
+   `output.c:323-354` re-enables an output without `wlr_output_state_set_mode()`, unlike `hikari_output_init` (`:553-556`). If wlroots does not retain `current_mode` across a disable, the first keypress after the lock blank leaves the session dark.
+   **Do not implement speculatively.** R7-a answers it in two minutes; if the screen returns, this needs no fix and the item closes.
+
+   **R5. Dead-assert remediation. LARGE -- needs a scoping decision before any work.**
+
+   **255 asserts across the tree, 101 in `view.c` alone**, all compiled out by `-DNDEBUG` in every shipped binary. Phase 61 approved always-on `wlr_log(WLR_ERROR)` + safe bail as the replacement policy; only a handful of sites have had it applied.
+
+   **Do not sweep mechanically** -- Phase 47 showed one assert (`add_keyboard`) to be a sound invariant that would have been wrong to rewrite defensively. Triage into three buckets: (a) guarding an allocation or external return value -> convert; (b) documenting an internal invariant that cannot fail given the call graph -> leave; (c) genuinely unreachable -> delete. **Only bucket (a) carries live crash risk.**
+   *Proposal:* scope to bucket (a) only, and only outside `view.c` in the first pass. `view.c`'s 101 are entangled with R3 and should follow it.
+   *Needs a decision:* full programme, bucket (a) only, or defer.
+
+   **R6. Retire the `hikari_server_create_argb8888_buffer` shim. ~20 min, near-zero risk.**
+
+   W1 kept it "for one release". Three callers remain -- `lock_indicator.c:52`, `bar.c:836`, `indicator_bar.c:190` -- plus a stale comment reference at `bar.c:45`. Point them at `hikari_buffer_create_argb8888()` and delete the shim and its declaration.
+   *Acceptance:* no reference remains; bar, indicator bars and lock indicator render unchanged.
+
+   **R7. Verification backlog -- USER-RUN.**
+
+   * **R7-a. W0-6 (~2 min, highest value here).** Lock, wait past the blank timeout (set `blank-timeout-ac = 10` to avoid waiting three minutes), press a key. Screen returns => R4 closes with no code change.
+   * **R7-b. PAM unlocker on the real setuid path.** Verify `/usr/local/etc/pam.d/hikari-unlocker` exists and the binary is `4555`, then lock/unlock. Never runtime-verified.
+   * **R7-c. Phase 50 touch/gesture checks.** Tap-to-focus, drag-to-move/resize, a configured 3-finger swipe, pinch passthrough, multi-output touch confinement.
+   * **R7-d. Phase 40 multi-window guards.** Open/close/resize many windows across sheets.
+
+   **R8. `clang-format` / TC-FORMAT-01 -- DECISION, then possibly nothing.**
+
+   `.clang-format` was fixed in Phase 68 (`Language: Cpp`) so it now loads -- but the configured style (8-wide tabs, Allman) **does not describe this tree** (2-space, K&R-ish). Running it would reformat every file and destroy `git blame`.
+   *Three options:* (i) rewrite `.clang-format` to describe the existing style and only then enforce; (ii) leave it unenforced and document that; (iii) reformat wholesale in one isolated commit. **Recommend (i).** No code change until chosen.
+
+   **R9. Small hygiene. ~1 h total, batchable.**
+
+   * `hikari_command_execute()`'s blocking `waitpid` (`command.c`) -- align with the `WNOHANG` pattern used in `lock_mode.c`/`bar.c`. Not believed to stall in practice (TODOS P3, Finding 6a).
+   * Verify whether the "~14 open PR #1 review threads" recorded in earlier briefings still exist; close or drop the item.
+   * Duplicate `wl_list_init(&server->outputs)` in `server_init()` (noted Phase 52, never actioned).
+
+   10. Phase 54 view-teardown hardening -- STILL OPEN, and MISSING from the original R1-R9 list.**
+
+   Surfaced by the R1 sweep: `PLANS.md` item -5 has been "awaiting approval" since Phase 54 and never resolved, and its sub-items are scattered across the Phase 55, 61 and 54 sections of `TODOS.md` as four separate live entries. **The Phase 84 plan omitted it entirely** -- which is precisely the failure R1 exists to catch.
+
+   Its W2 (initialise all seven `wl_list` links in `hikari_view_init()`) **is already done** -- Phase 56 implemented it, verified 2026-08-22. What remains:
+
+   * **R10-a.** Document the view ownership graph in `BLUEPRINT.md` -- seven links, six owning pointers, five teardown entry points. Docs only, zero risk. Also satisfies the Phase 55 "View Visibility State" section item.
+   * **R10-b.** `hikari_view_check_invariants()` / `view_assert_visible_consistent()` -- the six-way consistency checker. **Needs the Phase 54 decision that was never taken:** debug-only, or always-on per the Phase 61 policy? Note the Phase 61 finding that `-DNDEBUG` makes every `assert()` dead in shipped binaries, which argues for always-on `wlr_log` -- and note that the layer trees (Phase 73) removed one of the six representations, so the checker is smaller than when it was specified.
+   * **R10-c.** Headless smoke test for teardown sequences under `MALLOC_CONF=junk:true`, wired to a `make` target. **Caveat recorded in Phase 67:** the planned client binds `zwlr_virtual_pointer_v1`, so it must be written against the per-device mapping fixed there, not the cursor-wide call it replaced.
+
+   *Relationship to R5:* R10-b and R5 (dead asserts) overlap -- both concern what `view.c` checks at runtime and how. **Decide R10-b first**, since it sets the policy R5 would then apply.
+
+   **R11. `XDG_RUNTIME_DIR` on ZFS -- verified still true, administrative not code.**
+
+   Verified 2026-08-22: the path is `/var/run/xdg/orpheus497` (set by `pam_xdg`), **not** the `/var/run/user/1001` recorded in older entries, and `df -T` reports **zfs**. `/tmp` *is* correctly `tmpfs`, so the README procedure was applied -- but `XDG_RUNTIME_DIR` does not point at it.
+
+   `posix_fallocate()` fails on ZFS, so clients placing `wl_shm` pools there fail; `linux-dmabuf` (Phase 33) spares GPU clients, which is why this is survivable rather than fatal, and it is consistent with the 24 `firefox.*.core` files sitting in `/var/coredumps`. **Compositor-side it is a non-issue** -- wlroots uses anonymous POSIX SHM (BLUEPRINT section 13, FB-1).
+
+   *No code change.* The fix is administrative: point `pam_xdg` at a tmpfs, or mount one at that path. Documented rather than implemented, since it is the user's system configuration.
+
+   ---
+
+   **Deliberately NOT planned, with reasons:**
+   * **OBS ScreenCast** -- downstream of this project; every compositor-side requirement is verified working (Phase 81). portal-wlr is the adopted backend. `grim` remains the control that isolates compositor from client.
+   * **libdrm** -- declined Phase 82; it was never a necessity.
+   * **Configurable clock offset** -- declined Phase 82; current placement confirmed fine.
+   * **Pinning a DRM device** -- explicitly rejected Phase 83; would hard-code a choice the stack is making correctly.
+   * **`WITH_EXT_IMAGE_CAPTURE`** -- stays opt-in until a client can use it without black frames.
+
+   **Suggested order:** R1 (done) -> R7-a -> (R4 if needed) -> R6 -> R10-a -> R2 -> R10-b -> R3 -> R5 -> R8/R9. R11 is administrative and independent.
+   Rationale: R1 makes every later priority trustworthy; R7-a is two minutes and may close R4 outright; R6 is a safe warm-up; R2 and R3 are the two `view.c` cycles and must stay apart.
+
 
 -13. **Phase 70 workstream programme -- STATUS as of 2026-08-22 14:46.**
 
@@ -116,7 +237,7 @@
 
    **W8. XWayland scene integration (N5) -- depends on W2, MUST NOT PRECEDE IT.** Supersedes and subsumes item -9 below, which is now **confirmed fact rather than a hypothesis**: `xwayland_unmanaged_view.c` contains no `wlr_scene` reference at all, and `xwayland_view.c:537` attaches only border and indicator frame. Add `wlr_scene_surface_create`/`wlr_scene_subsurface_tree_create` under the existing `scene_tree` at map time (not init -- the `wlr_surface` does not exist until `associate` fires), and give `xwayland_unmanaged_view.c` a tree in `layers.views` (or `layers.overlay` for override-redirect). Tear down on unmap so a dissociate/re-associate cycle neither leaks nor double-attaches.
 
--10. **Phase 68 build + runtime verification -- USER-RUN, single cycle, everything else is blocked behind it.**
+-10. **[CLOSED -- Phase 84 sweep, 2026-08-22] Phase 68 build + runtime verification.** Built and running for many cycles since; XWayland starts and renders. Original text retained below for the record.
 
    Phases 61-68 are all implemented and none have been compiled. The agent cannot build (`.o` files are `root:wheel`) and cannot run the compositor, so this one cycle has to answer every open question at once. Steps 1-3 are sequenced so a crash at any point still yields usable evidence.
 
@@ -128,11 +249,11 @@
 
    **Blocked behind this cycle:** the Phase 64 XWayland content gap (untestable until XWayland starts), the Phase 50 touch/gesture runtime checks, and the Phase 40 multi-window guards.
 
--11. **Dead-assert remediation -- NOT STARTED, needs scoping (Phase 68 finding).**
+-11. **[SUPERSEDED by R5 -- count corrected to 255] Dead-assert remediation.** Still not started; scoping decision required. See item -14 R5.
 
    234 `assert()` calls across 32 files (`view.c`: 101) are compiled out by `-DNDEBUG` in every shipped binary. Phase 61 approved always-on `wlr_log(WLR_ERROR)` + safe bail as the replacement policy, but it has only reached a handful of sites; Phase 68 converted `server->seat` because it was guarding a live allocation. The remainder need triage into three buckets before any code changes: (a) guarding an allocation or external return value -- convert, (b) documenting an internal invariant that cannot fail given the current call graph -- leave, or (c) genuinely unreachable -- delete. Bucket (a) is the only one with a live crash risk. Do not sweep mechanically; Phase 47 already showed one `assert` (`add_keyboard`) to be a sound invariant that would have been wrong to rewrite defensively.
 
--9. **XWayland surface content — NOT YET APPROVED, not started (found in Phase 64).**
+-9. **[CLOSED -- FIXED in Phase 78, verified 2026-08-22] XWayland surface content.** Both managed and override-redirect surfaces now attach via `wlr_scene_subsurface_tree_create()`.
 
    `src/xwayland_view.c` creates `xwayland_view->scene_tree` and attaches only `hikari_border_init()` and `hikari_indicator_frame_init()` to it. No `wlr_scene_subsurface_tree_create()` (or equivalent) is called for `xwayland_surface->surface` anywhere in the file, so a managed X11 window should render its border and indicator frame with **no content inside**.
 
@@ -144,7 +265,7 @@
 
    **Ordering note:** this is the third "was never wired up" gap found in a row (popup scene nodes, layer-popup scene nodes, now XWayland content). Step 4 below — the headless smoke test — is what would have caught all three before release, and its value rises with each one found by hand.
 
--8. **Phase 61 Steps 3 and 4 — approved, not yet started.** Steps 1 (crash fix + Finding A) and 2 (Finding B) are implemented; see DECISIONS_LOG Phase 61. These two remain.
+-8. **[SUPERSEDED by R10] Phase 61 Steps 3 and 4 — approved, not yet started.** Steps 1 (crash fix + Finding A) and 2 (Finding B) are implemented; see DECISIONS_LOG Phase 61. These two remain.
 
    **STEP 3 — Always-on invariant checks (user decision recorded: always-on `wlr_log(WLR_ERROR)` + safe bail, NOT `assert()`).**
 
@@ -169,7 +290,7 @@
    * **Orphaned `hikari-topbar` helpers.** Four alive at 14:56 from crashed sessions. `bar.c` forks them and nothing reaps them when the compositor dies; they survive as session leaders. Also observed in Phase 53.
    * **`XDG_RUNTIME_DIR` on ZFS.** Reclassify from cosmetic backlog to live crash amplifier: `posix_fallocate()` is unsupported there, so `wl_shm` clients fail their buffer allocation and disconnect abruptly, driving exactly the teardown storms that expose the defects above.
 
--7. **Phase 58 Issue 1 — Top bar: centre lane + real opacity (PLANNED, awaiting a decision on the config question; see DECISIONS_LOG Phase 58 for the analysis).** Issue 2 of Phase 58 is done (Phase 59). This is the remaining half.
+-7. **[CLOSED -- implemented in Phase 60] Phase 58 Issue 1 — Top bar: centre lane + real opacity.** Issue 2 of Phase 58 is done (Phase 59). This is the remaining half.
 
    **Part A — layout (clock/date to centre, WiFi/brightness/volume/battery to right).** Both files must change together; changing only `topbar.c` cannot work, because centre is not representable today.
    1. `include/hikari/bar.h`: replace `bool align_right` on `struct hikari_bar_block` with a three-valued alignment (`enum hikari_bar_align { LEFT, CENTER, RIGHT }`), so the parser can express centre at all.
@@ -189,7 +310,7 @@
    * **(ii) Scoped (recommended):** add a dedicated `bar` colour + `bar_opacity` (0.0-1.0) to `struct hikari_configuration` and the UCL parser, used only by the top bar. Leaves `hikari_color_convert()` and every other colour untouched, so there is no risk to borders/indicators.
    * **(iii) General:** extend `hikari_color_convert()` and the config parser to accept 8-digit `0xRRGGBBAA` everywhere. Most flexible and most invasive — it changes the alpha of *every* colour path in the compositor (borders, indicator bars, frames, output background), so it needs a careful audit of each consumer and is the only option that could regress unrelated visuals.
 
--6. **Phase 55 REFACTOR: Single-Writer Visibility Transitions — the remediation (see DECISIONS_LOG Phase 55 for the root-cause analysis this derives from).**
+-6. **[CLOSED -- implemented in Phase 56] Phase 55 REFACTOR: Single-Writer Visibility Transitions.**
 
    **The flaw being remediated:** the fact "this view is visible" is stored in six places (hidden flag; `workspace->views`; `hikari_server.visible_views`; `group->visible_views`; `group->visible_server_groups` linked into `hikari_server.visible_groups`; scene-node enabled bit). No single function owns the transition — entry is split across `increase_group_visiblity()` + `place_visibly_above()`, exit is the single `hide()`, and `hikari_view_lower()` re-implements the whole linkage a third time inline. Group lifetime depends on an unwritten, unasserted invariant tying #4 and #5 together, and `hikari_view_unmap()` contains a branch that violates it.
 
@@ -268,7 +389,7 @@
 
    **Confidence statement, stated honestly:** this refactor removes a *class* of defect and one *specific* identified UAF path (2k). It has not been proven to be the crash the user is hitting right now, because no crash output or core dump has yet been captured (see Phase 53 — `/var/coredumps` does not exist, and `start-hikari.sh` does not redirect stderr). Step 4 is what closes that gap. If the captured message turns out to name a different fault, this refactor is still correct and still worth doing, but it would not be the fix — and that should be stated plainly rather than assumed.
 
--5. **Phase 54 View-Teardown Ownership-Graph Hardening — PLAN ONLY, awaiting approval (see DECISIONS_LOG Phase 54 for the measured basis and justification).** Addresses the structural problem that view teardown sequences seven `wl_list` links and six owning pointers by hand, from five entry points, with no mechanical verification. Four workstreams:
+-5. **[SUPERSEDED by R10 -- its W2 is DONE (Phase 56, verified 2026-08-22)] Phase 54 View-Teardown Ownership-Graph Hardening.** Addresses the structural problem that view teardown sequences seven `wl_list` links and six owning pointers by hand, from five entry points, with no mechanical verification. Four workstreams:
 
    **W1 — Document the ownership graph (`BLUEPRINT.md`, docs only, zero regression risk).**
    1. Add a "View Ownership Graph" section: a table of all seven list links (`output_views`, `workspace_views`, `sheet_views`, `group_views`, `visible_group_views`, `visible_server_views`, `children`) — for each, the owning container, the function that links it, the function that unlinks it, and which lifecycle phases it is valid in.
@@ -300,7 +421,7 @@
    * **W3 release policy:** should the invariant checker be debug-only (consistent with existing `assert()` usage, zero release cost) or always-on with logged degradation (catches field failures, small runtime cost)? Relevant because Phase 53 showed release-stripped asserts turn a loud abort into a silent corruption.
    * **W4 priority:** do W4 first as the fastest route to the live Phase 53 crash, or keep the stated risk-reduction order?
 
--4. **Phase 53 Close-Window / Popup-Button Crash — investigated, empirical reproduction needed (see DECISIONS_LOG Phase 53 for the full trace).** Re-audited the Phase 42/44/45 popup/subsurface `fini`-dispatch fix against the actual wlroots 0.20 signal-emission order (not assumption) and found it sound — ruled out as the cause of this specific crash. Live-system forensics found the compositor is aborting (SIGABRT, signal 6) 4 times today on the FreeBSD target, 3 of them on the current fully-patched, DEBUG=YES binary (assertions live, not stripped) — not segfaulting. No crash message was captured and no core dump exists. User-run steps, in order (all read-only/diagnostic, no code changes, low risk, a few minutes total):
+-4. **[CLOSED -- root-caused in Phases 61-63] Phase 53 Close-Window / Popup-Button Crash.** Re-audited the Phase 42/44/45 popup/subsurface `fini`-dispatch fix against the actual wlroots 0.20 signal-emission order (not assumption) and found it sound — ruled out as the cause of this specific crash. Live-system forensics found the compositor is aborting (SIGABRT, signal 6) 4 times today on the FreeBSD target, 3 of them on the current fully-patched, DEBUG=YES binary (assertions live, not stripped) — not segfaulting. No crash message was captured and no core dump exists. User-run steps, in order (all read-only/diagnostic, no code changes, low risk, a few minutes total):
    1. `sudo mkdir -p /var/coredumps && sudo chmod 1777 /var/coredumps` — so a core dump is captured this time if the abort recurs (currently silently fails: `kern.corefile` points at a directory that doesn't exist).
    2. Reproduce with output captured: run `./start-hikari.sh 2>&1 | tee /tmp/hikari-crash.log` (or redirect however is convenient) from a nested/test session, then close a window or click a popup button as before.
    3. Read the captured message. It will be one of three shapes, each pointing to a different next step:

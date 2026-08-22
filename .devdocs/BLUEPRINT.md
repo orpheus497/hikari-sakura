@@ -1,6 +1,6 @@
 # Hikari Project Blueprint
 
-*Last Updated:* 2026-08-22 15:02
+*Last Updated:* 2026-08-22 15:32
 
 ## 1. System Architecture
 
@@ -1028,17 +1028,19 @@ All six run before returning to the event loop, so no frame is ever committed mi
 
 **Design principle governing this register (Phase 70, D2/D3).** Platform behaviour is to be **probed at runtime via public API and logged**, never assumed in a hardcoded platform branch. `struct wlr_renderer.render_buffer_caps` (`wlr/render/wlr_renderer.h:31`, a bitmask of `WLR_BUFFER_CAP_DATA_PTR | DMABUF | SHM`) is the sanctioned probe. `hikari_platform_probe()` (planned, W1) emits one structured `wlr_log(WLR_INFO)` block at startup covering renderer name, buffer caps, DRM device(s) opened, multi-GPU status, `XDG_RUNTIME_DIR` filesystem type and `posix_fallocate` support, and dmabuf negotiation result.
 
-| # | Constraint | Status | Today | Native fix requires |
-|---|---|---|---|---|
-| **FB-1** | ZFS returns `EOPNOTSUPP`/`EINVAL` from `posix_fallocate()` — copy-on-write cannot give POSIX pre-allocation guarantees (FreeBSD r325320, 2017) | **Not a hikari defect.** wlroots uses `shm_open()` — anonymous POSIX SHM — which bypasses ZFS entirely (verified, DECISIONS_LOG line ~1798) | Client-side only. Mitigated by advertising `zwp_linux_dmabuf_v1` (`server.c:1510`) so GPU clients skip shm, plus the ZFS warning in `start-hikari.sh:70-81` | Upstream: toolkits preferring `SHM_ANON` over files in `XDG_RUNTIME_DIR`. Admin: tmpfs `/tmp` via `zfs set canmount=noauto zroot/tmp` (ZFS automount otherwise mounts *over* the fstab tmpfs) |
-| **FB-2** | A compositor cannot CPU-map allocator-provided buffers to write Cairo pixels into them | **RESOLVED Phase 72** (corrected Phase 70 — never a FreeBSD workaround). wlroots 0.20.2 exposes exactly one allocator entry point (`wlr_allocator_autocreate`) and **no public shm/CPU allocator**, so this is true on every platform and the custom `wlr_buffer_impl` is idiomatic | **One** implementation, `src/buffer.c`. The two byte-identical copies (`output.c`, `server.c`) are gone, and `hikari_platform.render_buffer_caps` now answers the capability question by probing instead of assuming | Nothing outstanding here. Genuine upstream ask, unchanged: a public `wlr_shm_allocator_create()`. **Phase 33's "fails with GBM buffers on FreeBSD/drm-kmod" framing is retired at its source — the code comment no longer says it either** |
-| **FB-3** | **Hybrid Intel + NVIDIA with `hw.nvidiadrm.modeset=1`** — two KMS devices enumerated; wlroots picks one unaided | **PRESENT, no known impact (downgraded Phase 83)** | Unhandled by choice. `card0` = Intel Iris Xe (eDP-1), `card1` = NVIDIA GTX 1650 Ti. **With FB-4 resolved, wlroots is evidently selecting a workable device on its own**, so the configuration causes no observed harm | Nothing to do while nothing is broken. `hikari_platform_log()` already names the DRM node and the `WLR_DRM_DEVICES` override whenever more than one GPU is present, so a future recurrence is self-diagnosing. Do **not** pin a device pre-emptively — that would hard-code a choice the current stack is making correctly |
-| **FB-4** | eDP-1 scanout swapchain test failure | **RESOLVED / STALE — closed Phase 83** | The laptop's built-in panel has worked "for a long time" (user, 2026-08-22). The failure was real when recorded in Phase 19 but has since been fixed by movement in the graphics stack below hikari — Mesa is now 26.1.6, libdrm 2.4.134 | Nothing. **This entry was carried as an open CRITICAL blocker for ~60 phases after it stopped being true**, distorting every priority list that referenced it. See the Phase 83 note on why it survived so long |
-| **FB-5** | `epoll-shim` needed for wlroots' `wl_event_loop` | Handled | `Makefile:176-179`, FreeBSD-conditional | Acceptable as-is. A native `kqueue` loop is not available while wlroots owns the event loop |
-| **FB-6** | `explicit_bzero` / `setgroups` / `usleep` need `__BSD_VISIBLE`, which FreeBSD's `<sys/cdefs.h>` clears whenever `_POSIX_C_SOURCE` is defined | **RESOLVED Phase 73 — flag retired** (user ruling, Option 1) | `WITH_POSIX_C_SOURCE` no longer exists. The three symbols are reached normally because nothing in the build defines a feature-test macro any more | Nothing outstanding. The knob was never set by `WITH_ALL`, had been a broken configuration since it was added, and strict-POSIX namespace enforcement had no consumer in a FreeBSD-only compositor. `src/topbar.c`'s `__BSD_VISIBLE` comment is now unconditionally true and was kept for that reason |
-| **FB-7** | NVIDIA proprietary driver present on the host | **Note only, no action** | Not a project dependency | AGENTS.md §2 governs *project* dependencies; a user's system driver is out of scope. But hikari must not *require* it. With FB-4 resolved there is no FB-3 fix to apply — see that row |
-| **FB-8** | `.ifdef` tests definedness, not value, so `make WITH_XWAYLAND=NO` still **enabled** XWayland — no feature could be disabled from the command line at all | **RESOLVED Phase 72** | All 11 switches now `.if defined(X) && ${X:tu} != "NO"`; verified by `make -V` across the matrix, default config unchanged | Nothing outstanding. **Note for future edits:** `.for` + `.undef` normalisation does **not** work — bmake keeps command-line variables in a scope `.undef` cannot touch, so the check must be repeated at each site. Recorded in the Makefile comment |
-| **FB-9** | `sysctlbyname("hw.acpi.acline", …)` is FreeBSD-native and unavailable to the Linux-based IDE analysis path | **Introduced by W4** (Q2 power-aware blank timeout) | Idiom already proven at `topbar.c:328-332`; `<sys/sysctl.h>` is new to `lock_mode.c` | Guard as `lock_mode.c:16-18` already guards `explicit_bzero`, so clangd keeps working off-target. No new library. A machine with no battery must fall back to the AC timeout, not to `0` |
+*Every row carries a **last-verified date**. This is the Phase 83 process fix: FB-4 was carried as an open CRITICAL blocker for roughly sixty phases after it stopped being true, because the register recorded a finding but never a re-check. **Do not cite a row as a reason to act without re-verifying it first**, and update the date when you do.*
+
+| # | Constraint | Status | Today | Native fix requires | Last verified |
+|---|---|---|---|---|---|
+| **FB-1** | ZFS returns `EOPNOTSUPP`/`EINVAL` from `posix_fallocate()` — copy-on-write cannot give POSIX pre-allocation guarantees (FreeBSD r325320, 2017) | **Not a hikari defect.** wlroots uses `shm_open()` — anonymous POSIX SHM — which bypasses ZFS entirely (verified, DECISIONS_LOG line ~1798) | Client-side only. Mitigated by advertising `zwp_linux_dmabuf_v1` (`server.c:1510`) so GPU clients skip shm, plus the ZFS warning in `start-hikari.sh:70-81` | Upstream: toolkits preferring `SHM_ANON` over files in `XDG_RUNTIME_DIR`. Admin: tmpfs `/tmp` via `zfs set canmount=noauto zroot/tmp` (ZFS automount otherwise mounts *over* the fstab tmpfs) | 2026-08-22 — `XDG_RUNTIME_DIR` confirmed still ZFS; `/tmp` correctly tmpfs. See R11 |
+| **FB-2** | A compositor cannot CPU-map allocator-provided buffers to write Cairo pixels into them | **RESOLVED Phase 72** (corrected Phase 70 — never a FreeBSD workaround). wlroots 0.20.2 exposes exactly one allocator entry point (`wlr_allocator_autocreate`) and **no public shm/CPU allocator**, so this is true on every platform and the custom `wlr_buffer_impl` is idiomatic | **One** implementation, `src/buffer.c`. The two byte-identical copies (`output.c`, `server.c`) are gone, and `hikari_platform.render_buffer_caps` now answers the capability question by probing instead of assuming | Nothing outstanding here. Genuine upstream ask, unchanged: a public `wlr_shm_allocator_create()`. **Phase 33's "fails with GBM buffers on FreeBSD/drm-kmod" framing is retired at its source — the code comment no longer says it either** | 2026-08-22 — one `wlr_buffer_impl` in tree; `render_buffer_caps` probe live |
+| **FB-3** | **Hybrid Intel + NVIDIA with `hw.nvidiadrm.modeset=1`** — two KMS devices enumerated; wlroots picks one unaided | **PRESENT, no known impact (downgraded Phase 83)** | Unhandled by choice. `card0` = Intel Iris Xe (eDP-1), `card1` = NVIDIA GTX 1650 Ti. **With FB-4 resolved, wlroots is evidently selecting a workable device on its own**, so the configuration causes no observed harm | Nothing to do while nothing is broken. `hikari_platform_log()` already names the DRM node and the `WLR_DRM_DEVICES` override whenever more than one GPU is present, so a future recurrence is self-diagnosing. Do **not** pin a device pre-emptively — that would hard-code a choice the current stack is making correctly | 2026-08-22 — downgraded; eDP-1 working means the device choice is fine |
+| **FB-4** | eDP-1 scanout swapchain test failure | **RESOLVED / STALE — closed Phase 83** | The laptop's built-in panel has worked "for a long time" (user, 2026-08-22). The failure was real when recorded in Phase 19 but has since been fixed by movement in the graphics stack below hikari — Mesa is now 26.1.6, libdrm 2.4.134 | Nothing. **This entry was carried as an open CRITICAL blocker for ~60 phases after it stopped being true**, distorting every priority list that referenced it. See the Phase 83 note on why it survived so long | 2026-08-22 — **user confirms the panel has worked for a long time** |
+| **FB-5** | `epoll-shim` needed for wlroots' `wl_event_loop` | Handled | `Makefile:176-179`, FreeBSD-conditional | Acceptable as-is. A native `kqueue` loop is not available while wlroots owns the event loop | 2026-08-13 — unchanged since; `epoll-shim` still in the Makefile |
+| **FB-6** | `explicit_bzero` / `setgroups` / `usleep` need `__BSD_VISIBLE`, which FreeBSD's `<sys/cdefs.h>` clears whenever `_POSIX_C_SOURCE` is defined | **RESOLVED Phase 73 — flag retired** (user ruling, Option 1) | `WITH_POSIX_C_SOURCE` no longer exists. The three symbols are reached normally because nothing in the build defines a feature-test macro any more | Nothing outstanding. The knob was never set by `WITH_ALL`, had been a broken configuration since it was added, and strict-POSIX namespace enforcement had no consumer in a FreeBSD-only compositor. `src/topbar.c`'s `__BSD_VISIBLE` comment is now unconditionally true and was kept for that reason | 2026-08-22 — flag retired in Phase 73; no `POSIX_C_SOURCE` outside `.devdocs` |
+| **FB-7** | NVIDIA proprietary driver present on the host | **Note only, no action** | Not a project dependency | AGENTS.md §2 governs *project* dependencies; a user's system driver is out of scope. But hikari must not *require* it. With FB-4 resolved there is no FB-3 fix to apply — see that row | 2026-08-22 — NVIDIA driver still loaded; still out of scope |
+| **FB-8** | `.ifdef` tests definedness, not value, so `make WITH_XWAYLAND=NO` still **enabled** XWayland — no feature could be disabled from the command line at all | **RESOLVED Phase 72** | All 11 switches now `.if defined(X) && ${X:tu} != "NO"`; verified by `make -V` across the matrix, default config unchanged | Nothing outstanding. **Note for future edits:** `.for` + `.undef` normalisation does **not** work — bmake keeps command-line variables in a scope `.undef` cannot touch, so the check must be repeated at each site. Recorded in the Makefile comment | 2026-08-22 — `make -V` matrix re-run; `WITH_*=NO` works |
+| **FB-9** | `sysctlbyname("hw.acpi.acline", …)` is FreeBSD-native and unavailable to the Linux-based IDE analysis path | **Introduced by W4** (Q2 power-aware blank timeout) | Idiom already proven at `topbar.c:328-332`; `<sys/sysctl.h>` is new to `lock_mode.c` | Guard as `lock_mode.c:16-18` already guards `explicit_bzero`, so clangd keeps working off-target. No new library. A machine with no battery must fall back to the AC timeout, not to `0` | 2026-08-22 — `hw.acpi.acline` read live; guard present in `lock_config.c` |
 
 **Assessment (Phase 70, updated Phase 83).** Of the nine rows, **FB-2, FB-4, FB-6 and FB-8 are resolved**, and **FB-3 is downgraded to present-but-harmless**. **No row in this register is now a known-open defect.** FB-4 — the eDP-1 scanout failure carried as CRITICAL since Phase 19 — turned out to have been fixed by the graphics stack below hikari and to have been stale for a long time; it was never re-verified because the documentation treated "recorded" as "still true". FB-1 and FB-2 had drifted into being cited as hikari-side FreeBSD hacks and were neither; that record is now corrected both here and in the code comment that originally asserted it. The overall FreeBSD-native debt is therefore **much smaller than the accumulated prose suggested**, and the remaining risk concentrates in one hardware-configuration question that a single environment variable can answer — which `hikari_platform_log()` now names in the log, beside the symptom, whenever more than one GPU is present.
 
@@ -1062,3 +1064,67 @@ All six run before returning to the event loop, so no frame is ever committed mi
 **Diagnostic technique that works.** `grim` is the control: it binds `wlr-screencopy` directly and never faces the protocol choice, so **if `grim` captures real content and a portal client does not, the compositor is not implicated.** Verified this way in Phase 80 (3840x1200, 1520/1600 samples non-black). For the portal side, `xdg-desktop-portal-wlr -l TRACE` prints the chosen backend and per-frame errors -- but it must be started *before* the D-Bus-activated instance claims the name, or it exits with `failed to acquire service name: File exists`.
 
 **Still open.** OBS ScreenCast renders black with every compositor-side requirement verified. The residual failure is in portal-wlr -> PipeWire -> OBS. Leading hypothesis is the same hybrid-GPU dmabuf problem as FB-3: PipeWire negotiates dmabuf with OBS, and a buffer allocated on one GPU and imported on the other yields a connected stream of uniformly black frames. portal-wlr's `force_mod_linear=1` governs only its own allocation, not that handoff, which is consistent with it not helping.
+
+## 15. View Ownership Graph (added 2026-08-22, R10-a)
+
+*The structural documentation Phase 54 called for and never got. `struct hikari_view` is the most crash-prone type in the tree -- eight phases (42, 44, 45, 55, 56, 57, 61, 63) were spent on its teardown -- and the reason is that its state is spread across seven list links and a set of pointers with differing ownership, hand-sequenced from several entry points. This section states what is actually true so the next change does not have to re-derive it.*
+
+### The seven list links
+
+Every one is initialised in `hikari_view_init()` (Phase 56 -- verified 2026-08-22) precisely so that a later `wl_list_remove()` on an unlinked view is a structural no-op rather than a write through indeterminate memory from `hikari_malloc`.
+
+| Link | Head | Meaning |
+|---|---|---|
+| `output_views` | `hikari_output.views` | every view on that output; **stacking order, front-first** |
+| `workspace_views` | `hikari_workspace.views` | visible on that workspace |
+| `sheet_views` | `hikari_sheet.views` | membership of a sheet |
+| `group_views` | `hikari_group.views` | membership of a group |
+| `visible_group_views` | `hikari_group.visible_views` | visible subset of the group |
+| `visible_server_views` | `hikari_server.visible_views` | visible across the whole server |
+| `children` | *(head; `hikari_view_child.link`)* | subsurfaces and popups this view owns |
+
+**Four of these -- `workspace_views`, `visible_group_views`, `visible_server_views`, and the group's own `visible_server_groups` -- are written by exactly one function**, `view_link_visible_at()`, with `view_unlink_visible()` as its inverse. That single-writer property is the Phase 55/56 remediation and **must not be reintroduced elsewhere**; three separate hand-rolled copies of that linkage are what produced the Phase 55 use-after-free.
+
+`output_views` and `sheet_views` are moved by `move_to_top()` / `move_to_bottom()`, which is stacking, not visibility -- a distinction that matters because Phase 73 found that reordering these lists had **no effect on what was drawn** until the scene node was reordered too.
+
+### Pointer ownership
+
+| Field | Owned? | Released by |
+|---|---|---|
+| `title`, `id` | **owned** (`hikari_malloc`) | `hikari_view_fini()` |
+| `maximized_state` | **owned** | `hikari_view_fini()` |
+| `tile` | **owned when tiled** | `hikari_view_fini()`, after `hikari_tile_detach()` |
+| `group` | borrowed; **may be freed as a side effect** | `detach_from_group()` frees the group when it empties |
+| `sheet`, `output` | borrowed | -- |
+| `mark` | borrowed (marks are global) | `hikari_mark_clear()` clears the back-reference only |
+| `surface` | borrowed -- wlroots owns it | -- |
+| `scene_node` | borrowed -- the **shell wrapper** owns the tree | `xdg_view.c` / `xwayland_view.c` destroy paths |
+| `decoration.wlr_decoration` | borrowed | listeners removed in `hikari_view_fini()` |
+
+**The dangerous one is `group`.** It is a borrowed pointer whose lifetime the view can end: `detach_from_group()` frees the group when the last member leaves. Phase 55's use-after-free was exactly this -- a view left linked into three visibility lists while its group was freed underneath them.
+
+### Teardown entry points
+
+```
+client destroys surface ─► shell destroy_handler ─┐
+                                                  ├─► hikari_view_unmap()  (if mapped)
+surface unmap ───────────► shell unmap_handler ───┘        │
+                                                           ▼
+                                            hikari_view_fini() ─► hikari_free(wrapper)
+```
+
+* `hikari_view_unmap()` -- reversible. Unlinks visibility, dispatches every child through its own `fini` pointer, leaves the struct intact for a possible remap. **The scene tree survives this** (Phase 78 found the hard way that it is destroyed in `destroy_handler`, not here).
+* `hikari_view_fini()` -- terminal. Asserts hidden, unmapped and not forced; then releases owned pointers, detaches from group/sheet/mark/tile.
+* Callers: `xdg_view.c:269/346` and `xwayland_view.c:236/266` on the live paths, plus `xdg_view.c:794/807` and `xwayland_view.c:591` as **init failure paths** -- which is why `hikari_view_init()` must leave every link and pointer in a removable state before any listener is registered.
+* Indirect: `hikari_output_fini()` -> `hikari_workspace_merge()` -> `hikari_view_evacuate()` moves views between outputs at output teardown without going through unmap at all.
+
+### Invariants worth checking
+
+Stated here because R10-b would encode them, and because each was violated at least once:
+
+1. `forced` implies `hidden` (asserted at `view.c:108`). **Several branches keying on `!hidden && forced` are therefore unreachable** -- the substance of R3.
+2. Membership of the four visibility lists agrees with the `hidden` flag, except for a `forced` view, which is linked while flagged hidden.
+3. The scene node's enabled state agrees with `hidden` -- outside lock mode, where the layer tree governs instead (Phase 73).
+4. A group reachable from `hikari_server.visible_groups` has at least one member in its `visible_views`.
+
+**Caveat for R10-b:** Phase 73 removed one of the six representations Phase 54 counted, because the layer trees made per-view visibility toggling unnecessary in lock mode. Any checker written now is smaller than the one originally specified -- **re-derive it from this section rather than from the Phase 54 text.**

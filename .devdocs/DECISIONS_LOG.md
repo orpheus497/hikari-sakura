@@ -1,3 +1,133 @@
+## [2026-08-22 15:30] Phase 86: R6 -- shim retired; R10-a -- view ownership graph documented
+
+**Status:** BOTH COMPLETE. 0 warnings across **three** build configurations. Unbuilt.
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
+
+### R6 -- `hikari_server_create_argb8888_buffer` retired
+
+W1 kept it "for one release" so the buffer consolidation would not churn call sites. Three callers moved to `hikari_buffer_create_argb8888()` directly -- `bar.c`, `indicator_bar.c`, `lock_indicator.c` -- and the shim plus its `server.h` declaration are gone. `grep` confirms no reference remains; the tree now has one buffer entry point and one `wlr_buffer_impl`.
+
+**A fourth reference was a stale comment, and it mattered more than the code.** `bar.c` carried a block asserting the bar uses a CPU-backed buffer because *"allocating through wlr_allocator fails on the target platform (GBM buffer mapping on FreeBSD/ZFS)"*, citing Phase 33. That framing was **retired in Phase 72** (FB-2): wlroots exposes no allocator a compositor can write pixels into **on any platform**, so the custom `wlr_buffer_impl` is idiomatic rather than a FreeBSD workaround. The comment now says that and points at BLUEPRINT section 13.
+
+Worth noting: the Phase 72 correction was applied to the register and to the moved implementation's own comment, but **this second copy of the wrong explanation survived in `bar.c` for fourteen phases**. Same failure as FB-4 and as the Phase 85 sweep -- a claim recorded in more than one place, corrected in only one.
+
+### R10-a -- view ownership graph documented (BLUEPRINT section 15)
+
+The structural documentation Phase 54 specified and never received. Written from the code, verified 2026-08-22, not from the Phase 54 text -- which is now partly out of date.
+
+Contents: the seven list links with their heads and meanings; which four have a **single writer** (`view_link_visible_at()`, the Phase 55/56 remediation) and must never acquire another; pointer-by-pointer ownership; the teardown entry points including the three **init-failure** paths that constrain what `hikari_view_init()` must leave behind; and four invariants.
+
+**Three things the writing surfaced:**
+
+1. **`group` is the dangerous pointer.** It is borrowed, but the view can end its lifetime -- `detach_from_group()` frees the group when the last member leaves. That is precisely the Phase 55 use-after-free, and stating it as an ownership property makes it visible in a way "be careful in unmap" never did.
+2. **Stacking and visibility are different list sets**, and conflating them is what hid the Phase 73 bug where reordering `output_views` had no effect on what was drawn until the scene node was reordered too.
+3. **Phase 54's specification is stale.** It counted six visibility representations; Phase 73's layer trees removed one, so a checker written to the original text would be larger than necessary. Section 15 says explicitly to re-derive R10-b from it rather than from Phase 54.
+
+That last point is the R1 lesson recurring: **an approved-but-unexecuted plan decays exactly like an unverified finding.** R10-b should be scoped from section 15.
+
+### Validation
+
+0 warnings across all `src/*.c` in three configurations -- default, full-feature, and full-feature plus `HAVE_EXT_IMAGE_CAPTURE` -- plus `topbar.c`. No shim reference remains anywhere in `src/` or `include/`.
+
+### Modified files
+
+`src/bar.c`, `src/indicator_bar.c`, `src/lock_indicator.c`, `src/server.c`, `include/hikari/server.h`, `.devdocs/BLUEPRINT.md` (new section 15).
+
+---
+
+## [2026-08-22 15:25] Phase 85: R1 executed -- tracker stale-sweep. 85 open items to 16, and the plan itself was incomplete
+
+**Status:** COMPLETE. Documentation only, no product code touched.
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
+
+### Result
+
+`TODOS.md` went from **85 unchecked items to 16**. 55 were verified stale and closed; 22 were duplicates of one another or of the R-series and were consolidated; three carried numbers that were simply wrong and were corrected.
+
+Every closure was verified **against the current tree**, not from memory. A representative sample:
+
+| Claim carried as open | Verified |
+|---|---|
+| "`xwayland_view.c` attaches no surface content" (Phases 64, 65, 68) | 2 `wlr_scene_subsurface_tree_create()` call sites -- **fixed Phase 78** |
+| "XWayland does not start" (Phase 65 P0) | starts and renders -- **fixed Phase 68** |
+| "`setup_idle_inhibit` is unguarded" (Phase 67 P2) | **it is guarded** -- the claim was wrong when written |
+| "`wl_list_init(&server->outputs)` called twice" (Phase 52) | **one** occurrence |
+| "`hikari_view_init()` initialises 1 of 7 links" (Phase 54 W2) | **all seven** are initialised -- done in Phase 56 |
+| "cosmetic enum-compare warnings" (Phase 68 backlog) | **0 warnings** from `dnd_mode.c` |
+| "cursor pointer offset bug" (Phases 61, 63) | **fixed Phase 64** |
+| "orphaned `hikari-topbar` helpers" (Phase 61) | `terminate_and_reap_topbar_child()` present -- **fixed Phase 48** |
+| "`/var/coredumps` does not exist" (Phase 53) | exists; three crash investigations have used it |
+
+### The finding that matters most: the Phase 84 plan was incomplete
+
+The sweep surfaced **R10 -- the Phase 54 view-teardown hardening programme** -- which has sat "awaiting approval" since Phase 54, has its sub-items scattered across four separate live entries in the Phase 54, 55 and 61 sections, and **was omitted entirely from the R1-R9 plan written one phase earlier**.
+
+That is exactly what R1 exists to catch, and it is a second instance of the same failure mode as FB-4: a real item, recorded, never re-read, and therefore invisible to the process that was supposed to plan around it. **The plan was built from what was remembered rather than from what the trackers actually said** -- which is the same error, one level up.
+
+Its W2 (initialise all seven `wl_list` links) turned out to be **already done** (Phase 56). What remains is the ownership-graph documentation, the invariant checker, and the headless smoke test. **R10-b overlaps R5**: both concern what `view.c` checks at runtime and under which policy, so R10-b's decision should precede R5.
+
+### Second addition: R11
+
+`XDG_RUNTIME_DIR` on ZFS was recorded as a P0 in the pre-existing backlog and **verified still true**: the path is `/var/run/xdg/orpheus497` (set by `pam_xdg`), **not** the `/var/run/user/1001` every older entry names, and `df -T` reports zfs. `/tmp` *is* correctly tmpfs, so the README procedure was applied -- it simply is not where `XDG_RUNTIME_DIR` points. Consistent with the 24 `firefox.*.core` files in `/var/coredumps`. Compositor-side a non-issue (FB-1); the fix is administrative, so it is documented rather than implemented.
+
+### Process fix applied
+
+**Every row in BLUEPRINT section 13 now carries a last-verified date**, with an instruction above the table: *do not cite a row as a reason to act without re-verifying it first, and update the date when you do.* This is the direct remedy for the FB-4 failure -- the register recorded findings but never re-checks, so a finding aged into a fact.
+
+`PLANS.md` items -4 through -11 were also swept: five closed as implemented (Phases 56, 60, 61-63, 68, 78), three superseded by R5/R10.
+
+### Corrections to numbers that had drifted
+
+* asserts: **255**, not 234
+* files lacking a comment header: **50 of 65**, not 48 of 55
+* `/var/coredumps`: **6.1 GB across 65 files**, not "14 files, ~8 GB"
+
+### Honest note on method
+
+One edit in this phase mangled eight `PLANS.md` item titles by consuming the title text instead of prefixing it; caught on the verification pass immediately afterwards and repaired. Worth recording only because the fix-then-verify order is what caught it, and skipping that check would have left the file quietly damaged.
+
+---
+
+## [2026-08-22 15:16] Phase 84: Remaining-work programme planned (R1-R9) -- AWAITING APPROVAL
+
+**Status:** PLAN WRITTEN, no step approved, no code changed. Full detail in `PLANS.md` item -14.
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
+
+### Scope
+
+Everything still open after Phases 70-83, scoped into nine items with dependencies, estimates, acceptance criteria and risk notes. The lock-screen programme (W1-W6), the scene-graph restructure, XWayland integration and the portal work are delivered and hardware-confirmed; R1-R9 are the remainder.
+
+### The finding that shaped the plan
+
+Sweeping the trackers to build this revealed that **`TODOS.md` carries roughly thirty unchecked items and a substantial share are already resolved** -- the Phase 64/70 "XWayland renders no content" entries (fixed Phase 78), "XWayland does not start" (fixed Phase 68), W0-1..W0-5 (moot since Phase 83), libdrm and the clock offset (settled Phase 82), FB-6 (resolved Phase 73), and a P2 asserting `setup_idle_inhibit` is unguarded -- which was checked and **is guarded**.
+
+This is the FB-4 disease at file scale, and it is why **R1 (tracker stale-sweep) is proposed first**: every prioritisation after this reasons from that list, and a list that is partly fiction produces confidently wrong priorities. Phase 81 called W0-1 "the single highest-value command available" on exactly that basis, two phases before it turned out to be moot.
+
+### Sequencing principles encoded in the plan
+
+Each is a lesson from this session rather than a generic practice:
+
+1. **One risky change per build cycle.** Phase 78 bundled two, and a crash would have been ambiguous between them; Phase 75 bundled a guess with an evidence-backed fix and the guess survived a full cycle on borrowed credibility.
+2. **`src/view.c` always gets its own cycle** -- the file behind eight crash phases. R2 and R3 both touch it and are explicitly forbidden from shipping together.
+3. **Re-verify any recorded environmental claim before acting on it.** FB-4 was CRITICAL for ~60 phases after it stopped being true.
+4. **Use a library's constructors; never hand-build its structs.** Two crashes, one root cause (Phase 76).
+
+### Notable scoping judgements
+
+* **R3 (`forced` removal) is flagged as deferrable indefinitely.** It is the highest-risk item in the programme and delivers **no user-visible benefit** -- F1/F2 are already fixed by the layer trees. Recommending work be declined is the honest position when the risk/benefit is this lopsided.
+* **R4 is gated, not implemented.** Two minutes of user testing (R7-a) decides whether it needs a fix at all. Implementing speculatively is exactly the Phase 75 error.
+* **R5 (255 asserts) needs a scoping decision before any work**, with a proposal to limit the first pass to bucket (a) -- allocation and external-return guards -- and outside `view.c`. Phase 47 already showed one assert that would have been wrong to convert, so a mechanical sweep is ruled out.
+* **R8 recommends changing `.clang-format` to describe the tree** rather than reformatting the tree to match the config. The config was fixed in Phase 68 so it now loads, but its style (8-wide tabs, Allman) does not describe this codebase (2-space, K&R-ish); running it would rewrite every file and destroy `git blame`.
+
+### Explicitly not planned, with reasons
+
+OBS ScreenCast (downstream; compositor side verified working, portal-wlr adopted) · libdrm (declined Phase 82, never a necessity) · configurable clock offset (declined Phase 82) · pinning a DRM device (rejected Phase 83 -- would hard-code a choice the stack is making correctly) · `WITH_EXT_IMAGE_CAPTURE` (stays opt-in until a client can use it without black frames).
+
+---
+
 ## [2026-08-22 15:12] Phase 83: The eDP-1 blocker was stale -- closed after ~60 phases of being carried as CRITICAL
 
 **Status:** DOCUMENTATION CORRECTION. No code changes. **BLUEPRINT section 13 now lists no known-open defect.**
