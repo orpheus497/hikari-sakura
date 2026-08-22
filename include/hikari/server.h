@@ -140,6 +140,12 @@ struct hikari_server {
   struct wlr_xdg_shell *xdg_shell;
   struct wlr_layer_shell_v1 *layer_shell;
 
+  /* [COMMENT] Class purpose: ext-foreign-toplevel-list-v1. Lets docks, panels
+  and taskbars enumerate open windows -- without it nothing outside the
+  compositor can discover them at all. Each mapped view publishes one handle;
+  see hikari_view_map()/unmap(). */
+  struct wlr_ext_foreign_toplevel_list_v1 *foreign_toplevel_list;
+
   struct wlr_xdg_activation_v1 *xdg_activation;
   struct wl_listener request_activate;
 

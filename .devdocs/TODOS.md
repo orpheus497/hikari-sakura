@@ -1,24 +1,35 @@
 # Granular Task List
 
-*Last Updated:* 2026-08-22 15:30
+*Last Updated:* 2026-08-22 16:23
 
 ## Active List
+
+### Phase 88: R2 — foreign-toplevel list delivered; side-panel intent documented
+
+- [x] **`ext-foreign-toplevel-list-v1` advertised.** Created non-fatally in `server.c` — its absence costs window listing, not the session. This is the enabling dependency for **any** taskbar or dock: without it nothing outside the compositor can discover open windows.
+- [x] **One handle per mapped view**, created on map and destroyed on unmap — so a closed window leaves a dock rather than lingering as a dead entry. Remap creates a fresh handle.
+- [x] **Live title/app_id updates.** `publish_foreign_toplevel()` is called from both `hikari_view_set_title()` and `set_app_id()`. It no-ops without a handle, which is the normal state during `first_map` — both shells set the title before `hikari_view_configure()`, and both before `hikari_view_map()`.
+- [x] **Ordering verified, not assumed.** `configure` (`xdg_view.c:175`) precedes `map` (`:222`), so `view->id` is populated before the handle exists and the first published state carries the app_id. `hikari_view_fini()` also releases the handle, because BLUEPRINT §15 records three init-failure paths that call `fini` on a view that never mapped.
+- [x] **Scoping correction recorded.** The Phase 84 plan budgeted for storing `app_id` — `view->id` already holds it. Same failure shape as the Phase 84 R10 omission: **planning from what was expected rather than from what is there.**
+- [x] **Future intent documented** (`PLANS.md` item -15): a left-edge sliding application panel. Unscoped and not approved — recorded so later work does not foreclose it. Key note: it can be an **ordinary layer-shell client**, not compositor code, and lock mode already hides the whole `top` tree so it cannot leak titles onto a locked screen.
+- [x] **BUILD AND TEST (USER-RUN) — DONE, confirmed on hardware 2026-08-22.** **waybar works.** The protocol is doing its job: an external dock enumerates hikari's windows. *(Scope of the confirmation: waybar runs and lists. Retitle-live and no-stale-entries-across-many-open/close cycles were not separately reported — they follow from the implementation but are not independently attested.)*
+- [ ] **Known limit, worth knowing before choosing a panel:** this protocol carries **title and app_id only** — no icons, no activation, no minimise. Clicking an entry to focus a window needs `zwlr_foreign_toplevel_management_v1` (**not** advertised) or `xdg-activation-v1` (**is** advertised). Check which the chosen dock expects.
 
 ### Phase 84: Remaining-work programme R1–R9 planned — AWAITING APPROVAL (see PLANS item -14)
 
 - [x] **Plan written.** Nine items with dependencies, estimates, acceptance criteria and risk notes. No step approved; no code changed.
 - [x] **Finding that shaped it:** this file carries ~30 unchecked items and **a substantial share are already resolved** — XWayland render/startup entries (fixed Phases 68/78), W0-1..W0-5 (moot Phase 83), libdrm + clock offset (settled Phase 82), FB-6 (Phase 73), and a P2 claiming `setup_idle_inhibit` is unguarded (checked: **it is guarded**). **The FB-4 disease at file scale** — which is why R1 is the stale-sweep and goes first.
 - [x] **R1 — tracker stale-sweep. DONE, Phase 85.** 85 open items → 16; 55 verified stale, 22 consolidated, 3 numbers corrected. **Found that the Phase 84 plan itself was incomplete** (R10 missing) and added R11. Every BLUEPRINT §13 row now carries a last-verified date. Original scope: ~1 h, zero risk, agent work. Every later priority reasons from this list; Phase 81 called W0-1 "the single highest-value command available" two phases before it proved moot.
-- [ ] **R2 — W7b, `ext-foreign-toplevel-list-v1`.** ~4–6 h, own cycle. Six touch points in `view.c`.
-- [ ] **R3 — remove the `forced` flag.** ~4–6 h. **MUST NOT share a cycle with R2.** Highest risk here, **no user-visible benefit** — flagged as deferrable indefinitely.
+- [x] **R2 — DONE and CONFIRMED ON HARDWARE (waybar), Phase 88.** `ext-foreign-toplevel-list-v1` advertised; one handle per mapped view, created on map, destroyed on unmap, title/app_id republished live. **Scoping correction:** the plan claimed views do not retain `app_id` — they do, as `view->id` — so this was one pointer, not a pointer plus a string. 0 warnings across all three build configurations. **Verified with waybar 2026-08-22.**
+- [x] **R3 — DEFERRED INDEFINITELY (user decision, Phase 87).** Not a latent defect; the Phase 73 deviation is closed rather than postponed. BLUEPRINT §15 records which branches the invariant makes unreachable, so the analysis need not be repeated. Original scope: ~4–6 h. **MUST NOT share a cycle with R2.** Highest risk here, **no user-visible benefit** — flagged as deferrable indefinitely.
 - [ ] **R4 — F4/P2-14.** ~30 min, **GATED on R7-a**. Do not implement speculatively; two minutes of testing may close it outright.
 - [ ] **R5 — dead-assert remediation.** **255 asserts, 101 in `view.c`.** Needs a scoping decision first. No mechanical sweep (Phase 47 precedent). Proposal: bucket (a) only, outside `view.c`.
 - [x] **R6 — DONE, Phase 86.** Three callers moved to `hikari_buffer_create_argb8888()`; shim and declaration deleted; no reference remains. **A fourth reference was a stale comment in `bar.c`** still asserting the retired Phase 33 "GBM fails on FreeBSD/ZFS" framing — corrected to FB-2. That wrong explanation had survived in a second location for fourteen phases after being fixed in the first.
 - [ ] **R7 — verification backlog (USER-RUN):** **(a) W0-6, ~2 min, highest value** · (b) PAM unlocker on the real setuid path · (c) Phase 50 touch/gesture · (d) Phase 40 multi-window.
-- [ ] **R8 — `clang-format`/TC-FORMAT-01 DECISION.** Recommend changing `.clang-format` to describe the tree, **not** reformatting the tree to match it (would rewrite every file and destroy `git blame`).
+- [x] **R8 — RESOLVED (user decision, Phase 87): the `.clang-format` config IS the desired house style**, so the *tree* is what should eventually change — the **opposite** of the Phase 84 recommendation, which would have locked in the wrong target. **Deferred for now** at the user's direction. When run, it must be a single isolated commit touching nothing else.
 - [ ] **R9 — small hygiene**, batchable: blocking `waitpid` in `command.c`; verify whether the "~14 PR #1 threads" still exist; duplicate `wl_list_init(&server->outputs)`.
 
-**Suggested order:** R1 → R7-a → (R4 if needed) → R6 → R2 → R3 → R5 → R8/R9.
+**Suggested order:** ~~R1~~ → R7-a → (R4 if needed) → ~~R6~~ → ~~R2~~ → ~~R3~~ → R5 → ~~R8~~/R9. **Remaining: R7 (user-run, gates R4), R5 (needs the open scoping decision), R9, R10-b/c, R11.**
 
 ### Phase 83: eDP-1 blocker was STALE — closed (see DECISIONS_LOG Phase 83)
 
@@ -84,7 +95,7 @@
 - [x] **Shared ownership handled without betting on a contract.** wlroots tears these trees down with the surface; hikari destroys them on dissociate. Both register a listener on `wlr_scene_node.events.destroy` that nulls the pointer, so neither a double-destroy nor a stale pointer is reachable whichever side goes first. **Direct application of the Phase 76 lesson.**
 - [x] **Audits, not assumptions:** all 19 listeners across both XWayland files verified removed exactly once (`commit` in `unmap()`, which the destroy path calls); destroy *ordering* verified so the parent-tree destroy fires the handler before the explicit link removal.
 - [x] ~~**W7b — `ext-foreign-toplevel-list-v1` DEFERRED to the next cycle, deliberately.** **Not required for screen sharing** — checked: `wlr.portal` advertises only Screenshot/ScreenCast and portal-wlr captures *outputs*, with no window picker. It serves taskbars (waybar `wlr/taskbar`) and future window-selection. Meaningful support needs per-window handle lifecycle = **six touch points in `src/view.c`**, the file behind eight crash phases — and bundling it with W8 would make an X11 crash ambiguous between the two. Sequencing, not a scope cut.~~  
-  **TRACKED AS R2** in `PLANS.md` item -14. *(Consolidated by the Phase 84 stale-sweep, 2026-08-22.)*
+  **DELIVERED as R2 in Phase 88** — see `PLANS.md` item -14 and `DECISIONS_LOG.md`. *(Consolidated by the Phase 84 stale-sweep, 2026-08-22.)*
 - [x] ~~**BUILD AND TEST (USER-RUN).**~~  
   **DONE** — confirmed working on hardware — XWayland renders, portal resolves. *(Closed by the Phase 84 stale-sweep, verified 2026-08-22.)*
   1. **`xterm`, `xeyes`** — must now show *content*, not an empty bordered rectangle. This has never worked in this tree.

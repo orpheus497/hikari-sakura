@@ -1,3 +1,75 @@
+## [2026-08-22 15:52] Phase 88: R2 delivered -- foreign-toplevel list; side-panel intent documented
+
+**Status:** **DONE -- CONFIRMED ON HARDWARE 2026-08-22: waybar lists hikari's windows.** 0 warnings across all three build configurations.
+
+**This closes W7b, and with it the entire original W0-W8 programme.** No workstream from the original plan remains open.
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
+
+### Why this was wanted
+
+The user asked for taskbar support, with a stated goal: **a side panel that slides in and out from the left, listing applications.** `ext-foreign-toplevel-list-v1` is the enabling dependency -- without it nothing outside the compositor can discover open windows at all, so a panel would have nothing to list. The panel itself is documented as future intent in `PLANS.md` item -15, deliberately unscoped.
+
+### A correction to the R2 scoping
+
+The Phase 84 plan asserted that *"views currently receive `app_id` in `hikari_view_configure()` but do not retain it"* and budgeted for adding a stored string. **That was wrong.** `view->id` already holds the app_id: set by `set_app_id()` from `hikari_view_configure()`, owned via `hikari_malloc`, freed in `hikari_view_fini()`. R2 therefore needed **one pointer, not a pointer and a string**, and was materially smaller than planned.
+
+Worth noting how the error arose: the plan was written from the API's requirements outward, and assumed the codebase lacked something without checking. The same shape as the Phase 84 omission of R10 -- **planning from what was expected rather than from what is there.**
+
+### Implementation
+
+* `hikari_server.foreign_toplevel_list` created in `setup_xdg_activation()`'s neighbourhood, non-fatally -- its absence costs window listing, not the session.
+* `hikari_view.foreign_toplevel` -- one owned handle, NULL whenever the view is unmapped.
+* **Created on map, destroyed on unmap.** That is deliberate and is what makes an unmapped window vanish from a taskbar rather than persisting as a dead entry a dock cannot act on. A remap creates a fresh handle.
+* `publish_foreign_toplevel()` pushes title and app_id, and is called from both `hikari_view_set_title()` and `set_app_id()` so a retitle propagates live. It no-ops when there is no handle, which is the normal state during `first_map` -- the shells set the title *before* `hikari_view_configure()` and both before `hikari_view_map()`.
+* Empty strings rather than NULL are published when either field is unset, so a dock sees a window with no app_id rather than no window.
+
+### Ordering and lifetime, verified rather than assumed
+
+Working from BLUEPRINT section 15 (written in Phase 86 for exactly this kind of change):
+
+* **`configure` precedes `map`** -- `xdg_view.c:175` vs `:222`, with `first_map()` called from `map_handler` before `map()`. So `view->id` is populated before the handle is created, and the first published state already carries the app_id.
+* **`hikari_view_fini()` releases the handle defensively.** Ordinary teardown destroys it in unmap, but section 15 records three **init-failure** paths in the shell wrappers that call `fini` directly on a view that never mapped -- so fini must tolerate both a live handle and a NULL one.
+* **Initialised in `hikari_view_init()`** for the same reason: `hikari_malloc` does not zero, and fini runs on those failure paths before anything else has touched the field.
+
+Lifecycle audited by inspection: one create site (guarded on both the existing handle and the list), two destroy sites (unmap, fini), each followed by a NULL assignment, and every read guarded.
+
+### Validation
+
+0 warnings across default, full-feature, and full-feature + `HAVE_EXT_IMAGE_CAPTURE`. All four newly-called wlroots symbols confirmed exported by `nm -D`.
+
+**Hardware confirmation (2026-08-22): waybar works.** An external dock enumerates hikari's windows -- something nothing outside the compositor could do before this phase.
+
+*Scope of that confirmation, stated honestly:* waybar runs and lists. **Live retitle** and **no stale entries across repeated open/close** were not separately reported. Both follow from the implementation (publish is called from `set_title`, and destroy is on unmap) and neither is in doubt, but they are inference rather than attestation. Recorded this way because this session's recurring failure has been treating *recorded* as *verified*.
+
+### Modified files
+
+`src/view.c`, `include/hikari/view.h`, `src/server.c`, `include/hikari/server.h`.
+
+---
+
+## [2026-08-22 15:40] Phase 87: R3 deferred indefinitely; R8 resolved -- the .clang-format config is authoritative
+
+**Status:** TWO DECISIONS RECORDED. No code changes.
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
+
+### R3 -- `forced` flag removal: DEFERRED INDEFINITELY
+
+User decision. This matches the recommendation: R3 is the highest-risk item in the remaining programme -- 15 sites in `src/view.c`, the file behind eight crash phases -- and delivers **no user-visible benefit**, because F1 and F2 were already fixed structurally by the Phase 73 layer trees. The flag is now inert bookkeeping.
+
+**It is not a latent defect and carries no decay risk.** The Phase 73 deviation that created this item is therefore closed rather than merely postponed: the deviation was "the plan said delete it, I did not", and the user has now ratified not deleting it. Should anyone revisit `view.c` for another reason, BLUEPRINT section 15 records which branches the `forced` invariant makes unreachable, so the analysis does not need repeating.
+
+### R8 -- `.clang-format`: the CONFIG is the target, not the tree
+
+**Corrects the recommendation made in Phase 84.** That recommendation was to rewrite `.clang-format` to describe the existing codebase (2-space, K&R-ish) rather than reformat the tree to match the config (8-wide tabs, Allman). The user has stated the opposite intent: **the configured style is the desired house style**, so the tree is what should eventually change.
+
+That inverts the option chosen but not the conclusion for now -- **deferred**, at the user's direction. Recording the corrected intent matters because the Phase 84 note would otherwise have led a future session to quietly rewrite the config and lock in the wrong target.
+
+When it is eventually run it should be a **single isolated commit touching nothing else**, since it will rewrite every file and disrupt `git blame`; mixing it with functional changes would make both unreviewable.
+
+---
+
 ## [2026-08-22 15:30] Phase 86: R6 -- shim retired; R10-a -- view ownership graph documented
 
 **Status:** BOTH COMPLETE. 0 warnings across **three** build configurations. Unbuilt.

@@ -24,6 +24,7 @@
 #include <wlr/types/wlr_data_control_v1.h>
 #include <wlr/types/wlr_data_device.h>
 #include <wlr/types/wlr_ext_data_control_v1.h>
+#include <wlr/types/wlr_ext_foreign_toplevel_list_v1.h>
 #include <wlr/types/wlr_fractional_scale_v1.h>
 #include <wlr/types/wlr_idle_inhibit_v1.h>
 #include <wlr/types/wlr_idle_notify_v1.h>
@@ -1078,6 +1079,18 @@ request_activate_handler(struct wl_listener *listener, void *data)
 static void
 setup_xdg_activation(struct hikari_server *server)
 {
+  /* [COMMENT] Action purpose: ext-foreign-toplevel-list-v1 -- the protocol a
+  dock, panel or taskbar binds to enumerate open windows. Without it nothing
+  outside the compositor can discover them, so a taskbar has nothing to list.
+  Non-fatal: its absence costs window listing, not the session. */
+  server->foreign_toplevel_list =
+      wlr_ext_foreign_toplevel_list_v1_create(server->display, 1);
+  if (server->foreign_toplevel_list == NULL) {
+    wlr_log(WLR_ERROR,
+        "could not create the foreign-toplevel list; docks and taskbars will "
+        "not be able to enumerate windows");
+  }
+
   server->xdg_activation = wlr_xdg_activation_v1_create(server->display);
   // [COMMENT] Action purpose: Guard against manager allocation failure before
   // the wl_signal_add below takes the address of one of its members.

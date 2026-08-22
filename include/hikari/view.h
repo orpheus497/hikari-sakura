@@ -17,6 +17,8 @@
 #include <hikari/group.h>
 #include <hikari/indicator_frame.h>
 #include <hikari/maximized_state.h>
+#include <wlr/types/wlr_ext_foreign_toplevel_list_v1.h>
+
 #include <hikari/node.h>
 #include <hikari/operation.h>
 #include <hikari/output.h>
@@ -53,6 +55,13 @@ struct hikari_view {
   uint16_t flags;
   char *title;
   char *id;
+
+  /* [COMMENT] Class purpose: This view's entry in the foreign-toplevel list,
+  which is what a dock or panel enumerates. Owned: created when the view maps,
+  destroyed when it unmaps, so an unmapped window correctly disappears from a
+  taskbar. NULL whenever the view is not mapped. `id` doubles as the app_id
+  published through it. */
+  struct wlr_ext_foreign_toplevel_handle_v1 *foreign_toplevel;
   struct hikari_border border;
   struct hikari_indicator_frame indicator_frame;
   struct hikari_tile *tile;

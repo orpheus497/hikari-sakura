@@ -2,6 +2,31 @@
 
 *Note: Most recent entries are listed at the top.*
 
+## Session Date: 2026-08-22 16:23 -- Phases 84-88: the remaining-work programme, planned and mostly executed
+
+**Timestamp:** 2026-08-22 16:23 *(source: `date '+%Y-%m-%d %H:%M'`)*
+
+**Current Status:** **All original workstreams W0-W8 are complete, and W7b is confirmed on hardware -- waybar lists hikari's windows.** W7b, the last one open, landed as R2 in Phase 88. Of the R-programme: R1, R2, R6, R10-a delivered; R3 and R8 closed by user decision; R4 gated on user testing; R5, R7, R9, R10-b/c, R11 remain. **One code change is unbuilt** -- R2 -- and should be built and tested with a dock before anything else touches `src/view.c`.
+
+**Accomplishments:**
+
+* **Phase 84 -- the remaining work was planned rather than picked at.** Nine items with dependencies, estimates and acceptance criteria, sequenced by principles taken from this session's own failures: one risky change per build cycle, `src/view.c` gets its own cycle, re-verify recorded environmental claims before acting on them. Two judgements were made honestly rather than optimistically -- R3 was flagged deferrable *because it delivers no user-visible benefit at the highest risk in the programme*, and R4 was **gated on two minutes of user testing** instead of implemented speculatively.
+* **Phase 85 -- R1, the tracker stale-sweep.** `TODOS.md`: 85 unchecked items to 16. This went first on purpose, because every later priority reasons from that list.
+* **Phase 86 -- R6 and R10-a.** The `hikari_server_create_argb8888_buffer` shim that W1 kept "for one release" was retired early rather than left to become permanent. BLUEPRINT section 15 (View Ownership Graph) documents what owns a view and what each lifecycle hook may assume; it paid for itself two phases later.
+* **Phase 87 -- two user decisions.** R3 deferred indefinitely. R8 resolved by the user correcting me: the `.clang-format` config **is** the house style, so the tree is what should move, not the config.
+* **Phase 88 -- R2, taskbar support. CONFIRMED WORKING (waybar).** `ext-foreign-toplevel-list-v1` advertised; one handle per mapped view; live title/app_id. Requested as the enabling dependency for a future **left-edge sliding application panel**, which is now documented as intent in `PLANS.md` item -15 -- unscoped and unapproved, with the note that it can be an ordinary layer-shell client rather than compositor code.
+
+**Mistakes and corrections worth carrying forward:**
+
+* **The Phase 84 plan mis-scoped R2** by asserting views do not retain `app_id`. They do -- `view->id`. The plan had been written from the API's requirements outward, assuming the codebase lacked something without checking. **The same plan also omitted an entire workstream**, later added as R10. Both are the same error: *planning from what was expected rather than from what is there.*
+* **`PROGRESS.md` had gone stale** -- it stopped at Phase 83 and never recorded 81 or 84-87, while five other trackers moved on. Backfilled in Phase 88. This is the session's dominant meta-problem recurring at a new scale: FB-4 survived ~60 phases as a false CRITICAL, `TODOS.md` accumulated 69 stale entries, and now the phase ledger itself drifted. **The trackers do not stay current on their own; a phase is not recorded until it is recorded in all of them.**
+
+**Open question, retained deliberately:** *how much should the compositor check itself at runtime?* 255 dead `assert()` calls, 101 in `view.c`, none executing under `NDEBUG`. The user has asked that this stay open pending clarification -- nothing is being changed in the meantime.
+
+**Next step:** **R7-a (W0-6, ~2 min)** is now the highest-value item outstanding -- it gates R4, and R4 is the only remaining item that might be a real defect rather than cleanup. After that the programme is R5 (blocked on the open scoping question), R9 hygiene, R10-b/c, and R11.
+
+---
+
 ## Session Date: 2026-08-22 15:12 -- Phases 82-83: man page, libdrm declined, and a stale CRITICAL blocker closed
 
 **Timestamp:** 2026-08-22 15:12

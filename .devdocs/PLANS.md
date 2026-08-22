@@ -1,8 +1,22 @@
 # Forward Strategy & Plans
 
-*Last Updated:* 2026-08-22 15:24
+*Last Updated:* 2026-08-22 16:23
 
 ## Implementations to be Fully Implemented
+
+-15. **FUTURE INTENT (documented 2026-08-22, not planned or scheduled): left-edge sliding application panel.**
+
+   User-stated goal: *a side panel that slides in and out from the left, listing applications.* Recorded so the intent is not lost and so later work does not accidentally foreclose it. **This is not an approved workstream and nothing is scoped.**
+
+   **R2 is its enabling dependency and is now delivered and confirmed working (waybar, 2026-08-22).** `ext-foreign-toplevel-list-v1` is what lets anything -- including a panel -- ask the compositor what windows exist. Without it the question could not be asked at all.
+
+   Notes for whoever builds it, from what this codebase already establishes:
+
+   * **It can be an ordinary layer-shell client**, not compositor code. hikari advertises `zwlr_layer_shell_v1` v4, and Phase 73 gave layer surfaces genuine per-layer scene trees, so a `LEFT`-anchored panel on the `TOP` layer will stack correctly above windows and below the lock screen without any further compositor change.
+   * **Slide animation belongs in the client.** wlroots' scene graph has no animation facility and hikari adds none; a panel animates by moving or resizing its own surface.
+   * **It will be hidden while locked, automatically** -- lock mode disables the whole `top` layer tree (Phase 73), so a panel cannot leak window titles onto a locked screen. That property is worth preserving.
+   * **A compositor-side panel is the alternative** and is deliberately *not* recommended: it would need its own cairo/Pango rendering, its own input routing, and would grow the compositor for something a client can do with protocols it already speaks.
+   * **What is still missing for a fully-featured panel:** foreign-toplevel v1 exposes title and app_id only -- no icons, no activation, no minimise. Activating a window from a panel would need `zwlr_foreign_toplevel_management_v1` (not currently advertised) or `xdg-activation-v1` (which hikari **does** advertise). Worth checking which the chosen panel expects before writing one.
 
 -14. **REMAINING WORK PROGRAMME -- proposed 2026-08-22 15:16, AWAITING APPROVAL. No step is approved for execution.**
 
@@ -36,7 +50,7 @@
    3. Add a **last-verified date** to each `BLUEPRINT.md` section 13 row, per the Phase 83 process note.
    *Acceptance:* every remaining unchecked item is confirmed live against the current tree.
 
-   **R2. W7b -- `ext-foreign-toplevel-list-v1`. ~4-6 h. Own build cycle.**
+   **R2. [DELIVERED + HARDWARE-CONFIRMED -- Phase 88] W7b -- `ext-foreign-toplevel-list-v1`.**
 
    The only undelivered workstream. Serves taskbars (waybar `wlr/taskbar`) and future window-selection portals; **not** required for screen sharing (verified Phase 78: portal-wlr captures outputs and has no window picker).
 
@@ -46,7 +60,7 @@
    *Risk:* six touch points in `view.c`. Follow the Phase 78 pattern -- audit every new listener/pointer for exactly-once release, and check destroy ordering.
    *Acceptance:* a taskbar client lists windows and tracks title changes; open/close/retitle leaks nothing.
 
-   **R3. Remove the `forced` flag. ~4-6 h. MUST NOT share a cycle with R2.**
+   **R3. [DEFERRED INDEFINITELY -- user decision, Phase 87] Remove the `forced` flag. ~4-6 h. MUST NOT share a cycle with R2.**
 
    The declared Phase 73 deviation. 15 sites, several in **provably unreachable** branches given the `view.c:108` invariant (`forced` implies `hidden`). With the layer trees, the flag no longer decides visibility -- it is pure bookkeeping.
 
@@ -81,7 +95,7 @@
    * **R7-c. Phase 50 touch/gesture checks.** Tap-to-focus, drag-to-move/resize, a configured 3-finger swipe, pinch passthrough, multi-output touch confinement.
    * **R7-d. Phase 40 multi-window guards.** Open/close/resize many windows across sheets.
 
-   **R8. `clang-format` / TC-FORMAT-01 -- DECISION, then possibly nothing.**
+   **R8. [RESOLVED -- user decision, Phase 87: the config is the target style; reformatting the tree is DEFERRED] `clang-format` / TC-FORMAT-01.**
 
    `.clang-format` was fixed in Phase 68 (`Language: Cpp`) so it now loads -- but the configured style (8-wide tabs, Allman) **does not describe this tree** (2-space, K&R-ish). Running it would reformat every file and destroy `git blame`.
    *Three options:* (i) rewrite `.clang-format` to describe the existing style and only then enforce; (ii) leave it unenforced and document that; (iii) reformat wholesale in one isolated commit. **Recommend (i).** No code change until chosen.

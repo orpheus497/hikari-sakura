@@ -1,6 +1,6 @@
 # Hikari Project Blueprint
 
-*Last Updated:* 2026-08-22 15:32
+*Last Updated:* 2026-08-22 16:23
 
 ## 1. System Architecture
 
@@ -1128,3 +1128,56 @@ Stated here because R10-b would encode them, and because each was violated at le
 4. A group reachable from `hikari_server.visible_groups` has at least one member in its `visible_views`.
 
 **Caveat for R10-b:** Phase 73 removed one of the six representations Phase 54 counted, because the layer trees made per-view visibility toggling unnecessary in lock mode. Any checker written now is smaller than the one originally specified -- **re-derive it from this section rather than from the Phase 54 text.**
+
+---
+
+## 16. Window Listing, Docks and Panels (added 2026-08-22, Phase 88 / R2)
+
+**Status: working, confirmed on hardware with waybar (2026-08-22).**
+
+### What the compositor now advertises
+
+`ext_foreign_toplevel_list_v1` (version 1), created in `setup_*` during server startup and **non-fatally** -- if creation fails the session still runs, it simply cannot be enumerated. This is what makes an external dock, taskbar or window switcher possible at all: before it, nothing outside the compositor could discover that a window exists.
+
+### The model
+
+One `wlr_ext_foreign_toplevel_handle_v1` per **mapped** view, held in `hikari_view.foreign_toplevel`.
+
+* **Created in `hikari_view_map()`**, guarded on both the list existing and the handle not already existing.
+* **Destroyed in `hikari_view_unmap()`**, and defensively in `hikari_view_fini()` -- see section 15's three init-failure paths, which call `fini` on a view that never mapped.
+* **NULL whenever the view is not mapped.** A remap creates a fresh handle rather than reviving the old one.
+
+**Why map/unmap rather than the view's whole lifetime:** an unmapped window should vanish from a dock. Keeping the handle alive would leave entries a dock can display but not act on.
+
+### Publishing state
+
+`publish_foreign_toplevel()` pushes `title` and `app_id` together, and is called from **both** `hikari_view_set_title()` and `set_app_id()`, so a client that retitles mid-session updates live rather than showing whatever it was called at startup.
+
+Two behaviours that are deliberate:
+
+* **It no-ops without a handle.** That is the normal state during `first_map` -- both shells set the title *before* `hikari_view_configure()`, and both before `hikari_view_map()`. The state is published correctly at creation instead.
+* **Empty strings, never NULL.** A window with no app_id appears as a window with a blank app_id, not as a missing window.
+
+### Ordering that this depends on
+
+`hikari_view_configure()` runs before `hikari_view_map()` (`xdg_view.c:175` vs `:222`; `first_map()` is called from `map_handler` before `map()`). So `view->id` -- which **already stores the app_id**, set by `set_app_id()` and freed in `fini` -- is populated by the time the handle is created. **Do not reorder configure and map without revisiting this.**
+
+### What this protocol does *not* provide
+
+Version 1 carries **title, app_id and an identifier. Nothing else.** No icons, no activation, no minimise/maximise, no per-output association. A dock that only lists windows works today; one that focuses a window on click needs either:
+
+* `zwlr_foreign_toplevel_management_v1` -- **not currently advertised**; or
+* `xdg-activation-v1` -- **is** advertised, and is the more standard route.
+
+Check which a chosen dock expects before assuming it will work.
+
+### Panels: the architectural position
+
+hikari advertises `zwlr_layer_shell_v1` (v4) and, since Phase 73, gives layer surfaces genuine per-layer scene trees. **A panel or dock is therefore an ordinary client, not compositor code** -- including the left-edge sliding application panel recorded as future intent in `PLANS.md` item -15.
+
+Consequences worth preserving:
+
+* A `TOP`-layer panel stacks above windows and below the lock screen with no further compositor change.
+* **Lock mode hides it automatically**, because `override_visibility()` disables the entire `top` tree -- so a panel cannot leak window titles onto a locked screen. Any future panel work must not route around this.
+* **Animation belongs to the client.** `wlr_scene` has no animation facility and hikari adds none; a sliding panel slides by moving or resizing its own surface.
+* A compositor-side panel is the rejected alternative: it would need its own cairo/Pango rendering and input routing, growing the compositor for something the existing protocols already permit.
