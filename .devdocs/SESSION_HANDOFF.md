@@ -2,6 +2,38 @@
 
 *Note: Most recent entries are listed at the top.*
 
+## Session Date: 2026-08-22 13:57 -- Phase 78: W7a + W8 (modern capture, portal fix, XWayland renders)
+
+**Timestamp:** 2026-08-22 13:57
+**Current Status:** W7a and W8 implemented, 0 warnings across 64 files in both configurations. **Unbuilt.** W7b (foreign-toplevel) deliberately sequenced to the next cycle.
+
+**Accomplishments:**
+
+* **W7a -- both screen-capture generations advertised.** `ext-image-capture-source` + `ext-image-copy-capture` alongside `wlr-screencopy`. The installed wlroots header states screencopy "is deprecated ... will be dropped in a future wlroots version": offering only the old one loses capture on a wlroots update, only the new one breaks every tool that exists today. The copy manager needs a capture *source* to name a target, which is why both new globals are required rather than just the copy one.
+* **W7a -- the portal fix, verified against the installed backend rather than assumed.** `/usr/local/share/xdg-desktop-portal/portals/wlr.portal` reads `UseIn=wlroots;sway;Wayfire;river;phosh;Hyprland;` and provides Screenshot + ScreenCast. `XDG_CURRENT_DESKTOP="Hikari Sakura"` matched **none** of those, so screen sharing had no backend at all -- independently of which protocols the compositor advertised. Now `"Hikari Sakura:wlroots"` (colon-separated list), with `DesktopNames=Hikari Sakura;wlroots` in the session file (semicolon there, per spec; the display manager converts).
+* **W8 -- XWayland renders content for the first time in this tree.** `xwayland_view.c` built a scene tree and attached only hikari's own border and indicator rects, so every managed X11 window drew as an empty bordered rectangle. `xwayland_unmanaged_view.c` contained **no `wlr_scene` reference whatsoever**, so X11 menus, tooltips, dropdowns and drag icons were hit-tested but never drawn. Both now attach via `wlr_scene_subsurface_tree_create()`, chosen over `wlr_scene_surface_create()` because the latter documents "child sub-surfaces are ignored" -- rare on X11, but silently dropping them would be a fresh instance of the bug being fixed.
+* **Created on `associate`**, not at init (the surface is NULL before it) and not on map (the surface is valid for the whole associate/dissociate window, which is exactly the tree's proper lifetime -- map/unmap only toggles visibility).
+* **Shared ownership handled without betting on a contract.** `xdg_view.c:801` records that wlroots tears these trees down with the surface, but the header documents no such guarantee for the subsurface variant, and hikari destroys it on dissociate too. Rather than pick a side, each view registers a listener on `wlr_scene_node.events.destroy` that nulls its pointer -- so whichever side destroys first, the other sees NULL. Neither a double-destroy nor a stale pointer is reachable. **This is the direct application of the Phase 76 lesson.**
+* **Placement.** Managed views parent the surface tree under their per-view `scene_tree`, so it inherits position and sits between the border (drawn outside the geometry, so no overlap) and the indicator frame (which raises itself when shown). Unmanaged views have no per-view parent -- an override-redirect surface has no border and no indicator -- so they attach straight to `layers.views` in **layout-absolute** coordinates, which `wlr_xwayland_surface.x/y` already are; they raise to top on map (layer-scoped, so a menu cannot climb over the bar or out of a locked screen) and reposition on commit, which pointer-tracking menus and drag icons do constantly.
+* **Audits, not assumptions.** All 19 listeners across both XWayland headers verified removed exactly once -- all in the destroy path except `commit`, which `unmap()` owns and the destroy path calls when mapped. Destroy *ordering* verified: `wlr_scene_node_destroy(&scene_tree->node)` fires the surface-tree handler, which removes and re-initialises the link, before the explicit `wl_list_remove` further down, so that removal operates on an empty list rather than a freed one.
+
+**Deliberately sequenced, not cut -- W7b (`ext-foreign-toplevel-list-v1`):**
+* **Not required for screen sharing.** Checked rather than assumed: `wlr.portal` advertises only Screenshot/ScreenCast, and xdg-desktop-portal-wlr captures **outputs** via wlr-screencopy -- it has no window picker. Foreign-toplevel serves taskbars (waybar `wlr/taskbar`) and future window-selection portals, so W7a delivers W7's stated purpose alone.
+* **It is the expensive half:** per-window handle lifecycle (create on map, destroy on unmap, update on title change, plus storing `app_id`, which views do not currently retain) = six touch points in `src/view.c`, the single file behind eight crash phases.
+* **Bundling would destroy the bisect.** W8 is a substantial XWayland change needing runtime verification; shipping foreign-toplevel wiring in the same build means an X11 crash could be either. Phase 76 recorded this lesson one cycle ago; following it here is the point of having written it down.
+
+**Modified files:** `src/server.c`, `start-hikari.sh`, `share/wayland-sessions/hikari.desktop`, `src/xwayland_view.c`, `include/hikari/xwayland_view.h`, `src/xwayland_unmanaged_view.c`, `include/hikari/xwayland_unmanaged_view.h`. Trackers: `DECISIONS_LOG.md` (Phase 78), `TODOS.md`, `PROGRESS.md`, `BRIEFING.md`.
+
+**Next steps -- build and test:**
+1. **`xterm` / `xeyes` must now show content**, not an empty bordered rectangle. This has never worked in this tree, so there is no prior behaviour to regress against -- and equally, none of this path has ever been exercised.
+2. **X11 menus/tooltips** (`xterm` Ctrl+left-click) should appear; **drag icons** should follow the cursor.
+3. **Lock with an X11 window open** -- it must stay hidden, since the surface tree lives in `layers.views` which lock mode disables.
+4. **Screen sharing** should now find a portal backend; `grim` should still work.
+
+**Then:** W7b, the deferred `forced`-flag removal, the man-page `ui { lock { ... } }` documentation, and the still-outstanding **W0** matrix (W0-1 may close the eDP-1 blocker; W0-6 gates F4).
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
+
 ## Session Date: 2026-08-22 13:45 -- Phases 75-77: two crashes root-caused, lock screen CONFIRMED WORKING, clock raised
 
 **Timestamp:** 2026-08-22 13:45

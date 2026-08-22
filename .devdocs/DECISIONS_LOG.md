@@ -1,3 +1,66 @@
+## [2026-08-22 13:57] Phase 78: W7a + W8 -- modern capture, the portal fix, and XWayland finally renders
+
+**Status:** IMPLEMENTED, unbuilt. 0 warnings across 64 files in both configurations. **W7's foreign-toplevel half (W7b) is deliberately sequenced to the next cycle -- see the reasoning below.**
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
+
+### W7a -- capture protocols and the portal
+
+**Both generations of screen capture are now advertised.** `wlr-screencopy-v1` is what installed tools bind today (grim, xdg-desktop-portal-wlr), but the wlroots header states plainly that it "is deprecated and superseded by ext-image-copy-capture-v1" and "will be dropped in a future wlroots version". Offering only the old one loses capture on a wlroots update; only the new one breaks every tool available today. Added `wlr_ext_output_image_capture_source_manager_v1_create()` alongside `wlr_ext_image_copy_capture_manager_v1_create()` -- the copy manager alone would advertise a protocol with no way for a client to name a capture target.
+
+**The portal fix, verified empirically rather than assumed.** `/usr/local/share/xdg-desktop-portal/portals/wlr.portal` on this machine reads:
+
+```
+Interfaces=org.freedesktop.impl.portal.Screenshot;org.freedesktop.impl.portal.ScreenCast;
+UseIn=wlroots;sway;Wayfire;river;phosh;Hyprland;
+```
+
+`XDG_CURRENT_DESKTOP="Hikari Sakura"` matched **none** of those, so screen sharing and screenshots via the portal had no backend at all -- regardless of which capture protocols the compositor advertised. Changed to `"Hikari Sakura:wlroots"`, which is a colon-separated list: the identity is kept for anything matching on it, and `wlroots` makes the backend eligible. `share/wayland-sessions/hikari.desktop` gains the matching `DesktopNames=Hikari Sakura;wlroots` (semicolon-separated there by spec; the display manager converts it).
+
+### W8 -- XWayland renders content, at last
+
+Confirmed in Phase 70 and outstanding since: `xwayland_view.c` built a scene tree and attached **only** hikari's own border and indicator rects, so every managed X11 window drew as an empty bordered rectangle; `xwayland_unmanaged_view.c` contained **no `wlr_scene` reference whatsoever**, so X11 menus, tooltips, dropdowns and drag icons were hit-tested but never drawn.
+
+**Both now attach the surface via `wlr_scene_subsurface_tree_create()`**, chosen over `wlr_scene_surface_create()` because the latter's own documentation says "child sub-surfaces are ignored" -- rare on X11, but silently dropping them would be a fresh instance of the very bug being fixed.
+
+**Created on `associate`, not at init and not on map.** `xwayland_surface->surface` is NULL until wlroots associates it, so init is too early; and the surface is valid for the whole associate/dissociate window, which is exactly the lifetime this tree should have -- map/unmap merely toggles visibility.
+
+**Ownership is shared, and that needed care.** `xdg_view.c:801` records that wlroots "tears down" these trees on surface destroy, but the header documents no such contract for the subsurface variant, and hikari also destroys it on dissociate. Rather than bet on one side, each view registers a listener on `wlr_scene_node.events.destroy` that nulls its pointer -- so whichever side destroys the tree first, the other sees NULL. Neither a double-destroy nor a stale pointer is reachable. **This is the direct application of the Phase 76 lesson**: the previous crashes came from assuming a library's contract instead of making the code correct under either behaviour.
+
+**Placement.** Managed views parent the surface tree under their existing per-view `scene_tree`, so it inherits the view's position and sits between the border (outside the geometry, so no overlap) and the indicator frame (which raises itself when shown). Unmanaged views have no per-view parent -- an override-redirect surface has no border and no indicator -- so they attach straight to `layers.views` and position in **layout-absolute** coordinates, which is what `wlr_xwayland_surface.x/y` already are. They raise to top on map, because a menu or drag icon is only meaningful above whatever spawned it; that raise is scoped to the view layer, so it cannot climb over the bar or out of a locked screen. `commit_handler` repositions the node when the surface moves, which menus tracking the pointer and drag icons following the cursor do constantly.
+
+**Audit performed rather than assumed:** every listener declared in both headers was checked for exactly one removal. All are removed in the destroy path except `commit`, which is removed in `unmap()` -- and the destroy path calls `unmap()` when mapped, in both files. Destroy *ordering* was checked too: `wlr_scene_node_destroy(&scene_tree->node)` fires the surface-tree destroy handler, which removes and re-initialises the link, before the explicit `wl_list_remove` further down -- so that removal operates on an empty list rather than a freed one.
+
+### W7b (foreign-toplevel) sequenced to the next cycle -- reasoning
+
+`ext-foreign-toplevel-list-v1` is **not** implemented in this phase. This is a deliberate sequencing decision, not a silent scope cut.
+
+**It is not required for the screen-sharing goal.** Checked rather than assumed: `wlr.portal` advertises only `Screenshot` and `ScreenCast`, and xdg-desktop-portal-wlr captures **outputs** through wlr-screencopy -- it has no window picker. Foreign-toplevel serves taskbars and docks (waybar's `wlr/taskbar`) and future window-selection portals. W7a therefore delivers W7's stated purpose on its own.
+
+**It is the expensive half.** Meaningful support needs per-window handle lifecycle -- create on map, destroy on unmap, update on title change, plus storing `app_id`, which views do not currently retain. That is six touch points in `src/view.c`: the single file behind eight separate crash phases (42, 44, 45, 55, 56, 57, 61, 63).
+
+**Bundling it here would destroy the bisect.** W8 is a substantial change to XWayland that needs runtime verification. Shipping foreign-toplevel handle wiring in the same build cycle means an X11 crash could be either change. Phase 76 recorded exactly this lesson one cycle ago -- *never ship speculation alongside an evidence-backed fix* -- and its generalisation is: do not bundle two independently-risky changes into one unverifiable build. Following that here is the point of having recorded it.
+
+### Validation
+
+| Target | Result |
+|---|---|
+| All 64 `src/*.c`, full feature config | 0 warnings |
+| All 64 `src/*.c`, default config | 0 warnings |
+| `start-hikari.sh` (`sh -n`) | clean |
+| New wlroots symbols exported | 3/3 (`wlr_ext_output_image_capture_source_manager_v1_create`, `wlr_ext_image_copy_capture_manager_v1_create`, `wlr_scene_subsurface_tree_create`) |
+| Protocol versions available | all three at version 1, confirmed against installed `wayland-protocols` |
+| Listener removal audit | all 19 listeners across both XWayland files accounted for |
+| Portal backend match | verified against the installed `wlr.portal` |
+
+Unbuilt and unrun. XWayland has never rendered content in this tree, so there is no prior behaviour to regress against -- but equally, no part of this path has ever been exercised.
+
+### Modified files
+
+`src/server.c`, `start-hikari.sh`, `share/wayland-sessions/hikari.desktop`, `src/xwayland_view.c`, `include/hikari/xwayland_view.h`, `src/xwayland_unmanaged_view.c`, `include/hikari/xwayland_unmanaged_view.h`.
+
+---
+
 ## [2026-08-22 13:43] Phase 77: The lock screen works -- confirmed on hardware; clock raised by a centimetre
 
 **Status:** **W3 + W4 CONFIRMED WORKING ON HARDWARE by the user.** One cosmetic change made on request. Syntax-clean; the clock change is unbuilt.

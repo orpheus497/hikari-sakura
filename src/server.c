@@ -58,6 +58,8 @@
 #endif
 
 #ifdef HAVE_SCREENCOPY
+#include <wlr/types/wlr_ext_image_capture_source_v1.h>
+#include <wlr/types/wlr_ext_image_copy_capture_v1.h>
 #include <wlr/types/wlr_screencopy_v1.h>
 #endif
 
@@ -1550,7 +1552,34 @@ server_init(struct hikari_server *server, char *config_path)
 #endif
 
 #ifdef HAVE_SCREENCOPY
+  /* [COMMENT] Action purpose: Advertise both generations of screen capture.
+
+  wlr-screencopy-v1 is what currently-installed tools bind -- grim, and
+  xdg-desktop-portal-wlr -- but the installed wlroots header states plainly that
+  it "is deprecated and superseded by ext-image-copy-capture-v1" and that "the
+  implementation will be dropped in a future wlroots version". Offering only the
+  old one leaves this compositor losing screen capture on a wlroots update;
+  offering only the new one breaks every tool available today. Both are keyed
+  off the same outputs, so they coexist.
+
+  ext-image-copy-capture needs a capture SOURCE to copy from, which is what the
+  output-source manager provides -- the copy manager alone would advertise a
+  protocol no client could actually name a target for. */
   wlr_screencopy_manager_v1_create(server->display);
+
+  if (wlr_ext_output_image_capture_source_manager_v1_create(
+          server->display, 1) == NULL) {
+    wlr_log(WLR_ERROR,
+        "could not create the ext-image-capture-source manager; modern "
+        "screen capture will be unavailable");
+  }
+
+  if (wlr_ext_image_copy_capture_manager_v1_create(server->display, 1) ==
+      NULL) {
+    wlr_log(WLR_ERROR,
+        "could not create the ext-image-copy-capture manager; modern screen "
+        "capture will be unavailable");
+  }
 #endif
 
 #ifdef HAVE_XWAYLAND

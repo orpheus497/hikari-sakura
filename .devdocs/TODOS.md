@@ -1,8 +1,24 @@
 # Granular Task List
 
-*Last Updated:* 2026-08-22 13:43
+*Last Updated:* 2026-08-22 13:57
 
 ## Active List
+
+### Phase 78: W7a + W8 implemented (see DECISIONS_LOG Phase 78)
+
+- [x] **W7a — both capture generations advertised.** `ext-image-capture-source` + `ext-image-copy-capture` alongside `wlr-screencopy`. The wlroots header says screencopy "will be dropped in a future wlroots version"; only-old loses capture on upgrade, only-new breaks every tool available today.
+- [x] **W7a — portal fix, verified against the installed backend.** `/usr/local/share/xdg-desktop-portal/portals/wlr.portal` has `UseIn=wlroots;sway;Wayfire;river;phosh;Hyprland;` — `Hikari Sakura` matched **none**, so screen sharing had no backend *regardless* of protocols advertised. Now `XDG_CURRENT_DESKTOP="Hikari Sakura:wlroots"` (colon-separated) + `DesktopNames=Hikari Sakura;wlroots` (semicolon, per spec).
+- [x] **W8 — managed X11 windows render content.** `xwayland_view.c` attached only border + indicator rects; nothing ever displayed the surface. Now `wlr_scene_subsurface_tree_create()` under the per-view `scene_tree`, created on **`associate`** (the surface is NULL before it, and valid for the whole associate/dissociate window).
+- [x] **W8 — override-redirect surfaces render at all.** `xwayland_unmanaged_view.c` had **no `wlr_scene` reference whatsoever**; menus, tooltips, dropdowns and drag icons were hit-tested but invisible. Attached to `layers.views` in layout-absolute coords (`surface->x/y` already are), raised to top on map, repositioned on commit so menus tracking the pointer follow.
+- [x] **Shared ownership handled without betting on a contract.** wlroots tears these trees down with the surface; hikari destroys them on dissociate. Both register a listener on `wlr_scene_node.events.destroy` that nulls the pointer, so neither a double-destroy nor a stale pointer is reachable whichever side goes first. **Direct application of the Phase 76 lesson.**
+- [x] **Audits, not assumptions:** all 19 listeners across both XWayland files verified removed exactly once (`commit` in `unmap()`, which the destroy path calls); destroy *ordering* verified so the parent-tree destroy fires the handler before the explicit link removal.
+- [ ] **W7b — `ext-foreign-toplevel-list-v1` DEFERRED to the next cycle, deliberately.** **Not required for screen sharing** — checked: `wlr.portal` advertises only Screenshot/ScreenCast and portal-wlr captures *outputs*, with no window picker. It serves taskbars (waybar `wlr/taskbar`) and future window-selection. Meaningful support needs per-window handle lifecycle = **six touch points in `src/view.c`**, the file behind eight crash phases — and bundling it with W8 would make an X11 crash ambiguous between the two. Sequencing, not a scope cut.
+- [ ] **BUILD AND TEST (USER-RUN).**
+  1. **`xterm`, `xeyes`** — must now show *content*, not an empty bordered rectangle. This has never worked in this tree.
+  2. **An X11 app with menus** (`xterm` Ctrl+left-click, or a GTK2/Motif app) — menus, tooltips and dropdowns should appear.
+  3. **Drag an X11 window** — the drag icon should follow the cursor.
+  4. **Lock while an X11 window is open** — it must stay hidden (the surface tree is in `layers.views`, which lock mode disables).
+  5. **Screen sharing** — a portal client should now find a backend at all. `grim` should still work (screencopy retained).
 
 ### Phase 77: LOCK SCREEN CONFIRMED WORKING; clock raised 1 cm (see DECISIONS_LOG Phase 77)
 
@@ -117,7 +133,7 @@
 - [x] **C1 -- `wlr_xwayland_set_seat()` is called nowhere in the tree. FIXED, Phase 71 (W6).** Added after `setup_selection()`. The plan's accompanying "add a `seat_destroy` guard" was found **incorrect** and deliberately not done -- wlroots owns that listener privately.
 - [x] **C2 -- no `ext_data_control_manager_v1`. FIXED, Phase 71 (W6).** Both generations now advertised.
 - [x] **C3 -- discarded return of `wlr_data_control_manager_v1_create`. FIXED, Phase 71 (W6),** non-fatally by choice.
-- [ ] **N5 -- XWayland renders no content, CONFIRMED (was `PLANS.md` item -9 "awaiting confirmation").** `xwayland_unmanaged_view.c` has **no `wlr_scene` reference at all**; `xwayland_view.c:537` attaches only border + indicator frame. **W8, which must not land before W2** -- fixing this widens the F1 hole.
+- [x] **N5 -- XWayland renders no content. FIXED, Phase 78 (W8).** Original finding (was `PLANS.md` item -9 "awaiting confirmation").** `xwayland_unmanaged_view.c` has **no `wlr_scene` reference at all**; `xwayland_view.c:537` attaches only border + indicator frame. **W8, which must not land before W2** -- fixing this widens the F1 hole.
 
 **Workstream status.** **W5 and W6 are IMPLEMENTED (Phase 71)**, except F4, which is held pending W0-6. Remaining, in the recommended order:
 
@@ -125,8 +141,8 @@
 - [x] **W2** scene layer trees (D1) -- implemented Phase 73. **The `forced` flag deletion was deferred**, see the Phase 73 deviation note.
 - [x] **W3** capture + blur — implemented Phase 74; the format spike is resolved as a logged escalation ladder. Original note: **CPU baseline first, GPU second (Q3 ruling).** Carries one open **SPIKE**: no public render-format query exists in 0.20.2, so the swapchain format needs a logged escalation ladder (implicit XRGB8888 -> LINEAR -> ARGB8888 -> abort to solid `clear`).
 - [x] **W4** backdrop + cairo/Pango clock — implemented Phase 74. + **power-aware blank timeout (Q2 ruling: 180 s AC / 60 s battery, configurable, `0` = never)**. Read `hw.acpi.acline` via `sysctlbyname()` at arm time, never cached.
-- [ ] **W7** `ext-image-copy-capture-v1` + `ext_foreign_toplevel_list_v1`; fix `XDG_CURRENT_DESKTOP` to `"Hikari Sakura:wlroots"` (`start-hikari.sh:26` + `hikari.desktop`) so `xdg-desktop-portal-wlr` matches at all.
-- [ ] **W8** XWayland scene integration (see N5).
+- [x] **W7a** implemented Phase 78 (capture protocols + portal fix); **W7b (foreign-toplevel) deferred** — original note: `ext-image-copy-capture-v1` + `ext_foreign_toplevel_list_v1`; fix `XDG_CURRENT_DESKTOP` to `"Hikari Sakura:wlroots"` (`start-hikari.sh:26` + `hikari.desktop`) so `xdg-desktop-portal-wlr` matches at all.
+- [x] **W8** XWayland scene integration — implemented Phase 78, both managed and override-redirect.
 
 **Superseded / corrected by this phase:**
 
