@@ -76,6 +76,7 @@
 #include <hikari/configuration.h>
 #include <hikari/decoration.h>
 #include <hikari/exec.h>
+#include <hikari/foreign_toplevel.h>
 #include <hikari/indicator_frame.h>
 #include <hikari/keyboard.h>
 #include <hikari/layout.h>
@@ -1090,6 +1091,15 @@ setup_xdg_activation(struct hikari_server *server)
         "could not create the foreign-toplevel list; docks and taskbars will "
         "not be able to enumerate windows");
   }
+
+  /* [COMMENT] Action purpose: zwlr_foreign_toplevel_management_v1, created
+  beside the list global above because it is the acting half of the same
+  feature. The list lets a dock SEE windows; this lets a window switcher act on
+  one, and it is the only route -- no standards-track toplevel-control protocol
+  exists, and xdg-activation-v1 below cannot substitute because its activate
+  request takes a wl_surface the requester owns, which a switcher does not have
+  for another client's window. Non-fatal for the same reason as the list. */
+  hikari_foreign_toplevel_manager_setup(server);
 
   server->xdg_activation = wlr_xdg_activation_v1_create(server->display);
   // [COMMENT] Action purpose: Guard against manager allocation failure before

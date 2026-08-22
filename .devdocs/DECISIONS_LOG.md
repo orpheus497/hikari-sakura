@@ -1,3 +1,91 @@
+## [2026-08-22 21:35] Phase 89: zwlr_foreign_toplevel_management_v1 -- the acting half of window listing
+
+**Status:** IMPLEMENTED, UNBUILT -- awaiting the user build. The three changed translation units (`foreign_toplevel.c`, `view.c`, `server.c`) compile in-tree with 0 warnings; the link needs the privileged build.
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
+
+### Why this was wanted
+
+The user is adding a **window switcher, a task manager and a workspace switcher** to a custom rofi fork (sofi). All three need to act on windows the client does not own. Phase 88's `ext-foreign-toplevel-list-v1` lets an external client SEE hikari's windows; nothing lets it FOCUS, CLOSE or MINIMISE one. This phase adds the acting half. The workspace switcher additionally wants `ext-workspace-v1`, which is **deliberately not in this phase** -- see the sequencing note at the end.
+
+### The route was checked, not assumed
+
+* **There is no standards-track alternative.** The installed `wayland-protocols` staging and unstable trees were enumerated: `ext-foreign-toplevel-list-v1` is the only ext- toplevel protocol that exists, and it is read-only by design. No management or control counterpart has landed.
+* **`xdg-activation-v1` cannot substitute**, even though hikari advertises it. Its `activate` request takes a **`wl_surface` the requester owns**. A switcher has no proxy for another client's surface, so xdg-activation answers "focus the window I just spawned", not "focus that window over there".
+* **wlroots 0.20 ships the implementation.** `wlr_foreign_toplevel_manager_v1_create` and friends confirmed exported by `nm -D /usr/local/lib/libwlroots-0.20.so`. No new dependency, no new XML, and -- unlike layer-shell -- **no `wayland-scanner` step**, because wlroots defines its own state enum rather than requiring the generated protocol header.
+
+### The hazard this phase exists to avoid
+
+**`hikari_workspace_focus_view()` opens with `assert(hikari_server_in_normal_mode())`** (`workspace.c:401`).
+
+A foreign-toplevel request is client-driven: it arrives whenever the external client sends it, including while the user is mid-drag in move or resize mode, in mark-select, or on a locked screen. A request that reached the focus machinery from any other mode would **abort a debug build outright and corrupt the visibility linkage under NDEBUG**. This hazard does not exist for `ext-foreign-toplevel-list-v1`, which is read-only -- which is exactly why it appears only now, and why the read-only protocol shipping cleanly in Phase 88 is not evidence that this one will.
+
+Every request handler therefore passes `can_act()` first: normal mode, mapped, not forced. **Lock mode needs no separate test, because lock mode IS a mode** -- while the screen is locked `hikari_server_in_normal_mode()` is false, so nothing outside the compositor can focus, close, minimise or maximise a window. Close is gated too, even though it only forwards a request to the client, so a locked screen cannot be used to close windows.
+
+### Activation does not go through `hikari_workspace_focus_view()`
+
+hikari's workspaces are **per-output**, and output focus follows the cursor. Focusing a view belonging to another output through that function would leave `hikari_server.workspace` naming the old one.
+
+`activate_view()` instead reuses the sequence hikari already has for marks (`hikari_server_switch_to_mark()` -> `show_marked_view()`), which solves the identical problem of reaching a view that may be anywhere: switch the sheet if the target is not the displayed one, show or raise, centre the cursor, then let `hikari_server_cursor_focus()` resolve output focus. The hidden state is **re-tested after the sheet switch** rather than assumed, because `display_sheet()` shows every non-invisible view of the incoming sheet and `hikari_view_show()` asserts the view is hidden.
+
+### Mapping the protocol onto hikari's actual vocabulary
+
+| Request | hikari | Note |
+|---|---|---|
+| `activate` | `activate_view()` | reaches across sheets and outputs |
+| `close` | `hikari_view_quit()` | forwards to the client; gated like the rest |
+| `set_minimized` | `hikari_view_hide()` / `hikari_view_show()` | hikari's `hidden` flag **is** minimised |
+| `set_maximized` | `hikari_view_toggle_full_maximize()` | a toggle, not a setter -- guarded on current state |
+| `set_fullscreen` | full-maximize | **hikari has no fullscreen state at all** |
+| `set_rectangle` | not listened to | minimise-animation hint; hikari draws no such animation |
+
+**Fullscreen is not an approximation invented here.** `xdg_view.c`'s `apply_requested_fullscreen()` already drives full-maximize from the client's own xdg-shell fullscreen request, so this keeps one meaning for the concept across both paths. The state is also *read back* as fullscreen when fully maximized, so what a client observes matches what its request did.
+
+### State publishing: from single writers, whole-state, not per-transition
+
+* **title/app_id** -- the existing `publish_foreign_toplevel()`, extended to feed both protocols. The management call is placed **before** the ext-list early return, because the two handles are created independently and a return keyed on one must not silence the other.
+* **minimized** -- `hikari_view_show()` / `hikari_view_hide()`, the only writers of the hidden flag.
+* **maximized/fullscreen** -- `hikari_view_commit_pending_operation()`. hikari reaches `HIKARI_MAXIMIZATION_FULLY_MAXIMIZED` through several commit paths that all converge there, so republishing the derivable state once covers every one without each having to remember.
+* **activated** -- `hikari_view_activate()`, from its **explicit bool**. Deliberately not read back via `hikari_view_has_focus()`, which dereferences `hikari_server.workspace` -- NULL during output teardown, the exact shape of the Phase 63 SIGSEGV.
+* **outputs** -- `hikari_view_evacuate()` and `hikari_view_migrate()`, the only two places a mapped view changes output, guarded on the output actually differing so a change emits leave-then-enter rather than a second enter. Evacuate runs from `hikari_output_fini()` while the outgoing `wlr_output` is still alive, so the leave is never sent to a freed output.
+
+### Handle ownership is shared, and is not a bet on wlroots' teardown order
+
+hikari destroys the handle on unmap; wlroots destroys every outstanding handle when the manager goes away at display teardown. The handle's own `events.destroy` is therefore listened to: `detach()` drops all six listeners and nulls the pointer, and `hikari_foreign_toplevel_destroy()` tolerates both outcomes -- if wlroots emitted destroy the handler already ran, if it did not, detach happens inline. Neither a double-destroy nor a stale pointer is reachable whichever side goes first.
+
+**This is the Phase 78 scene-tree pattern applied deliberately, not re-derived.** wlroots' sources are not installed on this machine, so the alternative was to guess at whether `wlr_foreign_toplevel_handle_v1_destroy()` emits its own destroy signal. Tolerating both removes the guess.
+
+### Lifetime mirrors the ext-list handle exactly
+
+Created in `hikari_view_map()` immediately after the list handle, destroyed in `hikari_view_unmap()` beside it, and defensively in `hikari_view_fini()` -- BLUEPRINT section 15 records **three init-failure paths** in the shell wrappers that call `fini` on a view that never mapped. Initialised in `hikari_view_init()` for the same reason `foreign_toplevel` is: `hikari_malloc` does not zero.
+
+The struct is **embedded** in `hikari_view` rather than separately allocated, like `hikari_view_decoration`, so a mapped view carries no extra allocation.
+
+### The build switch, and why it exists
+
+`WITH_FOREIGN_TOPLEVEL_MANAGEMENT`, **included in `WITH_ALL`** -- unlike `WITH_EXT_IMAGE_CAPTURE`, because advertising this costs nothing and regresses nothing.
+
+It has a switch at all because its wlroots header opens with *"This an unstable interface of wlroots. No guarantees are made regarding the future consistency of this API"*, and its listing half is already superseded by the standards-track protocol hikari also advertises. If a future wlroots drops it, one flag keeps the tree building.
+
+`src/foreign_toplevel.c` carries **stub definitions** under `#else`, so every call site in `view.c` and `server.c` stays unconditional. The alternative -- eleven `#ifdef` blocks threaded through `view.c`, the file behind eight crash phases -- was rejected on those grounds.
+
+### Both protocols are now advertised at once
+
+Consequence worth recording: a client binding both globals sees every window twice. waybar's `wlr/taskbar` will move to the zwlr protocol on its own. **sofi should bind zwlr only.**
+
+### Sequencing: `ext-workspace-v1` is NOT in this phase
+
+The workspace switcher needs it, and it is independent of this work. It is held back deliberately, on the Phase 78/88 precedent: this phase touches `src/view.c`, `ext-workspace-v1` touches output lifecycle (`hikari_output_init`/`fini`), and bundling two independently-risky changes into one unverifiable build makes any crash ambiguous between them. Sequencing, not a scope cut. Scoping notes for it are in `PLANS.md`.
+
+**A model mismatch to settle before that work starts:** hikari's `hikari_workspace` is **not** the protocol's workspace. A `hikari_workspace` is a per-output viewport; the thing a user switches between is a **sheet**. So the mapping is one group per real output (excluding the noop output) and ten workspace handles per group, with `ACTIVATE` as the only capability -- no create/remove (the count is fixed at 10) and no assign (`hikari_workspace_switch_sheet()` asserts `workspace == sheet->workspace`).
+
+### Validation
+
+* `foreign_toplevel.o`, `view.o`, `server.o` compile in-tree with **0 warnings**.
+* **Not built or linked** -- that needs the privileged build. See TODOS for what the user should run.
+
+---
+
 ## [2026-08-22 15:52] Phase 88: R2 delivered -- foreign-toplevel list; side-panel intent documented
 
 **Status:** **DONE -- CONFIRMED ON HARDWARE 2026-08-22: waybar lists hikari's windows.** 0 warnings across all three build configurations.

@@ -1,8 +1,46 @@
 # Granular Task List
 
-*Last Updated:* 2026-08-22 16:23
+*Last Updated:* 2026-08-22 21:35
 
 ## Active List
+
+### Phase 89: `zwlr_foreign_toplevel_management_v1` — the acting half
+
+- [x] **New `src/foreign_toplevel.c`** (523 lines) + `include/hikari/foreign_toplevel.h`, per AGENTS.md separation rather than growing `view.c`.
+- [x] **One pointer in `hikari_view`**, embedded like `hikari_view_decoration` — a mapped view carries no extra allocation.
+- [x] **Lifecycle mirrors the ext-list handle exactly.** `init` in view init, `create` on map, `destroy` on unmap **and** in `fini` (BLUEPRINT §15: three init-failure paths call `fini` on a view that never mapped).
+- [x] **Modal hazard closed.** Single `can_act()` gate — `hikari_server_in_normal_mode() && is_mapped && !is_forced` — on every handler. `hikari_workspace_focus_view()` asserts normal mode and a client-driven request can arrive mid-drag, in mark-select, or on a locked screen. Because lock mode is not normal mode, **one test closes both the modal-abort hole and the act-on-a-locked-session hole.**
+- [x] **Activation uses the mark path, not `focus_view`.** Workspaces are per-output and output focus follows the cursor; focusing a view on another output via `focus_view` leaves `hikari_server.workspace` stale. Sequence: switch sheet if needed → show-or-raise → `center_cursor` → `cursor_focus`.
+- [x] **Double-request safe in both directions.** `hide()` asserts `!hidden`, `show()` asserts `hidden`; both minimise branches return early when already in the requested state. The activate path **re-tests `is_hidden` after the sheet switch**, because switching shows the incoming sheet's views.
+- [x] **`app_id` from `view->id`** — the Phase 88 scoping correction applies again; no new string storage.
+- [x] **`WITH_FOREIGN_TOPLEVEL_MANAGEMENT`** build switch, default YES. The wlroots header declares itself unstable and its listing half is already superseded by ext-list; a future drop becomes a one-flag problem.
+- [x] **Compiles with 0 warnings** at project flags (`-Wall`, `-DNDEBUG`, all `HAVE_*` on).
+- [ ] **BUILD BLOCKED — needs `sudo make clean` first.** The `.o` files and the `hikari` binary are owned by **root** from a `sudo make` at 16:18; a user-run `make` cannot overwrite `main.o`. Only `foreign_toplevel.o` (21:31) is user-owned. Building as root again would perpetuate it.
+- [ ] **NOT YET RUN — nothing here is hardware-confirmed.** Requires a compositor restart, which ends the running session. Verify: waybar/sofi can focus a window; close works; minimise round-trips; a request during move-mode or on a locked screen is ignored rather than aborting.
+- [ ] **Known consequence to communicate:** fullscreen maps to full-maximize (matching `xdg_view.c:656`), so `set_fullscreen` and `set_maximized` are the same operation and clients see back a state they did not ask for. **External switchers should expose maximise only.**
+- [ ] **Send-to-workspace is NOT delivered by this phase and cannot be.** Verified against the protocol XML: `zwlr-foreign-toplevel-management` contains zero occurrences of "workspace", and `ext-workspace-v1`'s `assign` request moves a *workspace to an output group*, not a *window to a workspace*. No standards-track protocol expresses it. It needs a hikari-specific protocol or a CLI escape hatch — decide before building Part B.
+
+### Phase 89: `zwlr_foreign_toplevel_management_v1` — the acting half of window listing
+
+**IMPLEMENTED, UNBUILT — awaiting the user build.**
+
+- [x] **Route verified before writing code.** No standards-track toplevel-control protocol exists (installed `wayland-protocols` staging + unstable enumerated), and `xdg-activation-v1` cannot substitute — its `activate` takes a `wl_surface` the requester owns, which a switcher does not have for another client's window. wlroots 0.20 exports the implementation (`nm -D`); no new dependency, no XML, **no `wayland-scanner` step**.
+- [x] **`hikari_server.foreign_toplevel_manager`** created non-fatally beside the ext-list global, via `hikari_foreign_toplevel_manager_setup()` so `server.c` never pulls in the wlroots header.
+- [x] **One handle per mapped view**, embedded in `hikari_view` like `hikari_view_decoration`. Created in `map`, destroyed in `unmap`, defensively in `fini` — BLUEPRINT §15's three init-failure paths.
+- [x] **THE hazard: `hikari_workspace_focus_view()` asserts `hikari_server_in_normal_mode()`** (`workspace.c:401`). Client-driven requests arrive in any mode, so every handler passes `can_act()` (normal mode + mapped + not forced) first. Lock mode is covered by the same test because lock mode **is** a mode. Does not apply to the read-only Phase 88 protocol — which is why Phase 88 shipping cleanly says nothing about this one.
+- [x] **Activation does not call `hikari_workspace_focus_view()`.** Workspaces are per-output and output focus follows the cursor; it reuses the mark path (switch sheet → show/raise → centre cursor → `hikari_server_cursor_focus()`). Hidden state **re-tested** after the sheet switch, because `display_sheet()` may already have shown the view and `hikari_view_show()` asserts hidden.
+- [x] **Fullscreen → full-maximize.** hikari has no fullscreen state; `xdg_view.c`'s `apply_requested_fullscreen()` already makes this mapping for the client-side request, so both paths now mean one thing. Read back as fullscreen too, so observation matches the request.
+- [x] **State published from single writers, whole-state:** title/app_id from `publish_foreign_toplevel()` (management fed **before** the ext-list early return); minimized from `show`/`hide`; maximized/fullscreen from `hikari_view_commit_pending_operation()`; activated from `hikari_view_activate()`'s **explicit bool** (not `hikari_view_has_focus()`, which dereferences a `hikari_server.workspace` that is NULL during output teardown — the Phase 63 SIGSEGV shape); outputs from `evacuate`/`migrate`, leave-then-enter, guarded on an actual change.
+- [x] **Shared ownership handled without betting on a contract.** A listener on the handle's own `events.destroy` drops all six listeners and nulls the pointer; `hikari_foreign_toplevel_destroy()` tolerates wlroots emitting it or not. wlroots sources are not installed here, so this removes a guess rather than making one. Phase 78 pattern, applied deliberately.
+- [x] **`WITH_FOREIGN_TOPLEVEL_MANAGEMENT` switch**, in `WITH_ALL` (unlike `WITH_EXT_IMAGE_CAPTURE` — this regresses nothing). Exists because the wlroots header declares itself unstable and its listing half is already superseded. Stubs under `#else` keep every call site in `view.c` unconditional, rather than threading eleven `#ifdef`s through the file behind eight crash phases.
+- [x] **0 warnings** compiling `foreign_toplevel.o`, `view.o`, `server.o` in-tree.
+- [ ] **BUILD (USER-RUN) — three configurations.** I cannot build: it needs `sudo bmake` in-tree and I have no sudo.
+  1. `sudo bmake clean && sudo bmake`
+  2. `sudo bmake clean && sudo bmake DEBUG=YES` — the one that matters, `-Werror`
+  3. `sudo bmake clean && sudo bmake DEBUG=YES WITH_FOREIGN_TOPLEVEL_MANAGEMENT=NO` — proves the switch is real, per the Makefile's own rule that every `WITH_*` switch is tested
+- [ ] **TEST (USER-RUN).** Verify with sofi and/or waybar: the global appears; clicking an entry focuses the window **including one on another sheet and another output**; close works; minimise/unminimise round-trips; titles update live. Then check nothing regressed while **locked** — no focus, close or minimise from outside.
+- [ ] **Known consequence:** both foreign-toplevel protocols are now advertised. A client binding both sees every window twice. **sofi should bind zwlr only**; waybar's `wlr/taskbar` will move to it by itself.
+- [ ] **`ext-workspace-v1` (workspace switcher) — NOT in this phase, deliberately.** Independent of this work and touches output lifecycle, so bundling would make a crash ambiguous. Model mismatch to settle first: hikari's `hikari_workspace` is a per-output *viewport*; the thing users switch between is a **sheet**. One group per real output (not the noop output), ten workspace handles per group, `ACTIVATE` capability only — no create/remove (fixed at 10), no assign (`hikari_workspace_switch_sheet()` asserts `workspace == sheet->workspace`).
 
 ### Phase 88: R2 — foreign-toplevel list delivered; side-panel intent documented
 
@@ -13,7 +51,7 @@
 - [x] **Scoping correction recorded.** The Phase 84 plan budgeted for storing `app_id` — `view->id` already holds it. Same failure shape as the Phase 84 R10 omission: **planning from what was expected rather than from what is there.**
 - [x] **Future intent documented** (`PLANS.md` item -15): a left-edge sliding application panel. Unscoped and not approved — recorded so later work does not foreclose it. Key note: it can be an **ordinary layer-shell client**, not compositor code, and lock mode already hides the whole `top` tree so it cannot leak titles onto a locked screen.
 - [x] **BUILD AND TEST (USER-RUN) — DONE, confirmed on hardware 2026-08-22.** **waybar works.** The protocol is doing its job: an external dock enumerates hikari's windows. *(Scope of the confirmation: waybar runs and lists. Retitle-live and no-stale-entries-across-many-open/close cycles were not separately reported — they follow from the implementation but are not independently attested.)*
-- [ ] **Known limit, worth knowing before choosing a panel:** this protocol carries **title and app_id only** — no icons, no activation, no minimise. Clicking an entry to focus a window needs `zwlr_foreign_toplevel_management_v1` (**not** advertised) or `xdg-activation-v1` (**is** advertised). Check which the chosen dock expects.
+- [x] **Known limit — ADDRESSED IN PHASE 89.** This protocol carries **title and app_id only** — no icons, no activation, no minimise. `zwlr_foreign_toplevel_management_v1` is now implemented (unbuilt) to supply activation, close and minimise; `xdg-activation-v1` was checked and **cannot** substitute for a switcher, because its `activate` takes a `wl_surface` the requester owns. Icons remain unprovided by either.
 
 ### Phase 84: Remaining-work programme R1–R9 planned — AWAITING APPROVAL (see PLANS item -14)
 

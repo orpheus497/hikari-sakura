@@ -14,6 +14,7 @@
 #include <wlr/util/box.h>
 
 #include <hikari/border.h>
+#include <hikari/foreign_toplevel.h>
 #include <hikari/group.h>
 #include <hikari/indicator_frame.h>
 #include <hikari/maximized_state.h>
@@ -62,6 +63,13 @@ struct hikari_view {
   taskbar. NULL whenever the view is not mapped. `id` doubles as the app_id
   published through it. */
   struct wlr_ext_foreign_toplevel_handle_v1 *foreign_toplevel;
+
+  /* [COMMENT] Class purpose: This view's zwlr_foreign_toplevel_management_v1
+  handle and the listeners for the requests that arrive through it -- the half
+  that lets an external window switcher FOCUS, close or minimise this window
+  rather than merely list it. Same lifetime as the handle above: created on map,
+  destroyed on unmap. See src/foreign_toplevel.c. */
+  struct hikari_foreign_toplevel foreign_toplevel_management;
   struct hikari_border border;
   struct hikari_indicator_frame indicator_frame;
   struct hikari_tile *tile;

@@ -11,6 +11,7 @@
 
 #include <hikari/color.h>
 #include <hikari/configuration.h>
+#include <hikari/foreign_toplevel.h>
 #include <hikari/geometry.h>
 #include <hikari/group.h>
 #include <hikari/indicator.h>
@@ -550,6 +551,12 @@ hikari_view_init(
   BLUEPRINT.md section 15. */
   view->foreign_toplevel = NULL;
 
+  /* [COMMENT] Action purpose: Same reasoning for the management handle, which
+  additionally carries six listeners -- establishing the back-pointer and the
+  NULL handle here is what makes hikari_foreign_toplevel_destroy() a safe no-op
+  on a view that never mapped. */
+  hikari_foreign_toplevel_init(&view->foreign_toplevel_management, view);
+
   view->use_csd = false;
   view->child = child;
   view->current_geometry = &view->geometry;
@@ -600,6 +607,8 @@ hikari_view_fini(struct hikari_view *view)
     wlr_ext_foreign_toplevel_handle_v1_destroy(view->foreign_toplevel);
     view->foreign_toplevel = NULL;
   }
+
+  hikari_foreign_toplevel_destroy(&view->foreign_toplevel_management);
 
   hikari_free(view->title);
   hikari_free(view->id);
@@ -671,6 +680,12 @@ nothing at all. */
 static void
 publish_foreign_toplevel(struct hikari_view *view)
 {
+  /* [COMMENT] Action purpose: Feed both protocols from the one place, and feed
+  the management handle BEFORE the ext-list early return below. The two handles
+  are created independently and either can be absent, so a return keyed on one
+  must not silence the other. */
+  hikari_foreign_toplevel_publish_title(&view->foreign_toplevel_management);
+
   if (view->foreign_toplevel == NULL) {
     return;
   }
@@ -1125,6 +1140,12 @@ hikari_view_map(struct hikari_view *view, struct wlr_surface *surface)
     }
   }
 
+  /* [COMMENT] Action purpose: The acting half, created at the same point and on
+  the same terms -- a window that can be listed should also be actionable. It
+  publishes its own title, state and output at creation, so like the handle
+  above it depends on hikari_view_configure() having already run. */
+  hikari_foreign_toplevel_create(&view->foreign_toplevel_management);
+
   /* [COMMENT] Action purpose: Decide the view's layer before anything shows or
   raises it, and do so unconditionally rather than only in the lock-mode case.
 
@@ -1216,6 +1237,12 @@ hikari_view_unmap(struct hikari_view *view)
     view->foreign_toplevel = NULL;
   }
 
+  /* [COMMENT] Action purpose: Withdrawn here rather than in the shells' destroy
+  handlers, so an unmapped window stops being actionable at the same moment it
+  stops being listed. Every publish call below this point no-ops on the now-NULL
+  handle, including the one inside the hikari_view_hide() a few lines down. */
+  hikari_foreign_toplevel_destroy(&view->foreign_toplevel_management);
+
   if (hikari_view_is_forced(view)) {
     view_unlink_visible(view);
     hikari_view_unset_forced(view);
@@ -1295,6 +1322,10 @@ hikari_view_show(struct hikari_view *view)
 
   hikari_view_damage_whole(view);
 
+  // [COMMENT] Action purpose: hikari's `hidden` flag IS minimised as far as
+  // foreign-toplevel clients are concerned, and show/hide are its only writers.
+  hikari_foreign_toplevel_publish_state(&view->foreign_toplevel_management);
+
   assert(is_first_view(view));
 }
 
@@ -1325,6 +1356,10 @@ hikari_view_hide(struct hikari_view *view)
   hikari_indicator_frame_hide(&view->indicator_frame);
 
   hikari_view_damage_whole(view);
+
+  // [COMMENT] Action purpose: The other half of the minimised state -- see
+  // hikari_view_show() above.
+  hikari_foreign_toplevel_publish_state(&view->foreign_toplevel_management);
 }
 
 void
@@ -1754,6 +1789,13 @@ hikari_view_evacuate(struct hikari_view *view, struct hikari_sheet *sheet)
 
   wl_list_remove(&view->output_views);
   wl_list_insert(&view->output->views, &view->output_views);
+
+  /* [COMMENT] Action purpose: Re-announce the output through the management
+  handle. Evacuation runs from hikari_output_fini() via
+  hikari_workspace_merge(), and wlroots calls that while the outgoing
+  wlr_output is still alive -- so the leave this emits is always sent to a live
+  output rather than a freed one. */
+  hikari_foreign_toplevel_publish_output(&view->foreign_toplevel_management);
 
   if (!hikari_view_is_hidden(view)) {
     if (hikari_view_is_forced(view)) {
@@ -2209,6 +2251,12 @@ hikari_view_commit_pending_operation(
 
   commit_operation(&view->pending_operation, view);
   hikari_view_unset_dirty(view);
+
+  /* [COMMENT] Action purpose: Maximization changes land here. hikari reaches
+  HIKARI_MAXIMIZATION_FULLY_MAXIMIZED through several commit paths that all
+  converge on this function, so republishing the derivable state once from here
+  covers every one of them without each having to remember. */
+  hikari_foreign_toplevel_publish_state(&view->foreign_toplevel_management);
 }
 
 void
@@ -2223,6 +2271,14 @@ hikari_view_activate(struct hikari_view *view, bool active)
     }
     view->activate(view, active);
   }
+
+  /* [COMMENT] Action purpose: Published from the explicit bool rather than read
+  back from the view, because hikari_view_has_focus() dereferences
+  hikari_server.workspace, which is NULL while an output is being torn down.
+  This is the single writer of activation for both the outgoing and the incoming
+  view -- hikari_workspace_focus_view() calls it once for each. */
+  hikari_foreign_toplevel_publish_activated(
+      &view->foreign_toplevel_management, active);
 }
 
 static void
@@ -2261,6 +2317,10 @@ hikari_view_migrate(struct hikari_view *view,
   hikari_geometry_constrain_relative(view_geometry, &output->usable_area, x, y);
 
   migrate_view(view, sheet, center);
+
+  // [COMMENT] Action purpose: The other way a mapped view changes output --
+  // moving a window across a monitor boundary. See hikari_view_evacuate().
+  hikari_foreign_toplevel_publish_output(&view->foreign_toplevel_management);
 
 #ifdef HAVE_XWAYLAND
   if (view->move != NULL) {
