@@ -1,5 +1,7 @@
 #include <hikari/move_mode.h>
 
+#include <stdbool.h>
+
 #include <wlr/types/wlr_cursor.h>
 #include <wlr/types/wlr_seat.h>
 
@@ -63,8 +65,14 @@ cursor_move(uint32_t time_msec)
   struct hikari_output *view_output = focus_view->output;
 
   if (output == view_output) {
-    hikari_view_move_absolute(
-        focus_view, lx - view_output->geometry.x, ly - view_output->geometry.y);
+    struct hikari_move_mode *move_mode = &hikari_server.move_mode;
+
+    /* [COMMENT] Action purpose: Subtract the grab anchor, so the window follows
+    the pointer's DELTA rather than teleporting its origin to the pointer's
+    absolute position. See the anchor's comment in move_mode.h. */
+    hikari_view_move_absolute(focus_view,
+        lx - view_output->geometry.x - move_mode->anchor_x,
+        ly - view_output->geometry.y - move_mode->anchor_y);
   } else {
     hikari_server_migrate_focus_view(output, lx, ly, false);
   }
@@ -89,6 +97,48 @@ hikari_move_mode_init(struct hikari_move_mode *move_mode)
 
   move_mode->mode.cancel = cancel;
   move_mode->mode.cursor_move = cursor_move;
+
+  move_mode->anchor_x = 0;
+  move_mode->anchor_y = 0;
+}
+
+/* [COMMENT] Function purpose: Establish the grab anchor for a move.
+
+Two cases, and the distinction is what preserves the historical behaviour while
+fixing the common one. When the pointer is already over the window -- every
+pointer-initiated move, and a keyboard-initiated one after a focus change, since
+focusing centres the pointer on the view -- the window is grabbed exactly where
+it was taken hold of and does not move until the pointer does. When the pointer
+is somewhere else entirely, there is no meaningful grab point, so the corner
+warp hikari has always done is kept and the anchor is zero, which reproduces the
+old path exactly. */
+static void
+set_anchor(struct hikari_move_mode *move_mode, struct hikari_view *view)
+{
+  struct hikari_output *output = view->output;
+  struct wlr_box *border_geometry = hikari_view_border_geometry(view);
+  struct wlr_box *geometry = hikari_view_geometry(view);
+
+  int cursor_x = hikari_server.cursor.wlr_cursor->x - output->geometry.x;
+  int cursor_y = hikari_server.cursor.wlr_cursor->y - output->geometry.y;
+
+  /* [COMMENT] Action purpose: Tested against the BORDER box, not the content
+  box, so taking hold of a window by its border counts as grabbing the window.
+  The anchor itself is measured from the content origin, because that is what
+  hikari_view_move_absolute() positions. */
+  bool over_view = cursor_x >= border_geometry->x &&
+                   cursor_x < border_geometry->x + border_geometry->width &&
+                   cursor_y >= border_geometry->y &&
+                   cursor_y < border_geometry->y + border_geometry->height;
+
+  if (over_view) {
+    move_mode->anchor_x = cursor_x - geometry->x;
+    move_mode->anchor_y = cursor_y - geometry->y;
+  } else {
+    move_mode->anchor_x = 0;
+    move_mode->anchor_y = 0;
+    hikari_view_top_left_cursor(view);
+  }
 }
 
 void
@@ -100,7 +150,10 @@ hikari_move_mode_enter(struct hikari_view *view)
   hikari_indicator_update(indicator, view);
 
   hikari_view_raise(view);
-  hikari_view_top_left_cursor(view);
+
+  // [COMMENT] Action purpose: After the raise, so the anchor is measured
+  // against geometry nothing else is about to change.
+  set_anchor(&hikari_server.move_mode, view);
 
   hikari_server.mode = (struct hikari_mode *)&hikari_server.move_mode;
 }

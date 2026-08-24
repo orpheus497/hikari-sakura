@@ -1,3 +1,83 @@
+## [2026-08-25 09:06] Phase 91: USER REPORTS IT WORKING ON HARDWARE
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
+
+**What was actually said:** *"I THINK EVERYTHIGN WORKS"*. Recorded verbatim rather than paraphrased as "all tests pass", because those are different claims and this project has already paid for treating a recorded status as a verified one (FB-4 was carried as an open CRITICAL blocker for ~60 phases after it stopped being true).
+
+**What this confirms.** The user built in-tree and ran the compositor. That closes the largest risk in the phase -- the two new hooks sit on paths every geometry operation in `view.c` converges on (`hikari_view_commit_pending_operation()` and `hikari_view_refresh_geometry()`), and a session that starts, maps windows and stays up is direct evidence that neither hook wedges the event loop, corrupts the visibility linkage, or trips an assertion.
+
+**What it does NOT confirm, and the distinction is not pedantry.** Two of the four deliverables are **off in the shipped configuration**:
+
+| Feature | Shipped default | Exercised by simply running? |
+|---|---|---|
+| Grab anchors (move/resize) | always on | **Yes** |
+| 16-colour palette | always on (defaults derived from it) | **Yes** |
+| `grid` border accounting | always on | **Yes** |
+| Hidden views incorporated | always on | Only if `view-hide` was used before a layout |
+| Automatic re-tiling | `layout { auto = false }` | **No** |
+| Position animation | `ui { animation { enabled = false } }` | **No** |
+
+So a clean run against the shipped config is a **no-regression** result plus confirmation of the four always-on changes. `src/reflow.c` and `src/animation.c` have almost certainly not executed a single line of their working paths -- `hikari_reflow_schedule()` returns at its policy gate and `hikari_animation_move()` returns false at `may_animate()`. **The idle-drain ordering argument, the lock-mode drop, and the `node_at()` offset remain untested.**
+
+**Status set to: RUNNING ON HARDWARE, OPT-IN PATHS UNEXERCISED.** Not "confirmed". The tests that matter (T2-T10, T14-T16 in `TODOS.md` Phase 91) require the two knobs to be turned on first, and that is what the user has been asked to do next.
+
+## [2026-08-25 08:09] Phase 91: EXECUTED -- automatic re-tiling, window motion, the colour palette, and two geometry defects
+
+**Status: IMPLEMENTED, COMPILED AND LINKED.** All 71 translation units build with **0 warnings** under the native FreeBSD toolchain (clang 19.1.7, `x86_64-unknown-freebsd15.1`), and both binaries **link**. Not run on hardware.
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
+
+### A toolchain correction that matters for every future phase
+
+Previous phases reported "0 warnings, unbuilt" and could not compile `src/topbar.c` at all, attributing it to FB-9. **`/bin/cc` is a Linux-targeting GCC belonging to the analysis container; `/usr/bin/clang` is the native FreeBSD compiler.** Using the latter, `topbar.c` compiles, libucl links, and the whole tree builds and links out-of-tree. **FB-9 is narrower than recorded** -- it is a wrong-compiler problem, not a FreeBSD-headers-unavailable problem. Future phases should build with `/usr/bin/clang` and can hand off *built* rather than *unbuilt*. In-tree `.o` files remain root-owned from an old `sudo make`, so this build was done into a scratch directory and the user's artifacts were left untouched.
+
+### The user's four asks, and what each turned out to be
+
+**1. Re-tile on open/close, config-gated.** Absent entirely -- `hikari_sheet_apply_split()` was reachable only from four user-initiated actions. It was also **contra-documented**: `hikari(1)` stated the no-auto-insert behaviour as design intent. The ask is therefore not an antipattern *provided it stays opt-in*, which is what the user asked for. Delivered as `layout { auto }`, defaulting to false.
+
+**The ordering hazard is the substance of the work** and is written up as BLUEPRINT section 18.1. Briefly: a newly mapped view is dirty, `hikari_view_is_tileable()` is false for a dirty view, so a re-tile performed where it is requested lays out every window **except the one that triggered it** -- silently, and only sometimes. Hence request-and-drain via an idle source, retried from `hikari_view_commit_pending_operation()`. **Lock mode drops requests rather than deferring them**, because `hikari_view_show()` asserts `!is_forced` and lock mode forces every view -- the Phase 89 `can_act()` hazard and the Phase 90 `src/ipc.c` hazard, for the third time.
+
+**2. Animation.** Nothing existed. Split honestly:
+
+* **Position: delivered.** The compositor owns a view's scene-tree position outright.
+* **Resize: deferred by user decision.** A resize is a protocol round trip, so only a stale-buffer scale is available and it is visibly soft on text.
+* **"the window needs to move properly": this was a real defect, and not an animation one.** `move_mode` moved the window's **top-left corner to the pointer** on every motion and compensated by warping the pointer to that corner on entry, so a window grabbed anywhere else jumped out from under the pointer. Fixed with a grab anchor.
+
+**A second, arithmetic defect found while fixing the first.** `hikari_view_bottom_right_cursor()` warps to `geometry->x + geometry->width`, while `resize_mode`'s motion handler computed `cursor_x - geometry->x - border`. **Entering resize mode and releasing without moving the pointer took `border` pixels off the window, every time.** The anchor makes entry a fixed point by construction. This is one of the "slight bugs in window sizing/resizing" the user reported.
+
+**3. The 16-colour palette.** The compositor had nine semantic slots and no palette; `hikari-topbar` separately read `~/.cache/wal/colors` -- sixteen positional colours, defaulting to white when pywal is absent. The two colour systems never met. Unified: `ui { palette }` is the source of truth, the semantic slots are **derived** from it rather than carrying literals, and the palette is handed to the helper as `argv[1]` (built in the parent -- `setenv()` between `fork()` and `exec()` is not async-signal-safe in a process wlroots has given threads to, the same hazard the existing `write()`-not-`fprintf()` comment documents).
+
+**Three documented colourscheme keys were dead.** `foreground`, `grouped` and `first` were parsed, validated, defaulted and documented in `hikari(1)`, and **read by nothing**. Not invented homes -- restored to the ones the man page already described, and the tree already contained the corroborating evidence: `src/normal_mode.c` brackets both indicator transitions with `hikari_group_damage(focus_view->group)`, which only makes sense if showing the indicator changes how that group's views are drawn. `foreground`'s site was a hardcoded `cairo_set_source_rgba(cairo, 0, 0, 0, 1)` -- an opaque black exactly equal to the key's own default, so setting the key did nothing and no default appearance changes by reading it.
+
+**4. Geometry defects.**
+
+* **`grid` gave its first row and column a surplus.** `views_width`/`views_height` counted borders per **cell** while `rest_width`/`rest_height` counted them per **gap**, so the two disagreed by one border per axis and the surplus went to the first cell. The grid still filled its frame, which is why it looked plausible. **Verified across 528 (width x border x gap x view-count) configurations**: worst-case first-cell surplus **13px before, 3px after**, the remainder now pure integer-division rounding and identical to `queue`'s.
+* **Hidden views took layout slots without being drawn.** `hikari_view_is_tileable()` does not exclude hidden views, so a view hidden with `view-hide` was counted, given a slot, and left hidden -- a visible gap. Two of six algorithms already avoided this by unhiding as they went, so behaviour differed by which layout you applied. **User ruling: hidden views are unhidden and added to the layout.** Done once in `hikari_sheet_apply_split()` so all six agree.
+
+### OBS -- re-investigated, nothing new to do
+
+All four compositor-side requirements in section 14 re-verified present. The user's own observation (clipping works, recording does not) **confirms the existing diagnosis rather than contradicting it**: clipping tools bind `wlr-screencopy` directly, OBS goes through portal -> PipeWire -> dmabuf. The residual failure is the hybrid-GPU dmabuf handoff. **No hikari-side fix exists and none was attempted.**
+
+### A bug in this phase's own work, caught by its own test
+
+`read_compositor_colors()` accepted a **seventeenth** colour: the loop stops at sixteen whether or not the argument ended, so a trailing field was silently ignored rather than reported. Counting alone was not enough; a `complete` flag records that the argument actually ended. Found by the standalone test, not by reading.
+
+**A second one, in the shipped configuration rather than the code.** The palette block was first written as two columns -- and a `#` comment runs to end of line, so `color8` through `color15` were inside a comment and **only eight of sixteen were defined**. Caught by the libucl structural test. Palette entries are now one per line, and `hikari(1)` says why.
+
+### Verification performed
+
+| What | How |
+|---|---|
+| Whole tree | 71 units, 0 warnings, **links** (FreeBSD clang 19.1.7) |
+| Shipped config | Parsed by **hikari's own `hikari_configuration_load()`**, linked against the real objects -- every palette reference resolved and checked against the palette |
+| Config structure | 104 assertions with real libucl -- section names, key names, value types, colour forms |
+| New knobs | Every one set to a non-default value and read back; **8 rejection paths** each producing a specific diagnostic |
+| `grid` arithmetic | 528 configurations; frame-filling and cell-spread invariants |
+| Topbar palette intake | 8 cases, clean under **ASan+UBSan** |
+| Man page | Converts with pandoc (1898 lines of roff) |
+
+**Not verified:** anything requiring a live compositor -- the reflow drain firing, animation on screen, the grab anchors under a real pointer, and the indicator group frames. These need the user's hardware.
+
 ## [2026-08-24 11:35] Phase 90 W-A/W-B: EXECUTED -- top bar containment, character cap and banner scroll
 
 **Status:** IMPLEMENTED, UNBUILT. **0 warnings across all 66 translation units in all three build configurations**, plus `topbar.c`. The text logic is **unit-tested standalone and clean under ASan+UBSan**; the config **parses with real libucl**; the man page **converts with pandoc**. Not linked, not run.

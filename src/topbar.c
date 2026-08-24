@@ -124,7 +124,74 @@ static int is_valid_hex_color(const char *s) {
     return s[7] == '\0';
 }
 
+/* Function purpose: Adopt the palette the compositor passed as argv[1] -- sixteen
+ * "#rrggbb" values, comma separated.
+ *
+ * This is the primary source of colour. read_pywal_colors() below is kept as the
+ * fallback for a helper started by hand or by an older compositor, and is not
+ * consulted at all once this has succeeded: re-reading ~/.cache/wal/colors on the
+ * throttled path would otherwise overwrite the configured theme a second later.
+ *
+ * Returns 1 when a complete palette was accepted. A partial or malformed argument
+ * is rejected outright rather than half-applied, so a typo produces the pywal
+ * fallback instead of eight themed blocks and eight white ones. */
+static int compositor_palette_loaded = 0;
+
+static int read_compositor_colors(const char *arg) {
+    if (!arg) return 0;
+
+    char parsed[16][10];
+    int i = 0;
+    int complete = 0;
+    const char *cursor = arg;
+
+    while (i < 16) {
+        const char *comma = strchr(cursor, ',');
+        /* Action purpose: 7 is "#rrggbb" exactly, and is what bounds the memcpy
+         * below -- parsed[i] is 10 bytes, so a field of any other length is
+         * rejected before it can be copied. */
+        size_t len = comma ? (size_t)(comma - cursor) : strlen(cursor);
+
+        if (len != 7) return 0;
+
+        memcpy(parsed[i], cursor, len);
+        parsed[i][len] = '\0';
+
+        if (!is_valid_hex_color(parsed[i])) return 0;
+
+        i++;
+
+        if (!comma) {
+            complete = 1;
+            break;
+        }
+
+        cursor = comma + 1;
+    }
+
+    /* Action purpose: `complete` is what rejects a SEVENTEENTH colour, and the
+     * check is not redundant with the count. The loop stops at sixteen whether
+     * or not the argument ended, so counting alone would accept a trailing
+     * field by silently ignoring it -- and a palette long enough to have a
+     * seventeenth entry is a malformed one, not a truncatable one. */
+    if (i != 16 || !complete) return 0;
+
+    for (i = 0; i < 16; i++) {
+        strncpy(pywal_colors[i], parsed[i], sizeof(pywal_colors[i]) - 1);
+        pywal_colors[i][sizeof(pywal_colors[i]) - 1] = '\0';
+    }
+
+    compositor_palette_loaded = 1;
+
+    return 1;
+}
+
 static void read_pywal_colors(void) {
+    /* Action purpose: The compositor's palette wins outright. Without this
+     * guard the throttled refresh below would reinstate pywal's colours a
+     * second after the configured ones were applied. */
+    if (compositor_palette_loaded) return;
+
     for (int i = 0; i < 16; i++) strcpy(pywal_colors[i], "#ffffff");
 
     const char *home = getenv("HOME");
@@ -426,13 +493,17 @@ static int get_backlight(void) {
  * MAIN
  * ═══════════════════════════════════════════════════════════════════════════ */
 
-int main(void) {
+int main(int argc, char **argv) {
     struct stats s;
     memset(&s, 0, sizeof(s));
     memset(last_cp_time, 0, sizeof(last_cp_time));
 
     /* Prime the CPU delta accumulator so the first real reading is valid */
     get_cpu_usage();
+
+    /* Action purpose: argv[1] is the compositor's palette. Falls through to the
+     * pywal cache when absent or malformed -- see read_compositor_colors(). */
+    if (argc > 1) read_compositor_colors(argv[1]);
     read_pywal_colors();
 
     /* ── NVIDIA grace-detection ─────────────────────────────────────────

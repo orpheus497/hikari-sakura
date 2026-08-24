@@ -15,6 +15,7 @@
 #include <hikari/group_assign_mode.h>
 #include <hikari/indicator.h>
 #include <hikari/indicator_frame.h>
+#include <hikari/reflow.h>
 #include <hikari/input_grab_mode.h>
 #include <hikari/layout.h>
 #include <hikari/mark_assign_mode.h>
@@ -68,6 +69,14 @@ hikari_workspace_init(
 void
 hikari_workspace_fini(struct hikari_workspace *workspace)
 {
+  /* [COMMENT] Action purpose: Leave the re-tile queue before the storage it
+  links through is released. The queue head is a static in src/reflow.c and the
+  links live in the sheets themselves, so a freed sheet left queued leaves that
+  head pointing into freed memory -- reachable on the next map on any output. */
+  for (int i = 0; i < HIKARI_NR_OF_SHEETS; i++) {
+    hikari_reflow_cancel(&workspace->sheets[i]);
+  }
+
   hikari_free(workspace->sheets);
 }
 
@@ -190,6 +199,14 @@ display_sheet(struct hikari_workspace *workspace, struct hikari_sheet *sheet)
   }
 
   hikari_server_cursor_focus();
+
+  /* [COMMENT] Action purpose: A sheet coming into view is the moment its
+  deferred re-tile becomes performable. src/reflow.c drops requests for sheets
+  that are not visible -- unhiding the views of a sheet the user has switched
+  away from would draw them over the one that is displayed -- so the request has
+  to be re-offered here rather than merely waiting. No-ops unless
+  `layout { auto = true }`. */
+  hikari_reflow_schedule(sheet);
 }
 
 #define DISPLAY_SHEET(name, sheet)                                             \

@@ -1,6 +1,32 @@
 # Hikari Project Briefing
 
-*Last Updated:* 2026-08-24 11:35
+*Last Updated:* 2026-08-25 09:06
+
+## Current Status
+
+- **Phase:** Phase 91 (**RUNNING ON HARDWARE — user built in-tree and reports it working, 2026-08-25 09:06. OPT-IN PATHS UNEXERCISED.**)
+
+**The user's words were *"I THINK EVERYTHIGN WORKS"*, and they are recorded as such rather than as "tests pass", because the two are different claims and this project has already paid for confusing them** (FB-4 was carried as an open CRITICAL blocker for ~60 phases after it stopped being true). **What the run proves is real and is the largest risk in the phase:** both new hooks sit on paths every geometry operation in `view.c` converges on, and a session that starts, maps windows and stays up is direct evidence that neither wedges the event loop nor trips an assertion. **What it does not prove:** the shipped config has `layout { auto = false }` and `ui { animation { enabled = false } }`, so `hikari_reflow_schedule()` returns at its policy gate and `hikari_animation_move()` returns false at `may_animate()` — **`src/reflow.c` and `src/animation.c` have almost certainly not executed a line of their working paths.** The idle-drain ordering argument, the lock-mode drop and the `node_at()` offset are all still untested. Confirmed by the run itself: the grab anchors, the palette (the semantic slots derive from it, so the new theme is visible immediately), and the `grid` border accounting.
+
+**A toolchain correction comes first, because it changes what every future phase can claim.** Previous phases reported "0 warnings, unbuilt" and could not compile `src/topbar.c`, filing it under FB-9. **`/bin/cc` is a Linux-targeting GCC belonging to the analysis container; `/usr/bin/clang` is the native FreeBSD compiler** (`x86_64-unknown-freebsd15.1`). With it, `topbar.c` compiles, libucl links, and the whole tree **builds and links**. FB-9 is narrower than recorded — a wrong-compiler problem, not a missing-headers one. In-tree `.o` files are still root-owned from an old `sudo make`, so this build went to a scratch directory and the user's artifacts were left alone.
+
+**The user asked for four things and one of them turned out to be contra-documented.** Automatic re-tiling on open/close was absent entirely, and `hikari(1)` states the no-auto-insert behaviour as *design intent* — so it ships as `layout { auto }`, defaulting to false, exactly the opt-in the user asked for. **The ordering hazard is the substance of the work:** a newly mapped view is dirty, `hikari_view_is_tileable()` is false for a dirty view, so a re-tile performed where it is requested lays out every window **except the one that triggered it** — silently, and only sometimes, which is the worst shape this class of bug can take. Hence request-and-drain through an idle source, retried from `hikari_view_commit_pending_operation()`. **Lock mode drops requests rather than deferring them**, because `hikari_view_show()` asserts `!is_forced` and lock mode forces every view: the Phase 89 `can_act()` hazard and the Phase 90 `ipc.c` hazard, for the third time.
+
+**"the window needs to move properly" was a real defect and not an animation one.** Move mode put the window's top-left corner *on* the pointer every motion and warped the pointer to that corner to disguise it, so a window grabbed anywhere else jumped out from under the pointer. Fixed with a grab anchor — and **a second, arithmetic defect surfaced while fixing it**: `bottom_right_cursor()` warps to `x + width` while resize mode computed `cursor_x - x - border`, so **entering resize mode and releasing without moving took `border` pixels off the window every single time.** That is one of the "slight bugs in window sizing" the user reported. Animation itself is **position only** — a resize is a protocol round trip so only a stale-buffer scale exists, and **B3 is deferred by user decision**. The load-bearing detail: hikari hit-tests through its own geometry rather than the scene graph, so `node_at()` applies `hikari_animation_offset()` or the pointer would select a travelling window at its destination.
+
+**The palette unified two colour systems that had never met** — nine semantic slots in the compositor, sixteen positional colours read from `~/.cache/wal/colors` by the bar helper, defaulting to white. `ui { palette }` is now the source of truth, the semantic slots are **derived** from it, and it reaches the helper as `argv[1]`. **Three documented colourscheme keys were dead**: `foreground`, `grouped` and `first` were parsed, validated, defaulted, documented in `hikari(1)` and **read by nothing**. Their homes were not invented — they are the ones the man page already described, corroborated by `normal_mode.c`'s otherwise-pointless `hikari_group_damage()` bracketing both indicator transitions.
+
+**Two geometry defects fixed.** `grid` counted borders per *cell* in one expression and per *gap* in another, quietly handing the surplus to the first row and column — **13px worst case before, 3px after, verified over 528 configurations**. And hidden views took layout slots without being drawn; **per the user's ruling they are now unhidden and incorporated**, once, so all six algorithms agree instead of two of them.
+
+**Two bugs in this phase's own work were caught by its own tests, not by reading.** The topbar palette parser accepted a seventeenth colour (stopping at sixteen is not the same as consuming sixteen), and the shipped config's two-column palette put `color8`–`color15` after a `#` comment so **only eight of sixteen were defined**.
+
+- **Blockers:** none in the code. **Everything is unverified on hardware** — 24 tests are listed in `TODOS.md`; T9 (map while locked), T10 (rapid opens) and T15 (click a travelling window) exercise the reasoning the design rests on and should be run first.
+- **OBS:** re-investigated, **nothing compositor-side remains**. The user's own "clipping works, recording does not" confirms the `BLUEPRINT.md` §14 diagnosis rather than contradicting it — clipping binds `wlr-screencopy` directly, OBS goes through portal → PipeWire → dmabuf, and the residual failure is the hybrid-GPU handoff.
+- **Next:** build in-tree (`sudo make clean` first — root-owned `.o` files), run the 24 tests, report back. WP-B3 stays closed unless asked for.
+
+---
+
+## Previous Status
 
 ## Current Status
 

@@ -1,8 +1,92 @@
 # Granular Task List
 
-*Last Updated:* 2026-08-24 11:52
+*Last Updated:* 2026-08-25 09:06
 
 ## Active List
+
+### Phase 91: Layouts, motion, palette — IMPLEMENTED, COMPILED AND LINKED (not run)
+
+*(Analysis: `DECISIONS_LOG.md` Phase 91. Architecture: `BLUEPRINT.md` §18.)*
+
+**User rulings recorded:** resize animation **deferred**; hidden views are **unhidden and added to the layout**; work sequenced in procedural order (A → B → C → D), not by ease.
+
+#### WP-A — automatic re-tiling
+
+- [x] **A-1** `layout { auto | insert | reflow-on-close | default-register }`, new top-level section. Singular, so it cannot be confused with `layouts` (the registers) — a policy key in that block would be read as a register name.
+- [x] **A-2** `src/layout_policy.c` — defaults reproduce historical behaviour exactly; an unresolvable `default-register` falls back to the per-sheet register rather than disabling the feature.
+- [x] **A-3** `src/reflow.c` — request-and-drain. **Never re-tile where the request is made:** a newly mapped view is dirty and would be the one window omitted.
+- [x] **A-4** Queue link lives in `hikari_sheet`, self-linked when idle; `hikari_workspace_fini()` cancels. A freed sheet left queued leaves the static head in freed memory.
+- [x] **A-5** `drain()` clears `idle_source` first — libwayland destroys an idle source while dispatching it.
+- [x] **A-6** Deferred sheets stay queued and are **not** re-armed from inside the handler (busy loop).
+- [x] **A-7** Lock mode **drops** requests; `hikari_view_map()` schedules only on its non-locked branch.
+- [x] **A-8** `display_sheet()` re-offers, since drain drops requests for non-visible sheets.
+
+#### WP-B — motion
+
+- [x] **B-1** Grab anchor in `move_mode` and `resize_mode`. Corner warp retained for the pointer-not-over-the-window case, so the old path is preserved.
+- [x] **B-1a** Fixes the `border`-pixel shrink on every entry into resize mode.
+- [x] **B-2** `src/animation.c` — position interpolation, three easings, tick from `frame_handler()`.
+- [x] **B-2a** `node_at()` applies `hikari_animation_offset()`. hikari hit-tests through its own geometry, not the scene graph.
+- [x] **B-2b** Refused for: disabled, duration 0, unplaced, no node/output, hidden, lock mode, **and interactive move/resize**.
+- [ ] **B-3** Resize animation — **deferred by user decision, 2026-08-25.** Only a stale-buffer scale is available. Re-open only if the user asks.
+
+#### WP-C — the palette
+
+- [x] **C-1** `ui { palette { color0..color15 } }`; semantic slots derived from it.
+- [x] **C-2** Palette resolved by explicit lookup **before** `parse_ui()` iterates, so file key order cannot change meaning.
+- [x] **C-3** A palette entry may not reference another (`parse_color()` takes NULL there).
+- [x] **C-4** `foreground` wired to the indicator text — it was a hardcoded black equal to the key's own default.
+- [x] **C-5** `grouped` / `first` wired to group indicator frames, the sites `hikari(1)` already described.
+- [x] **C-6** Palette handed to `hikari-topbar` as `argv[1]`, built in the parent; pywal retained as fallback.
+
+#### WP-D — geometry and documentation
+
+- [x] **D-1** `grid` border accounting: per-gap, not per-cell.
+- [x] **D-2** Hidden views unhidden before layout, once, so all six algorithms agree.
+- [x] **D-3** `etc/hikari/hikari.conf` rewritten — every tunable documented with its default and the reasoning.
+- [x] **D-4** `hikari(1)`: **LAYOUT POLICY** section, **Palette** and **Animation** subsections, colourscheme defaults, and the no-auto-insert paragraph amended to point at the opt-in.
+- [x] **D-5** `BLUEPRINT.md` §16's "hikari adds no animation" amended — it is no longer true and would mislead.
+
+#### Verification done here
+
+- [x] 71 translation units, 0 warnings, **both binaries link** (native FreeBSD clang 19.1.7).
+- [x] Shipped config parsed by **hikari's own `hikari_configuration_load()`**, linked against the real objects.
+- [x] 104 libucl structural assertions over the shipped config.
+- [x] Every new knob set non-default and read back; **8 rejection paths**, each with a specific diagnostic.
+- [x] `grid` arithmetic over **528** configurations.
+- [x] Topbar palette intake: 8 cases, clean under **ASan+UBSan**.
+- [x] Man page converts with pandoc.
+
+### Phase 91 — tests only the user can run
+
+**Status 2026-08-25 09:06:** the user built in-tree and reports the compositor working. Items marked `[x]` below are the ones a plain run against the **shipped** config actually exercises. **T2–T10 and T14–T16 are still open and cannot have passed** — they need `layout { auto = true }` and `ui { animation { enabled = true } }`, and both ship off.
+
+- [x] **T1** Default config: open and close windows. **Nothing should re-tile** — `auto` is false.  *(implied by the 09:06 run; re-check if anything looks off)*
+- [ ] **T2** Set `layout { auto = true }`, apply `LC+g` (grid), open a window. It should join the grid and the others should resize.
+- [ ] **T3** With `auto = true`, close a window from a grid. The survivors should close the gap.
+- [ ] **T4** With `auto = true` and no layout applied and no `default-register`, open windows. The sheet should stay **stacking** — not silently start tiling.
+- [ ] **T5** Set `default-register = "g"` and open a window on a fresh sheet. It should adopt the grid.
+- [ ] **T6** Set `insert = prepend`. A new window should become the **main** window; existing ones keep their relative order.
+- [ ] **T7** Set `reflow-on-close = false` with `auto = true`. Opening should re-tile, closing should **not**.
+- [ ] **T8** Open a window on a **background** sheet (via a view config), then switch to that sheet. It should be incorporated on arrival.
+- [ ] **T9** Lock the screen, have something map (e.g. a timed launch), unlock. **No crash, no assert** — the request must have been dropped.
+- [ ] **T10** Open several windows rapidly (a script launching four terminals). All four should end up in the layout — this is the dirty-view deferral doing its job.
+- [x] **T11** `L+left`-drag a window **from its middle**. It must not jump; the grab point must stay under the pointer.  *(implied by the 09:06 run; re-check if anything looks off)*
+- [x] **T12** `L+right` on a window and release **without moving**. The window must not change size at all (this was the `border`-pixel shrink).  *(implied by the 09:06 run; re-check if anything looks off)*
+- [ ] **T13** `L+m` with the pointer far from the focused window. The old corner-warp behaviour should be intact.
+- [ ] **T14** Enable animation (`enabled = true`), apply a layout. Windows should slide. Try all three easings.
+- [ ] **T15** With animation on, **click a window while it is travelling.** It must select the window where it is *drawn*. This is the `node_at()` offset.
+- [ ] **T16** With animation on, drag a window. Dragging must be **instant**, with no lag behind the pointer.
+- [x] **T17** Confirm the palette: borders should be `#f0edf2` focused / `#5e5966` unfocused, desktop `#2b1e3a`.  *(implied by the 09:06 run; re-check if anything looks off)*
+- [ ] **T18** Hold Logo with two windows in the same group. The focused one should frame in `#aba0d9`, the group's first in `#8e7cc3`, the rest in `#b18fc7`. **Release Logo — every frame must disappear.**
+- [ ] **T19** Change `palette { color15 }`, reload with `LS+r`. The focused border should follow immediately.
+- [ ] **T20** Restart the compositor and check the top bar takes the palette (it cannot pick it up on reload — spawned once).
+- [ ] **T21** Remove `~/.cache/wal/colors` and restart. The bar must still be themed, from the compositor's palette.
+- [x] **T22** Apply `LC+g` with 4 windows and measure the cells. The top-left should now be within a pixel or two of the others, not `2 * border` larger.  *(implied by the 09:06 run; re-check if anything looks off)*
+- [ ] **T23** `L+h` a window, then apply a layout. It should **reappear and take its slot** — no gap.
+- [ ] **T24** Reload with a deliberately broken value (`easing = swoosh`). The old config must stay in force and the error must name the key.
+
+## Previously Active
 
 ### Phase 90: Client-driven fullscreen + top-bar media overflow — CYCLE 1 + W-A/W-B IMPLEMENTED, UNBUILT
 

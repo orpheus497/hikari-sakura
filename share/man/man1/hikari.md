@@ -732,6 +732,12 @@ an existing layout the user has to issue a tiling action. This way opening a new
 view does not scramble an existing layout and the user can actively decide when
 to incorporate a view into a layout.
 
+That is the default, and it is what the *layout* section described under
+**LAYOUT POLICY** below can turn off. Setting *auto* makes a sheet incorporate
+new views and close the gap left by a closed one without being asked, which is
+how a conventional tiling window manager behaves. The manual tiling actions are
+unchanged and remain available either way.
+
 A layout is bound to a sheet, each sheet can have at most one layout and laying
 out a sheet will incorporate all of its views unless they are **invisible** or
 **floating**. Resetting a layout will reset the geometry of all of the laid out
@@ -875,6 +881,57 @@ Just stating the tiling algorithm is a short-hand for a layout object with where
 *views* is set to 256.
 
 
+LAYOUT POLICY
+=============
+The *layout* section -- singular, and distinct from *layouts*, which defines the
+registers themselves -- decides **when** a layout is applied without the user
+asking for it.
+
+* **auto**
+
+  When *true*, mapping a view offers it to the current sheet's layout and
+  closing one re-tiles the survivors. When *false*, which is the default and the
+  historical behaviour, a layout only ever changes in response to a tiling
+  action.
+
+  Re-tiling is deferred rather than immediate. A view that has a resize in
+  flight cannot be laid out -- it is not *tileable* until the client answers the
+  configure -- so a re-tile performed at map time would arrange every view
+  except the one that triggered it. The request is instead held until the sheet
+  is quiet. Requests for a sheet that is not currently displayed are dropped and
+  re-offered when it is displayed again, and requests made while the screen is
+  locked are dropped outright.
+
+* **insert**
+
+  Either *append* or *prepend*, defaulting to *append*. Decides whether an
+  automatically incorporated view is placed at the end of the layout order or
+  becomes the main view. Views already in the layout keep their relative order
+  in both cases; these are the same semantics as **layout-restack-append** and
+  **layout-restack-prepend**, which the automatic path dispatches to.
+
+* **reflow-on-close**
+
+  Defaults to *true*. Kept separate from *auto* because incorporating a new view
+  only adds to a layout, whereas closing one moves every remaining view.
+
+* **default-register**
+
+  A single layout register, *a* to *z* or *0* to *9*, adopted by a sheet that
+  has no layout yet. Unset by default, in which case the per-sheet default
+  registers *1* to *9* apply as usual -- and where those are undefined too the
+  sheet simply stays stacking. A register that names no layout falls back the
+  same way rather than failing the configuration.
+
+```
+layout {
+  auto             = false
+  insert           = append
+  reflow-on-close  = true
+  # default-register = "g"
+}
+```
+
 UI CONFIGURATION
 ================
 Getting everything to look right is an important aspect of feeling "at home".
@@ -922,6 +979,39 @@ The standard **step** value is 100.
 
 ```
 step = 100
+```
+
+Animation
+---------
+The *animation* section smooths views **moving**: re-tiling when a view opens or
+closes, **view-snap-\***, **view-move-\***, and applying a layout.
+
+Position only. A view's size is not the compositor's to interpolate -- a resize
+is a protocol round trip, so there is no sequence of intermediate sizes to draw,
+only the client's old buffer and then its new one. Interactive move and resize
+are never animated either, since lag behind the pointer is precisely what a drag
+must not have, and neither is a view's first placement, which would otherwise
+travel from the corner of the output.
+
+* **enabled**
+
+  Defaults to *false*.
+
+* **duration**
+
+  Milliseconds for a view to travel, *0* to *1000*, defaulting to *120*. *0* is
+  the same as disabling animation.
+
+* **easing**
+
+  One of *linear*, *ease-out* or *ease-in-out*, defaulting to *ease-out*.
+
+```
+animation {
+  enabled  = false
+  duration = 120
+  easing   = ease-out
+}
 ```
 
 Lock screen
@@ -1038,20 +1128,66 @@ bar {
 }
 ```
 
+Palette
+-------
+The *palette* section defines sixteen positional colors, *color0* to *color15*,
+in the conventional terminal order -- *0* to *7* normal, *8* to *15* bright.
+
+The palette carries no meaning of its own. Every color **hikari** actually draws
+with is one of the semantic slots of the *colorscheme* section below, and the
+palette exists so those slots can be written as references into one place rather
+than as sixteen literals spread through the file. It is also the palette that is
+handed to the **hikari-topbar** helper, which is what lets the compositor and
+the bar share one theme.
+
+Every key is optional; an unmentioned slot keeps its default. A palette entry
+must be a literal -- one entry cannot refer to another, because that would make
+the meaning of the file depend on the order its keys happen to appear in. The
+palette is resolved before anything that can refer to it, so it may be placed
+above or below *colorscheme*.
+
+```
+palette {
+  color0  = "#2b1e3a"
+  color1  = "#c96464"
+  color2  = "#df9f87"
+  color3  = "#e4b382"
+  color4  = "#8e7cc3"
+  color5  = "#b18fc7"
+  color6  = "#9fa0a6"
+  color7  = "#d4d4d9"
+  color8  = "#5e5966"
+  color9  = "#df8787"
+  color10 = "#f2bda8"
+  color11 = "#f5cf9e"
+  color12 = "#aba0d9"
+  color13 = "#cfaedc"
+  color14 = "#b8b9be"
+  color15 = "#f0edf2"
+}
+```
+
+Note that a comment runs to the end of its line, so palette entries must be
+written one per line if they carry trailing comments.
+
 Colorschemes
 ------------
 **hikari** uses color to indicate different states of views and their indicator
 bars. By specifying a *colorscheme* section the user can control these colors. A
 colorscheme is a number of properties that can be changed individually. Colors
-are specified using hexadecimal RGB values (e.g. 0xE6DB74), or as a quoted
-string in either *"#RRGGBB"* or *"#RRGGBBAA"* form. The string form is the only
-way to specify an alpha channel:
+are specified as a reference into the *palette* above, as a hexadecimal RGB
+value (e.g. 0xE6DB74), or as a quoted string in either *"#RRGGBB"* or
+*"#RRGGBBAA"* form. The string form is the only way to specify an alpha channel:
 
 ```
+active = color15       # palette reference
 active = 0xFFFFFF      # integer, always fully opaque
 active = "#FFFFFF"     # identical, written explicitly
 active = "#FFFFFF80"   # 50% alpha
 ```
+
+A palette reference cannot carry alpha, since the palette stores opaque colors;
+write the literal string form on the one or two slots that need it.
 
 Alpha deliberately cannot be written as an integer. *0x0080FFCC* and *0x80FFCC*
 parse to values that cannot be told apart, so guessing 8-versus-6 digits would
@@ -1070,7 +1206,8 @@ digit count explicit, and every existing integer setting keeps its exact meaning
 
   Background color of the native top bar. Independent of **background**, so the
   bar can be tinted or made translucent without altering the desktop behind
-  every window. Defaults to *"#282C34E6"* (the desktop slate at ~90% opacity).
+  every window. Defaults to *"#2b1e3ae6"* -- *color0* at ~90% opacity, written
+  as a literal because a palette reference cannot carry alpha.
 
 * **conflict**
 
@@ -1104,20 +1241,22 @@ digit count explicit, and every existing integer setting keeps its exact meaning
 
   This color is used to indicate that a view is selected.
 
-These are the default settings for the **hikari** colorscheme.
+These are the default settings for the **hikari** colorscheme. Every slot is
+derived from the default palette rather than carrying a literal of its own, so
+overriding the palette alone yields a coherent scheme.
 
 ```
 colorscheme {
-  background = 0x282C34
-  bar        = "#282C34E6"
-  foreground = 0x000000
-  selected   = 0xF5E094
-  grouped    = 0xFDAF53
-  first      = 0xB8E673
-  conflict   = 0xED6B32
-  insert     = 0xE3C3FA
-  active     = 0xFFFFFF
-  inactive   = 0x465457
+  background = color0
+  foreground = color0
+  active     = color15
+  inactive   = color8
+  selected   = color12
+  first      = color4
+  grouped    = color5
+  insert     = color13
+  conflict   = color9
+  bar        = "#2b1e3ae6"
 }
 ```
 

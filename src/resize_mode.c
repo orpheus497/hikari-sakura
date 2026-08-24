@@ -1,5 +1,7 @@
 #include <hikari/resize_mode.h>
 
+#include <stdbool.h>
+
 #include <wlr/types/wlr_cursor.h>
 #include <wlr/types/wlr_seat.h>
 
@@ -49,15 +51,24 @@ cursor_move(uint32_t time_msec)
 
   assert(focus_view != NULL);
 
+  struct hikari_resize_mode *resize_mode = &hikari_server.resize_mode;
   struct hikari_output *output = focus_view->output;
   struct wlr_box *geometry = hikari_view_geometry(focus_view);
 
   int cursor_x = hikari_server.cursor.wlr_cursor->x - output->geometry.x;
   int cursor_y = hikari_server.cursor.wlr_cursor->y - output->geometry.y;
 
-  int border = hikari_configuration->border;
-  int new_width = cursor_x - geometry->x - border;
-  int new_height = cursor_y - geometry->y - border;
+  /* [COMMENT] Action purpose: The anchor is the pointer's offset from the
+  bottom-right corner at grab time, so subtracting it yields the corner the
+  pointer is dragging, and the new size is that corner minus the origin.
+
+  This replaces `cursor_x - geometry->x - border`. That expression assumed the
+  pointer sat exactly on the corner and then subtracted a border width that the
+  warp had not added, so every entry into resize mode shrank the window by
+  `border` pixels even if the pointer never moved. The anchor makes the entry
+  size a fixed point by construction, whatever the pointer is doing. */
+  int new_width = (cursor_x - resize_mode->anchor_x) - geometry->x;
+  int new_height = (cursor_y - resize_mode->anchor_y) - geometry->y;
 
   if (new_width > 0 && new_height > 0) {
     hikari_view_resize_absolute(focus_view, new_width, new_height);
@@ -84,6 +95,41 @@ hikari_resize_mode_init(struct hikari_resize_mode *resize_mode)
 
   resize_mode->mode.cancel = cancel;
   resize_mode->mode.cursor_move = cursor_move;
+
+  resize_mode->anchor_x = 0;
+  resize_mode->anchor_y = 0;
+}
+
+/* [COMMENT] Function purpose: Establish the grab anchor for a resize, measured
+from the bottom-right corner.
+
+Same two cases as the move mode's set_anchor(), and for the same reason: a
+pointer already over the window grabs where it is, a pointer elsewhere gets the
+corner warp hikari has always performed. The anchor is zero in the second case,
+which -- unlike the old expression -- is now genuinely a no-op on entry. */
+static void
+set_anchor(struct hikari_resize_mode *resize_mode, struct hikari_view *view)
+{
+  struct hikari_output *output = view->output;
+  struct wlr_box *border_geometry = hikari_view_border_geometry(view);
+  struct wlr_box *geometry = hikari_view_geometry(view);
+
+  int cursor_x = hikari_server.cursor.wlr_cursor->x - output->geometry.x;
+  int cursor_y = hikari_server.cursor.wlr_cursor->y - output->geometry.y;
+
+  bool over_view = cursor_x >= border_geometry->x &&
+                   cursor_x < border_geometry->x + border_geometry->width &&
+                   cursor_y >= border_geometry->y &&
+                   cursor_y < border_geometry->y + border_geometry->height;
+
+  if (over_view) {
+    resize_mode->anchor_x = cursor_x - (geometry->x + geometry->width);
+    resize_mode->anchor_y = cursor_y - (geometry->y + geometry->height);
+  } else {
+    resize_mode->anchor_x = 0;
+    resize_mode->anchor_y = 0;
+    hikari_view_bottom_right_cursor(view);
+  }
 }
 
 void
@@ -95,7 +141,10 @@ hikari_resize_mode_enter(struct hikari_view *view)
   hikari_indicator_update(indicator, view);
 
   hikari_view_raise(view);
-  hikari_view_bottom_right_cursor(view);
+
+  // [COMMENT] Action purpose: After the raise, so the anchor is measured
+  // against geometry nothing else is about to change.
+  set_anchor(&hikari_server.resize_mode, view);
 
   hikari_server.mode = (struct hikari_mode *)&hikari_server.resize_mode;
 }

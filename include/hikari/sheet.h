@@ -19,6 +19,12 @@ struct hikari_sheet {
   struct hikari_layout *layout;
 
   struct hikari_workspace *workspace;
+
+  /* [COMMENT] Class purpose: This sheet's entry in the deferred re-tile queue
+  (src/reflow.c). Self-linked when nothing is pending, which is what makes
+  hikari_reflow_schedule() idempotent without a separate flag. Unlinked by
+  hikari_reflow_cancel() before the sheet's storage goes away. */
+  struct wl_list reflow_pending;
 };
 
 void

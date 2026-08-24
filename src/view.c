@@ -9,6 +9,7 @@
 #include <wlr/util/log.h>
 #include <wlr/types/wlr_subcompositor.h>
 
+#include <hikari/animation.h>
 #include <hikari/color.h>
 #include <hikari/configuration.h>
 #include <hikari/foreign_toplevel.h>
@@ -20,6 +21,7 @@
 #include <hikari/memory.h>
 #include <hikari/operation.h>
 #include <hikari/output.h>
+#include <hikari/reflow.h>
 #include <hikari/server.h>
 #include <hikari/sheet.h>
 #include <hikari/tile.h>
@@ -571,6 +573,7 @@ hikari_view_init(
   printf("VIEW INIT %p\n", view);
 #endif
   view->flags = 0;
+  hikari_animation_init(&view->animation);
   hikari_view_set_hidden(view);
   memset(&view->border, 0, sizeof(struct hikari_border));
   view->border.state = HIKARI_BORDER_INACTIVE;
@@ -1262,6 +1265,18 @@ hikari_view_map(struct hikari_view *view, struct wlr_surface *surface)
     }
 
     hikari_server_cursor_focus();
+
+    /* [COMMENT] Action purpose: Offer the new window to the sheet's layout.
+    A REQUEST, not a re-tile: this view is dirty from its own first configure,
+    and hikari_view_is_tileable() is false for a dirty view, so laying out here
+    would arrange every window except the one that just appeared. src/reflow.c
+    holds the request until the sheet is quiet. No-ops unless the user has
+    turned `layout { auto = true }` on.
+
+    Deliberately inside this branch only. The else branch below is a view
+    mapping while the screen is locked, which is FORCED -- and reflow() unhides,
+    while hikari_view_show() asserts the view is not forced. */
+    hikari_reflow_schedule(sheet);
   } else {
     /* [COMMENT] Action purpose: A non-public view mapping while the screen is
     locked. It is linked into the visible lists and flagged hidden/forced, which
@@ -1376,6 +1391,25 @@ hikari_view_unmap(struct hikari_view *view)
     view->tile = NULL;
 
     hikari_view_refresh_geometry(view, &geometry);
+  }
+
+  /* [COMMENT] Action purpose: Finish any in-flight motion at its target and
+  clear the interpolation state. The scene node outlives an unmap (it is
+  destroyed in the shell's destroy handler), so without the reset a remap would
+  animate the window in from wherever it happened to stop -- and `placed` must
+  go back to false so the next map places instantly rather than travelling. */
+  hikari_animation_cancel(view);
+  hikari_animation_init(&view->animation);
+
+  /* [COMMENT] Action purpose: Close the hole this window leaves behind, before
+  it is unlinked from the sheet below -- the request only needs the sheet, but
+  taking it here keeps it adjacent to the tile teardown that created the hole.
+  Gated on `reflow-on-close` separately from `auto`, because folding a new
+  window in is additive while closing one moves every survivor, and the two are
+  genuinely different preferences. */
+  if (hikari_configuration != NULL &&
+      hikari_configuration->layout_policy.on_close) {
+    hikari_reflow_schedule(view->sheet);
   }
 
   wl_list_remove(&view->sheet_views);
@@ -2502,9 +2536,20 @@ hikari_view_refresh_geometry(struct hikari_view *view, struct wlr_box *geometry)
   // dereferences a NULL output on every single window creation. The position
   // is recomputed once the view is configured onto an output.
   if (view->scene_node != NULL && view->output != NULL) {
-    wlr_scene_node_set_position(view->scene_node,
-        new_geometry->x + view->output->geometry.x,
-        new_geometry->y + view->output->geometry.y);
+    /* [COMMENT] Action purpose: Offer the move to the animation first. It
+    returns false -- and the instant placement below runs unchanged -- for every
+    case where interpolation would be wrong or is switched off, which is the
+    default. When it returns true it has taken ownership of the node's position
+    and hikari_animation_tick() will place it each frame instead.
+
+    The border and indicator-frame rects below are children of this same scene
+    tree and positioned relative to it, so they travel with the window either
+    way and need no animation of their own. */
+    if (!hikari_animation_move(view, new_geometry->x, new_geometry->y)) {
+      wlr_scene_node_set_position(view->scene_node,
+          new_geometry->x + view->output->geometry.x,
+          new_geometry->y + view->output->geometry.y);
+    }
   }
 
   refresh_border_geometry(view);
@@ -2580,6 +2625,12 @@ hikari_view_commit_pending_operation(
   if (view->output != NULL) {
     hikari_bar_update_visibility(view->output);
   }
+
+  /* [COMMENT] Action purpose: The convergence argument once more. Every
+  geometry operation in this file ends here, so this is the one place that can
+  tell a deferred re-tile "the thing you were waiting on has landed". Returns
+  immediately when nothing is queued, which is almost always. */
+  hikari_reflow_settle();
 }
 
 void

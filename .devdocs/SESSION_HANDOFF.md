@@ -2,6 +2,57 @@
 
 *Note: Most recent entries are listed at the top.*
 
+## Session Date: 2026-08-25 09:06 -- Phase 91 runs on hardware; opt-in paths still unexercised
+
+**Timestamp:** 2026-08-25 09:06 *(source: `date '+%Y-%m-%d %H:%M'`)*
+
+**Current Status:** User built in-tree and reports *"I THINK EVERYTHIGN WORKS"*. **The compositor runs with the Phase 91 changes in place.** That closes the phase's largest risk -- the re-tile and animation hooks sit on paths every geometry operation in `view.c` converges on, and a session that starts and stays up is direct evidence neither hook wedges the loop or trips an assertion.
+
+**The important caveat, carried forward deliberately:** the shipped configuration has `layout { auto = false }` and `ui { animation { enabled = false } }`. So `src/reflow.c` and `src/animation.c` have almost certainly not run a line of their working paths -- both return at their first gate. **A clean run is a no-regression result, not a feature confirmation.**
+
+**Confirmed by simply running:** grab anchors in move/resize, the 16-colour palette (the semantic slots derive from it, so the new theme is visible immediately), the `grid` border fix, and -- if `view-hide` happened to be used before a layout -- hidden-view incorporation.
+
+**Still unexercised:** the idle-drain ordering argument (the whole reason `src/reflow.c` is a scheduler rather than a direct call), the lock-mode drop, and the `node_at()` animation offset that keeps input aligned with what is drawn.
+
+**Next steps:**
+
+1. Set `layout { auto = true }` and `ui { animation { enabled = true } }`, reload with `LS+r`.
+2. Run **T2, T3, T9, T10, T14, T15, T16** from `TODOS.md` Phase 91. T9 (map while locked), T10 (rapid opens) and T15 (click a travelling window) are the three that exercise the reasoning the design rests on.
+3. WP-B3 (resize animation) stays closed unless asked for.
+
+## Session Date: 2026-08-25 08:09 -- Phase 91: layouts, motion, palette
+
+**Timestamp:** 2026-08-25 08:09 *(source: `date '+%Y-%m-%d %H:%M'`)*
+
+**Current Status:** **WP-A/B/C/D implemented, compiled and LINKED** -- 71 translation units, 0 warnings, both binaries link under the native FreeBSD toolchain. **Nothing has been run.** WP-B3 (resize animation) is deferred by user decision. 24 hardware tests are listed in `TODOS.md` Phase 91.
+
+**Accomplishments:**
+
+* **A toolchain correction that changes what future phases can claim.** `/bin/cc` is a Linux-targeting GCC from the analysis container; `/usr/bin/clang` is the native FreeBSD compiler. Using it, `src/topbar.c` compiles and libucl links, so the tree **builds and links** out-of-tree. **FB-9 is narrower than recorded** -- a wrong-compiler problem, not a missing-headers one. Handoffs need no longer say "unbuilt".
+* **WP-A, automatic re-tiling.** `layout { auto | insert | reflow-on-close | default-register }`, default off. The feature was absent *and* contra-documented -- `hikari(1)` states no-auto-insert as design intent -- so it ships opt-in, which is what the user asked for. **The design rests on one observation:** a newly mapped view is dirty and `hikari_view_is_tileable()` is false for a dirty view, so a re-tile performed where it is requested omits the very window that triggered it. Request-and-drain via an idle source, retried from the single convergence point in `view.c`.
+* **WP-B1, the grab anchor -- and this was the actual "window doesn't move properly" bug.** Move mode moved the window's corner *to* the pointer and warped the pointer to that corner to hide it. **A second defect fell out while fixing it:** resize mode's `cursor_x - geometry->x - border` against a warp to `x + width` took `border` pixels off the window on every entry.
+* **WP-B2, position animation.** Off by default. **The load-bearing detail is that hikari hit-tests through its own geometry, not the scene graph** -- so `node_at()` applies `hikari_animation_offset()`, or the pointer selects a travelling window at its destination.
+* **WP-C, the palette.** Unified the compositor's nine semantic slots with the sixteen positional colours the bar helper was separately reading from pywal's cache. **Three documented keys -- `foreground`, `grouped`, `first` -- were read by nothing** and are now wired to the sites `hikari(1)` already described.
+* **WP-D.** `grid`'s per-cell/per-gap border disagreement fixed (13px worst-case surplus to 3px, over 528 configurations); hidden views unhidden and incorporated per the user's ruling; `hikari.conf` and `hikari(1)` rewritten.
+
+**Modified files:** 20 modified, 6 new (`animation.{c,h}`, `reflow.{c,h}`, `layout_policy.{c,h}`). New `BLUEPRINT.md` §18.
+
+**Decisions:**
+
+* Resize animation deferred -- only a stale-buffer scale is achievable and it is soft on text. **Do not build speculatively.**
+* Hidden views are unhidden and added to the layout (user ruling), done once in `hikari_sheet_apply_split()` so all six algorithms agree.
+* `BLUEPRINT.md` §16's "hikari adds no animation" **amended rather than left standing** -- it is now false and would mislead the next reader.
+
+**Two bugs in this session's own work, both caught by its own tests rather than by reading:** the topbar palette parser accepted a seventeenth colour, and the shipped config's two-column palette put `color8`-`color15` after a `#` comment so only eight were defined.
+
+**Next steps:**
+
+1. `sudo make clean` (in-tree `.o` files are root-owned), then build in-tree.
+2. Run the 24 tests in `TODOS.md` Phase 91. **T9, T10 and T15 first** -- they exercise the reasoning the design rests on.
+3. Report back. WP-B3 stays closed unless asked for.
+
+**Not verified, and it should not be assumed:** the reflow drain firing, animation on screen, the grab anchors under a real pointer, and the indicator group frames. All need hardware.
+
 ## Session Date: 2026-08-22 16:23 -- Phases 84-88: the remaining-work programme, planned and mostly executed
 
 **Timestamp:** 2026-08-22 16:23 *(source: `date '+%Y-%m-%d %H:%M'`)*

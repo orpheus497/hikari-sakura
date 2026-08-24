@@ -10,6 +10,7 @@
 #include <wlr/types/wlr_switch.h>
 
 #include <hikari/action.h>
+#include <hikari/animation.h>
 #include <hikari/action_config.h>
 #include <hikari/binding.h>
 #include <hikari/binding_config.h>
@@ -22,6 +23,7 @@
 #include <hikari/keyboard_config.h>
 #include <hikari/layout.h>
 #include <hikari/layout_config.h>
+#include <hikari/layout_policy.h>
 #include <hikari/mark.h>
 #include <hikari/memory.h>
 #include <hikari/output.h>
@@ -507,18 +509,86 @@ and `0x80FFCC` to values that a magnitude test cannot tell apart, so an
 channel is zero. The string form makes the digit count explicit, so the two
 never collide and every existing integer config keeps its exact meaning. See
 DECISIONS_LOG Phase 60. */
+/* [COMMENT] Function purpose: Resolve a `colorN` palette reference to its index,
+or report that the string is not one.
+
+Strict about the whole token rather than just the prefix: "colorful" and
+"color16" are both rejected, so a mistyped reference is an error at load time
+instead of a silently wrong colour. */
 static bool
-parse_color(const ucl_object_t *obj, const char *key, float dst[static 4])
+parse_palette_reference(const char *str, int *index)
+{
+  if (strncmp(str, "color", 5) != 0) {
+    return false;
+  }
+
+  const char *digits = str + 5;
+
+  if (digits[0] == '\0') {
+    return false;
+  }
+
+  int value = 0;
+  for (const char *c = digits; *c != '\0'; c++) {
+    if (!isdigit((unsigned char)*c)) {
+      return false;
+    }
+
+    value = value * 10 + (*c - '0');
+
+    if (value >= HIKARI_NR_OF_PALETTE_COLORS) {
+      return false;
+    }
+  }
+
+  *index = value;
+
+  return true;
+}
+
+/* [COMMENT] Function purpose: Parse one colour value.
+
+`configuration` may be NULL, which means "literal forms only" and is what the
+palette block itself passes. A palette entry that could name another palette
+entry would resolve against whatever happened to be parsed first, making the
+meaning of the file depend on key order; forbidding it costs nothing, since a
+palette is by definition where the literals live. */
+static bool
+parse_color(struct hikari_configuration *configuration,
+    const ucl_object_t *obj,
+    const char *key,
+    float dst[static 4])
 {
   if (ucl_object_type(obj) == UCL_STRING) {
     const char *str;
 
-    if (!ucl_object_tostring_safe(obj, &str) || str[0] != '#') {
+    if (!ucl_object_tostring_safe(obj, &str)) {
       fprintf(stderr,
-          "configuration error: expected \"#RRGGBB\" or \"#RRGGBBAA\" for "
-          "\"%s\"\n",
+          "configuration error: expected \"#RRGGBB\", \"#RRGGBBAA\" or a "
+          "palette reference for \"%s\"\n",
           key);
       return false;
+    }
+
+    /* [COMMENT] Action purpose: Anything not starting with '#' is taken to be a
+    palette reference. UCL parses a bare `color3` as a string, so `active =
+    color3` and `active = "color3"` are the same thing and both work. */
+    if (str[0] != '#') {
+      int index;
+
+      if (configuration == NULL || !parse_palette_reference(str, &index)) {
+        fprintf(stderr,
+            "configuration error: expected \"#RRGGBB\", \"#RRGGBBAA\"%s for "
+            "\"%s\", got \"%s\"\n",
+            configuration != NULL ? " or \"color0\"-\"color15\"" : "",
+            key,
+            str);
+        return false;
+      }
+
+      memcpy(dst, configuration->palette[index], sizeof(float) * 4);
+
+      return true;
     }
 
     size_t len = strlen(str + 1);
@@ -578,6 +648,46 @@ parse_color(const ucl_object_t *obj, const char *key, float dst[static 4])
   return true;
 }
 
+/* [COMMENT] Function purpose: Parse the `ui { palette { ... } }` block --
+sixteen positional colours named `color0` through `color15`.
+
+Every key is optional; an unmentioned slot keeps its default, so a configuration
+can override two colours without restating fourteen. Entries are parsed with a
+NULL configuration, which forbids one palette entry referring to another -- see
+parse_color(). */
+static bool
+parse_palette(
+    struct hikari_configuration *configuration, const ucl_object_t *palette_obj)
+{
+  bool success = false;
+  ucl_object_iter_t it = ucl_object_iterate_new(palette_obj);
+
+  const ucl_object_t *cur;
+  while ((cur = ucl_object_iterate_safe(it, false)) != NULL) {
+    const char *key = ucl_object_key(cur);
+    int index;
+
+    if (!parse_palette_reference(key, &index)) {
+      fprintf(stderr,
+          "configuration error: expected \"color0\"-\"color15\" in "
+          "\"palette\", got \"%s\"\n",
+          key);
+      goto done;
+    }
+
+    if (!parse_color(NULL, cur, key, configuration->palette[index])) {
+      goto done;
+    }
+  }
+
+  success = true;
+
+done:
+  ucl_object_iterate_free(it);
+
+  return success;
+}
+
 static bool
 parse_colorscheme(struct hikari_configuration *configuration,
     const ucl_object_t *colorscheme_obj)
@@ -591,39 +701,48 @@ parse_colorscheme(struct hikari_configuration *configuration,
     const char *key = ucl_object_key(cur);
 
     if (!strcmp("selected", key)) {
-      if (!parse_color(cur, key, configuration->indicator_selected)) {
+      if (!parse_color(
+              configuration, cur, key, configuration->indicator_selected)) {
         goto done;
       }
     } else if (!strcmp("grouped", key)) {
-      if (!parse_color(cur, key, configuration->indicator_grouped)) {
+      if (!parse_color(
+              configuration, cur, key, configuration->indicator_grouped)) {
         goto done;
       }
     } else if (!strcmp("first", key)) {
-      if (!parse_color(cur, key, configuration->indicator_first)) {
+      if (!parse_color(
+              configuration, cur, key, configuration->indicator_first)) {
         goto done;
       }
     } else if (!strcmp("conflict", key)) {
-      if (!parse_color(cur, key, configuration->indicator_conflict)) {
+      if (!parse_color(
+              configuration, cur, key, configuration->indicator_conflict)) {
         goto done;
       }
     } else if (!strcmp("insert", key)) {
-      if (!parse_color(cur, key, configuration->indicator_insert)) {
+      if (!parse_color(
+              configuration, cur, key, configuration->indicator_insert)) {
         goto done;
       }
     } else if (!strcmp("active", key)) {
-      if (!parse_color(cur, key, configuration->border_active)) {
+      if (!parse_color(
+              configuration, cur, key, configuration->border_active)) {
         goto done;
       }
     } else if (!strcmp("inactive", key)) {
-      if (!parse_color(cur, key, configuration->border_inactive)) {
+      if (!parse_color(
+              configuration, cur, key, configuration->border_inactive)) {
         goto done;
       }
     } else if (!strcmp("foreground", key)) {
-      if (!parse_color(cur, key, configuration->foreground)) {
+      if (!parse_color(
+              configuration, cur, key, configuration->foreground)) {
         goto done;
       }
     } else if (!strcmp("background", key)) {
-      if (!parse_color(cur, key, configuration->clear)) {
+      if (!parse_color(
+              configuration, cur, key, configuration->clear)) {
         goto done;
       }
     } else if (!strcmp("bar", key)) {
@@ -631,7 +750,8 @@ parse_colorscheme(struct hikari_configuration *configuration,
       borrowed "background" (the output clear colour), which meant it could not
       be tinted or made translucent without also changing the desktop
       background behind every window. See DECISIONS_LOG Phase 60. */
-      if (!parse_color(cur, key, configuration->bar)) {
+      if (!parse_color(
+              configuration, cur, key, configuration->bar)) {
         goto done;
       }
     } else {
@@ -856,6 +976,103 @@ parse_layouts(
   success = true;
 
 done:
+  return success;
+}
+
+/* [COMMENT] Function purpose: Parse the top-level `layout` block -- the policy
+that decides when a sheet re-tiles itself.
+
+Kept separate from parse_layouts() above, which parses `layouts` (plural) and
+treats every key as a layout register letter. A policy key in that block would
+be read as a register name and rejected with a misleading error, which is the
+whole reason the two live in different sections. */
+static bool
+parse_layout_policy(
+    struct hikari_configuration *configuration, const ucl_object_t *layout_obj)
+{
+  bool success = false;
+  struct hikari_layout_policy *policy = &configuration->layout_policy;
+
+  const ucl_object_t *cur;
+  ucl_object_iter_t it = ucl_object_iterate_new(layout_obj);
+
+  while ((cur = ucl_object_iterate_safe(it, false)) != NULL) {
+    const char *key = ucl_object_key(cur);
+
+    if (!strcmp(key, "auto") || !strcmp(key, "reflow-on-close")) {
+      bool value;
+
+      if (!ucl_object_toboolean_safe(cur, &value)) {
+        fprintf(stderr,
+            "configuration error: expected boolean for \"%s\"\n",
+            key);
+        goto done;
+      }
+
+      if (!strcmp(key, "auto")) {
+        policy->automatic = value;
+      } else {
+        policy->on_close = value;
+      }
+    } else if (!strcmp(key, "insert")) {
+      const char *value;
+
+      if (!ucl_object_tostring_safe(cur, &value)) {
+        fprintf(stderr,
+            "configuration error: expected string for \"insert\"\n");
+        goto done;
+      }
+
+      if (!strcmp(value, "append")) {
+        policy->insert = HIKARI_LAYOUT_INSERT_APPEND;
+      } else if (!strcmp(value, "prepend")) {
+        policy->insert = HIKARI_LAYOUT_INSERT_PREPEND;
+      } else {
+        fprintf(stderr,
+            "configuration error: expected \"append\" or \"prepend\" for "
+            "\"insert\", got \"%s\"\n",
+            value);
+        goto done;
+      }
+    } else if (!strcmp(key, "default-register")) {
+      const char *value;
+
+      if (!ucl_object_tostring_safe(cur, &value)) {
+        fprintf(stderr,
+            "configuration error: expected string for "
+            "\"default-register\"\n");
+        goto done;
+      }
+
+      /* [COMMENT] Action purpose: Validated against exactly the character set
+      parse_layouts() accepts as a register name, so a value that parses here is
+      one that could name a real layout. Whether it DOES is not checked -- the
+      `layouts` block may legitimately be parsed after this one, and an
+      unresolvable register falls back to the per-sheet default at use time
+      rather than failing the whole configuration. */
+      if (strlen(value) != 1 ||
+          !((value[0] >= 'a' && value[0] <= 'z') || isdigit(value[0]))) {
+        fprintf(stderr,
+            "configuration error: \"default-register\" must be a single "
+            "layout register (\"a\"-\"z\" or \"0\"-\"9\"), got "
+            "\"%s\"\n",
+            value);
+        goto done;
+      }
+
+      policy->default_register = value[0];
+    } else {
+      fprintf(
+          stderr, "configuration error: unknown \"layout\" key \"%s\"\n", key);
+      goto done;
+    }
+  }
+
+  success = true;
+
+done:
+  ucl_object_iterate_free(it);
+
   return success;
 }
 
@@ -1803,8 +2020,14 @@ done:
 blur, and how long the screen stays lit while locked. */
 static bool
 parse_lock(
-    struct hikari_lock_config *lock_config, const ucl_object_t *lock_obj)
+    struct hikari_configuration *configuration, const ucl_object_t *lock_obj)
 {
+  /* [COMMENT] Action purpose: Takes the whole configuration rather than just
+  the lock block, because `clock-color` accepts a palette reference and the
+  palette lives on the configuration. The lock block's own fields are reached
+  through this one extra hop. */
+  struct hikari_lock_config *lock_config = &configuration->lock;
+
   bool success = false;
   ucl_object_iter_t it = ucl_object_iterate_new(lock_obj);
 
@@ -1861,7 +2084,7 @@ parse_lock(
       hikari_font_fini(target);
       hikari_font_init(target, font);
     } else if (!strcmp(key, "clock-color")) {
-      if (!parse_color(cur, key, lock_config->clock_color)) {
+      if (!parse_color(configuration, cur, key, lock_config->clock_color)) {
         goto done;
       }
     } else if (!strcmp(key, "blank-timeout-ac") ||
@@ -1900,18 +2123,120 @@ done:
   return success;
 }
 
+/* [COMMENT] Function purpose: Parse the `ui { animation { ... } }` block.
+
+`duration` is bounded rather than merely non-negative. Below about 20 ms an
+animation is indistinguishable from an instant move but still costs a frame per
+step, and above a second a window takes long enough to arrive that the compositor
+feels broken -- both are far more likely to be a typo than an intention. 0 is
+accepted and means instant, which is the same as `enabled = false` but reachable
+without editing two keys. */
+static bool
+parse_animation(
+    struct hikari_configuration *configuration, const ucl_object_t *animation_obj)
+{
+  bool success = false;
+  struct hikari_animation_config *config = &configuration->animation;
+
+  const ucl_object_t *cur;
+  ucl_object_iter_t it = ucl_object_iterate_new(animation_obj);
+
+  while ((cur = ucl_object_iterate_safe(it, false)) != NULL) {
+    const char *key = ucl_object_key(cur);
+
+    if (!strcmp(key, "enabled")) {
+      bool enabled;
+
+      if (!ucl_object_toboolean_safe(cur, &enabled)) {
+        fprintf(stderr,
+            "configuration error: expected boolean for \"enabled\"\n");
+        goto done;
+      }
+
+      config->enabled = enabled;
+    } else if (!strcmp(key, "duration")) {
+      int64_t duration;
+
+      if (!ucl_object_toint_safe(cur, &duration) || duration < 0 ||
+          duration > 1000) {
+        fprintf(stderr,
+            "configuration error: expected integer between 0 and 1000 for "
+            "\"duration\"\n");
+        goto done;
+      }
+
+      config->duration_msec = (int)duration;
+    } else if (!strcmp(key, "easing")) {
+      const char *easing;
+
+      if (!ucl_object_tostring_safe(cur, &easing)) {
+        fprintf(stderr,
+            "configuration error: expected string for \"easing\"\n");
+        goto done;
+      }
+
+      if (!strcmp(easing, "linear")) {
+        config->easing = HIKARI_EASING_LINEAR;
+      } else if (!strcmp(easing, "ease-out")) {
+        config->easing = HIKARI_EASING_EASE_OUT;
+      } else if (!strcmp(easing, "ease-in-out")) {
+        config->easing = HIKARI_EASING_EASE_IN_OUT;
+      } else {
+        fprintf(stderr,
+            "configuration error: expected \"linear\", \"ease-out\" or "
+            "\"ease-in-out\" for \"easing\", got \"%s\"\n",
+            easing);
+        goto done;
+      }
+    } else {
+      fprintf(stderr,
+          "configuration error: unknown \"animation\" key \"%s\"\n",
+          key);
+      goto done;
+    }
+  }
+
+  success = true;
+
+done:
+  ucl_object_iterate_free(it);
+
+  return success;
+}
+
 static bool
 parse_ui(struct hikari_configuration *configuration, const ucl_object_t *ui_obj)
 {
   bool success = false;
+
+  /* [COMMENT] Action purpose: The palette is resolved BEFORE the iteration
+  below, not as one of its cases. Every other colour in this block may be
+  written as a palette reference, and UCL yields keys in file order -- so
+  parsing the palette in sequence would make a configuration's meaning depend on
+  whether the user happened to put `palette` above `colorscheme`. Looking it up
+  explicitly first is the same idiom hikari_configuration_load() uses for
+  `actions` and `layouts`, and for the same reason. */
+  const ucl_object_t *palette_obj = ucl_object_lookup(ui_obj, "palette");
+  if (palette_obj != NULL && !parse_palette(configuration, palette_obj)) {
+    return false;
+  }
+
   ucl_object_iter_t it = ucl_object_iterate_new(ui_obj);
 
   const ucl_object_t *cur;
   while ((cur = ucl_object_iterate_safe(it, false)) != NULL) {
     const char *key = ucl_object_key(cur);
 
-    if (!strcmp(key, "colorscheme")) {
+    if (!strcmp(key, "palette")) {
+      // [COMMENT] Action purpose: Already handled above; accepted here so the
+      // unknown-key branch does not reject it.
+      continue;
+    } else if (!strcmp(key, "colorscheme")) {
       if (!parse_colorscheme(configuration, cur)) {
+        goto done;
+      }
+    } else if (!strcmp(key, "animation")) {
+      if (!parse_animation(configuration, cur)) {
         goto done;
       }
     } else if (!strcmp(key, "font")) {
@@ -1932,7 +2257,7 @@ parse_ui(struct hikari_configuration *configuration, const ucl_object_t *ui_obj)
         goto done;
       }
     } else if (!strcmp(key, "lock")) {
-      if (!parse_lock(&configuration->lock, cur)) {
+      if (!parse_lock(configuration, cur)) {
         goto done;
       }
     } else if (!strcmp(key, "bar")) {
@@ -2037,6 +2362,10 @@ hikari_configuration_load(
       }
     } else if (!strcmp(key, "inputs")) {
       if (!parse_inputs(configuration, cur)) {
+        goto done;
+      }
+    } else if (!strcmp(key, "layout")) {
+      if (!parse_layout_policy(configuration, cur)) {
         goto done;
       }
     } else if (!!strcmp(key, "actions") && !!strcmp(key, "layouts")) {
@@ -2177,26 +2506,71 @@ hikari_configuration_init(struct hikari_configuration *configuration)
   wl_list_init(&configuration->switch_configs);
   wl_list_init(&configuration->gesture_binding_configs);
 
-  hikari_color_convert(configuration->clear, 0x282C34);
-  hikari_color_convert(configuration->foreground, 0x000000);
-  hikari_color_convert(configuration->indicator_selected, 0xF5E094);
-  hikari_color_convert(configuration->indicator_grouped, 0xFDAF53);
-  hikari_color_convert(configuration->indicator_first, 0xB8E673);
-  hikari_color_convert(configuration->indicator_conflict, 0xED6B32);
-  hikari_color_convert(configuration->indicator_insert, 0xE3C3FA);
-  hikari_color_convert(configuration->border_active, 0xFFFFFF);
-  hikari_color_convert(configuration->border_inactive, 0x465457);
+  /* [COMMENT] Action purpose: The default palette -- Hikari Sakura's own
+  scheme. Laid out in the conventional 16-colour order (0-7 normal, 8-15
+  bright), which is what makes it interchangeable with a terminal theme and
+  what lets hikari-topbar consume the same sixteen values. */
+  static const uint32_t default_palette[] = {
+    0x2b1e3a, /* color0  -- base */
+    0xc96464, /* color1  -- red */
+    0xdf9f87, /* color2  -- orange */
+    0xe4b382, /* color3  -- yellow */
+    0x8e7cc3, /* color4  -- violet */
+    0xb18fc7, /* color5  -- mauve */
+    0x9fa0a6, /* color6  -- grey */
+    0xd4d4d9, /* color7  -- text */
+    0x5e5966, /* color8  -- bright base */
+    0xdf8787, /* color9  -- bright red */
+    0xf2bda8, /* color10 -- bright orange */
+    0xf5cf9e, /* color11 -- bright yellow */
+    0xaba0d9, /* color12 -- bright violet */
+    0xcfaedc, /* color13 -- bright mauve */
+    0xb8b9be, /* color14 -- bright grey */
+    0xf0edf2  /* color15 -- bright text */
+  };
 
-  /* [COMMENT] Action purpose: Default the top bar to the same slate as the
-  desktop background but slightly translucent (0xE6 ~ 90%), so the bar reads as
-  an overlay rather than a solid block while remaining legible. Overridable via
-  the "bar" colourscheme key. */
-  hikari_color_convert_rgba(configuration->bar, 0x282C34E6);
+  for (int i = 0; i < HIKARI_NR_OF_PALETTE_COLORS; i++) {
+    hikari_color_convert(configuration->palette[i], default_palette[i]);
+  }
+
+  /* [COMMENT] Action purpose: Every semantic slot is DERIVED from the palette
+  rather than carrying a literal of its own, so the two can never disagree about
+  what the default theme is. A user who overrides only the palette gets a
+  coherent scheme for free; one who overrides a slot directly still wins, since
+  this runs before any parsing.
+
+  The assignments are not arbitrary. Borders take the extremes -- brightest for
+  the focused window, muted base for the rest -- because that contrast is the
+  only cue to focus. The three group indicators take neighbouring violets so
+  they read as one family (first is the anchor, grouped its relatives, selected
+  the one you are on), conflict takes the red that means "this is already
+  taken", and the indicator text takes the dark base because every indicator
+  background above is a light tone. */
+#define PALETTE(n) configuration->palette[n]
+  memcpy(configuration->clear, PALETTE(0), sizeof(float) * 4);
+  memcpy(configuration->foreground, PALETTE(0), sizeof(float) * 4);
+  memcpy(configuration->indicator_first, PALETTE(4), sizeof(float) * 4);
+  memcpy(configuration->indicator_grouped, PALETTE(5), sizeof(float) * 4);
+  memcpy(configuration->indicator_selected, PALETTE(12), sizeof(float) * 4);
+  memcpy(configuration->indicator_insert, PALETTE(13), sizeof(float) * 4);
+  memcpy(configuration->indicator_conflict, PALETTE(9), sizeof(float) * 4);
+  memcpy(configuration->border_active, PALETTE(15), sizeof(float) * 4);
+  memcpy(configuration->border_inactive, PALETTE(8), sizeof(float) * 4);
+
+  /* [COMMENT] Action purpose: The bar is the base colour at ~90% alpha, so it
+  reads as an overlay rather than a solid block while staying legible. Built by
+  copying the palette entry and overwriting alpha, because the palette stores
+  opaque colours and alpha is the one thing a positional palette cannot carry. */
+  memcpy(configuration->bar, PALETTE(0), sizeof(float) * 4);
+  configuration->bar[3] = 0xE6 / 255.0f;
+#undef PALETTE
 
   hikari_font_init(&configuration->font, "monospace 10");
 
   hikari_lock_config_init(&configuration->lock);
   hikari_bar_config_init(&configuration->bar_config);
+  hikari_layout_policy_init(&configuration->layout_policy);
+  hikari_animation_config_init(&configuration->animation);
 
   configuration->border = 1;
   configuration->gap = 5;

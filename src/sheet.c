@@ -27,6 +27,10 @@ hikari_sheet_init(
 
   sheet->workspace = workspace;
   sheet->layout = NULL;
+
+  // [COMMENT] Action purpose: Self-linked means "not queued for a re-tile";
+  // see the field's comment in sheet.h and src/reflow.c.
+  wl_list_init(&sheet->reflow_pending);
 }
 
 // [COMMENT] Function purpose: Scans for the next tileable view in the sheet's view list.
@@ -175,8 +179,20 @@ grid_layout(struct wlr_box *frame,
     int col_gaps = nr_of_cols - 1;
     int gaps_height = gap * row_gaps;
     int gaps_width = gap * col_gaps;
-    int views_height = frame->height - border * nr_of_rows - gaps_height;
-    int views_width = frame->width - border * nr_of_cols - gaps_width;
+    /* [COMMENT] Action purpose: Borders are counted per GAP, not per cell.
+    hikari_split_apply() has already inset the frame by one border width on
+    every side, so the only borders left to pay for inside it are the ones
+    between neighbouring cells -- (cols - 1) of them across, (rows - 1) down.
+
+    These two lines used nr_of_cols and nr_of_rows while rest_width and
+    rest_height below used col_gaps and row_gaps, so the two disagreed by
+    exactly one border per axis and the surplus was handed to the first row and
+    column. The grid still filled its frame, which is why it looked plausible:
+    the top-left cell was simply 2 * border pixels larger than every other,
+    growing with the configured border width. queue and stack (SPLIT_LAYOUT
+    below) always used the gap count, and now grid matches them. */
+    int views_height = frame->height - border * row_gaps - gaps_height;
+    int views_width = frame->width - border * col_gaps - gaps_width;
 
     int width = views_width / nr_of_cols;
     int height = views_height / nr_of_rows;
@@ -404,6 +420,42 @@ raise_floating(struct hikari_sheet *sheet)
   }
 }
 
+/* [COMMENT] Function purpose: Unhide every view this layout is about to
+incorporate.
+
+Laying out a sheet takes in all of its views unless they are floating or
+invisible -- and a view hidden with `view-hide` is neither. Without this, such a
+view was counted by tileable_views(), given a slot by the tiling algorithm, and
+then left hidden: the layout came out with a visible gap where the window should
+have been. Two of the six algorithms already avoided that by unhiding as they
+went (hikari_sheet_first_tileable_view() for the first view, full_layout() for
+all of its own), so the behaviour differed by which layout you happened to
+apply. Doing it once here makes all six agree.
+
+The reverse walk is the established idiom in this file (see SHOW_VIEWS below):
+hikari_view_show() raises, so visiting the list backwards keeps the unhidden
+views in their existing order relative to one another. A view that was hidden
+does rejoin at the front of the layout order, which is the same thing
+hikari_sheet_first_tileable_view() has always done to a hidden first view --
+`layout-exchange-view-*` moves it if that is not wanted.
+
+`forced` is excluded because lock mode forces every view while flagging it
+hidden, and hikari_view_show() asserts against exactly that. Nothing should
+reach here while locked -- src/reflow.c drops re-tiles in lock mode and the
+bindings are mode-gated -- so this is a guard, not a path. */
+static void
+show_tileable(struct hikari_sheet *sheet)
+{
+  struct hikari_view *view, *view_temp;
+
+  wl_list_for_each_reverse_safe (view, view_temp, &sheet->views, sheet_views) {
+    if (hikari_view_is_hidden(view) && !hikari_view_is_forced(view) &&
+        !hikari_view_is_floating(view) && !hikari_view_is_invisible(view)) {
+      hikari_view_show(view);
+    }
+  }
+}
+
 // [COMMENT] Function purpose: Applies a layout split to the given sheet, updating geometry and floating states.
 void
 hikari_sheet_apply_split(struct hikari_sheet *sheet, struct hikari_split *split)
@@ -429,6 +481,8 @@ hikari_sheet_apply_split(struct hikari_sheet *sheet, struct hikari_split *split)
 
     sheet->layout = layout;
   }
+
+  show_tileable(sheet);
 
   struct hikari_output *output = sheet->workspace->output;
   struct wlr_box geometry = output->usable_area;
