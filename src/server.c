@@ -78,6 +78,7 @@
 #include <hikari/exec.h>
 #include <hikari/foreign_toplevel.h>
 #include <hikari/indicator_frame.h>
+#include <hikari/ipc.h>
 #include <hikari/keyboard.h>
 #include <hikari/layout.h>
 #include <hikari/mark.h>
@@ -1101,6 +1102,11 @@ setup_xdg_activation(struct hikari_server *server)
   for another client's window. Non-fatal for the same reason as the list. */
   hikari_foreign_toplevel_manager_setup(server);
 
+  /* [COMMENT] Action purpose: Bring up the control socket alongside the other
+  external-control surface. Sheets are the one part of hikari's model that no
+  Wayland protocol reaches, so this is how an external switcher sees them. */
+  hikari_ipc_setup(server);
+
   server->xdg_activation = wlr_xdg_activation_v1_create(server->display);
   // [COMMENT] Action purpose: Guard against manager allocation failure before
   // the wl_signal_add below takes the address of one of its members.
@@ -1940,6 +1946,9 @@ hikari_server_stop(void)
   wl_list_remove(&server->session_active_listener.link);
   // [COMMENT] Action purpose: Stop the top bar helper and release its pipe and
   // event source before the event loop is destroyed.
+  // [COMMENT] Action purpose: Drop the control socket and unlink its path
+  // before the event loop it is registered with goes away.
+  hikari_ipc_fini(server);
   hikari_topbar_source_fini(&server->topbar);
 #ifdef HAVE_LAYERSHELL
   wl_list_remove(&server->new_layer_shell_surface.link);

@@ -1166,7 +1166,7 @@ Two behaviours that are deliberate:
 
 Version 1 carries **title, app_id and an identifier. Nothing else.** No icons, no activation, no minimise/maximise, no per-output association. A dock that only lists windows works today; one that focuses a window on click needs either:
 
-* `zwlr_foreign_toplevel_management_v1` -- **not currently advertised**; or
+* `zwlr_foreign_toplevel_management_v1` -- **now advertised as of Phase 89** (`src/foreign_toplevel.c`, behind `WITH_FOREIGN_TOPLEVEL_MANAGEMENT`, default YES). *This line previously read "not currently advertised"; corrected 2026-08-24.* Not yet hardware-confirmed.
 * `xdg-activation-v1` -- **is** advertised, and is the more standard route.
 
 Check which a chosen dock expects before assuming it will work.
@@ -1181,3 +1181,47 @@ Consequences worth preserving:
 * **Lock mode hides it automatically**, because `override_visibility()` disables the entire `top` tree -- so a panel cannot leak window titles onto a locked screen. Any future panel work must not route around this.
 * **Animation belongs to the client.** `wlr_scene` has no animation facility and hikari adds none; a sliding panel slides by moving or resizing its own surface.
 * A compositor-side panel is the rejected alternative: it would need its own cairo/Pango rendering and input routing, growing the compositor for something the existing protocols already permit.
+* **A panel will cover fullscreen video** until FS-2 is built (`PLANS.md` item -16). Phase 90 hides only the native top bar; a `TOP`-layer client still stacks above a fullscreen view. **Gate FS-2 on this work and do not ship the panel without it.**
+
+---
+
+## 17. Fullscreen vs Maximize (added 2026-08-24, Phase 90)
+
+*Written because the distinction did not exist in the code and its absence produced four separate defects. **Status: current behaviour is fact; the Phase 90 column is the specification being built and is NOT yet true.** Do not cite the right-hand column as a description of the tree without re-verifying -- the section 13 rule.*
+
+### The concepts are different and hikari conflated them
+
+| | Maximize | Fullscreen |
+|---|---|---|
+| Asked for by | user, or a client's titlebar button | client, on the user's behalf (F11, a video player's button) |
+| Area | the **usable** area -- bar and layer-shell exclusive zones respected | the **whole output** |
+| Decoration | window keeps its frame | no frame |
+| Bar | visible | hidden |
+| hikari binding | `view-toggle-maximize-full` (`L+f`) | **none, and there should be none** -- clients send it themselves |
+
+### Current behaviour (verified 2026-08-24, before Phase 90)
+
+**There is no fullscreen state.** Only `HIKARI_MAXIMIZATION_{FULLY,VERTICALLY,HORIZONTALLY}_MAXIMIZED`. Every fullscreen route collapses into full-maximize, which takes `output->usable_area` (`view.c:1523`) -- so a "fullscreen" window is offset down by the bar height and short by the same amount, **by construction**. The bar additionally lives in `layers.top`, above `layers.views` (`server.c:1002-1008`), so it would draw over the window even at full-output geometry.
+
+Four request paths, and **two of them have no handler at all**:
+
+| Path | Route | Today |
+|---|---|---|
+| xdg-shell `set_fullscreen` | `xdg_view.c:656` | Guards on `fullscreen != hikari_view_is_fully_maximized(view)` -- **a no-op on a maximized window**, and on exit it *un-maximizes* one. The client is acked regardless on the line above. |
+| xdg-shell `set_maximized` | -- | **No listener. A protocol violation** -- `wlr_xdg_shell.h:212-219` requires a configure "even if it didn't actually change the state". A client's own maximize button has never worked. |
+| XWayland `request_fullscreen` | -- | **No listener.** wlroots exposes the signal (`xwayland.h:203`), setter (`:315`) and state (`:182`); hikari uses none. |
+| XWayland configure fallback | `xwayland_view.c:333` | Clamped to `usable_area` (`:355-364`). |
+
+### What Phase 90 establishes (PLANNED -- not yet true)
+
+* **`FLAG(fullscreen, 5UL)`** on `hikari_view.flags`, **not** a new `hikari_maximization` member: that enum is switched on in 8 places, while `flags` has 11 free bits.
+* **Fullscreen shadows maximize.** One branch atop `refresh_geometry()` (`view.c:792`), above the `maximized_state` test. `maximized_state` is left untouched while fullscreen, so **exiting falls straight back to maximized / tiled / floating with no restore bookkeeping**. `hikari_view_geometry()` returns `current_geometry`, set from this one function, so the shadowing propagates everywhere.
+* **Consequence worth keeping:** because `maximized_state` survives, the existing `FULLY_MAXIMIZED` early-returns in `move_view()` (`:194`) and `queue_resize()` (`:851`) protect a fullscreen-over-maximized window unchanged. They do **not** fire for a *floating* window that went fullscreen, which is why both need an explicit `is_fullscreen` guard.
+* **Geometry is `output->geometry` dimensions, never `usable_area`** -- the latter is also shrunk by layer-shell exclusive zones (`layer_shell.c:171`).
+* **The bar hides via `hikari_bar.obscured`, deliberately separate from `enabled`.** `hikari_bar_reserve()` (`bar.c:650`) keys off `enabled`; flipping that would change `usable_area` and **reflow every tiled window on the output** (`sheet.c:434`). **Visibility is not reservation -- do not merge these two fields.**
+* **`hikari_view_set_fullscreen()` is the single entry point** for all three protocol paths. Each re-deriving its own guard is exactly what produced the xdg-shell defect.
+* **A fullscreen window gets `WLR_EDGE_NONE`, not `set_tiled`** (`xdg_view.c:82-97`).
+
+### Scope boundary
+
+Phase 90 covers the **native top bar only**. Layer-shell `TOP`/`OVERLAY` surfaces still stack above a fullscreen view -- tracked as **FS-2** in `PLANS.md` item -16, deferred because no such client runs on this system today. **The blocker for FS-2 is not lock safety** (verified: `override_visibility()` disables the whole `top` tree, and `layers.lock` sits above `top` regardless) **but the map-time layer derivation at `view.c:1160-1167`**, which re-derives a view's parent on every map and would silently drop a remapped fullscreen view back into `layers.views`.

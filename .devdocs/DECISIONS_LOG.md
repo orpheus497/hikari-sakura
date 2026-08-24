@@ -1,3 +1,172 @@
+## [2026-08-24 10:09] Phase 90 cycle 1: EXECUTED -- what the plan got wrong, and an IPC audit
+
+**Status:** IMPLEMENTED, UNBUILT. W-1, W-2, W-3 complete. **0 warnings across all 66 translation units in all three build configurations** (full / default / bare), plus `topbar.c`. Not linked, not run.
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
+
+### Three things the plan had wrong, found during execution
+
+**1. `hikari_view_set_fullscreen()` was already taken -- by the flag macro itself.** `FLAG(name, shift)` generates `hikari_view_is_`, `hikari_view_set_` and `hikari_view_unset_` for every flag, so adding `FLAG(fullscreen, 5UL)` created `hikari_view_set_fullscreen(view)` and collided head-on with the planned public setter of the same name. The IDE reported it on the first edit. Renamed to **`hikari_view_request_fullscreen(view, bool)`**, which is the better name regardless: it answers a request and may decline it, and it cannot be mistaken for the raw bit setter sitting beside it.
+
+**2. A use-after-free in my own first draft of `queue_unfullscreen()`.** Restoring a *tiled* view was written as `queue_tile(view, view->tile->layout, view->tile, false)` -- which reads correctly and is wrong. `commit_tile()` frees the view's current tile (`wl_list_remove` + `hikari_free`) and *then* assigns `operation->tile`; handing it the same pointer for both makes it free the tile and store the dangling value. `queue_reset()` is not a substitute either -- it detaches and frees the tile outright, so a tiled window would silently drop out of its layout on leaving fullscreen. Replaced with a plain `HIKARI_OPERATION_TYPE_RESIZE` to `tile->view_geometry`, which touches no ownership at all: the tile stays attached and in its layout, and the view simply stops shadowing it. **This is the Phase 55 class exactly, and it was caught by reading `commit_tile()` rather than by the compiler** -- nothing about the call site looks dangerous.
+
+**3. Uninitialised state, twice.** `hikari_xdg_view` comes from `hikari_malloc`, which does not zero, and `drain_pending_state()` runs on the very first commit -- so the four new `pending_*` booleans had to be explicitly cleared in `hikari_xdg_view_init()` or a fresh window could replay a state request never made. `view->fullscreen_geometry` likewise zeroed in `hikari_view_init()`. **`view->flags` was checked and is already zeroed there**, so the fullscreen bit could never start set; that one was safe by existing design rather than by luck. Same class as the seven links Phase 56 found.
+
+Also reordered `commit_fullscreen()` to write the box *before* setting the flag. Nothing runs between the two statements today, so the original order was safe -- but `refresh_geometry()` hands out `&view->fullscreen_geometry` the instant the flag is set, and safety by adjacency is not safety.
+
+### Finding 6 deliberately NOT implemented
+
+`requested.fullscreen_output` is left unhonoured; a client naming another output gets fullscreen on its current one. Acting on it means moving a view between outputs, and the only API for that -- `hikari_view_migrate()` -- is a full visibility transition (unlink, re-constrain both geometries, migrate the sheet, show again). Driving that from inside a protocol handler, on the very path being fixed for the reported bug, would put two independently risky changes in one build cycle and make any crash ambiguous between them. **That is the sequencing rule this project has already paid for twice** (Phases 75 and 78). Held for its own cycle, recorded in the code at the site rather than only here.
+
+### Scope note: `hikari_view_toggle_horizontal_maximize()` lacks the dirty guard its twin has
+
+`hikari_view_toggle_vertical_maximize()` opens with `if (hikari_view_is_dirty(view)) return;`. The horizontal twin does not, so it can queue over an operation the client has not acked. **Pre-existing, not introduced here, and deliberately not fixed** -- it is unrelated to fullscreen and belongs in its own change. Recorded so it is not lost.
+
+### IPC audit (the user asked for this alongside cycle 1)
+
+`src/ipc.c` arrived in the working tree from a concurrent session at 09:03-09:05 while this phase was being planned. Audited and **three defects fixed**, all in the same shape as things this project has already been burned by:
+
+* **CRITICAL -- no mode gating at all.** Both operations reach code with hard preconditions: `hikari_workspace_switch_sheet()` runs `display_sheet()`, which calls `hikari_view_show()`/`hide()`; `hikari_view_pin_to_sheet()` asserts `!hikari_view_is_hidden(view)` and itself calls `hikari_view_hide()`, which asserts `!hikari_view_is_forced(view)`. **Lock mode forces every view**, so a `pin` on a locked session violates that assertion -- and with `-DNDEBUG` in every shipping build it does not abort, it corrupts the visibility linkage, which is the Phase 55 use-after-free class. **This is the exact hazard Phase 89 documented and gated with `can_act()`**, and the new module reproduced it. Fixed with one `can_act()` in front of the whole command table rather than per handler, so a command added later cannot be forgotten. Because lock mode IS a mode, one test closes both the modal-abort hole and *an external process being able to switch sheets and move windows on a locked screen*. `state` is gated too -- its per-sheet view counts would otherwise report how many windows are open to anything that can reach the socket while locked, the leak Phase 88 was careful to avoid for titles.
+* **MEDIUM -- `close(0)` on the never-setup path.** `hikari_server` is a global and therefore zero-initialised, so if `hikari_ipc_setup()` never ran, `ipc_fd` is **0**, not -1, and `hikari_ipc_fini()`'s `if (ipc_fd >= 0) close(ipc_fd)` would close **stdin**. The author guarded the client list against exactly this (`ipc_clients.next != NULL`) but not the descriptor. Changed to `> 0`; a real listener can never be fd 0 because the field is only assigned after the event source is confirmed registered.
+* **MEDIUM -- `pin` could queue over an in-flight resize.** For a tiled view `hikari_view_pin_to_sheet()` reaches `queue_reset()`, and there is one `pending_operation` slot per view. Every in-tree caller of that class already guards on `hikari_view_is_dirty()`; an IPC request is the one caller whose timing the compositor does not control, so it is the one that actually hits it.
+
+**Not changed, reported instead:** `hikari_ipc_setup()` is called from inside `setup_xdg_activation()`, which has nothing to do with a control socket. The pattern predates this module (`hikari_foreign_toplevel_manager_setup()` is called there too), so it is a layering wart rather than a new one, and moving it is not this phase's business.
+
+**Cannot be verified beyond compilation from here.** The socket needs a running compositor; `hikari_ipc_setup()` logs its path at `WLR_INFO` on success, which is the first thing to check on the next run.
+
+---
+
+## [2026-08-24 09:11] Phase 90: Client-driven fullscreen, and the top bar that will not get out of its way
+
+**Status:** PLANNED -- NO CODE CHANGED. No step executed. Plan in `PLANS.md` item -16; task list in `TODOS.md` Phase 90.
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
+
+### What the user reported
+
+Two separate issues, in one message:
+
+1. **The top bar's media block overflows.** A long MPRIS track title runs the full width of the bar and the clock and status icons are drawn on top of it. Requested: cap at ~26 characters with a banner scroll so the whole title is still readable without interaction.
+2. **A fullscreen window does not cover the top bar** -- *"its as if the top bar is considered not accessible to windows"*. The bar should stay exactly as it is, with one variance: when a window or a video legitimately goes fullscreen, it should own the whole screen.
+
+### A scoping error of mine, corrected by the user, worth recording
+
+The first plan I produced for issue 2 proposed **a new `view-toggle-fullscreen` action and keybinding**. The user rejected it directly:
+
+> *"this is not something hikari itself needs a separate key for as most programs have it built in ... the major issue is when watching videos and trying to make them go into fullscreen mode -- not about making another shortcut that doesnt do anything properly"*
+
+That is correct and the correction is structural, not cosmetic. **Fullscreen is a client protocol request** -- `xdg_toplevel.set_fullscreen`, or X11's `_NET_WM_STATE_FULLSCREEN` -- sent when the user presses F11 or clicks a video player's fullscreen button. The compositor's job is to *answer* it. A compositor keybinding answers nothing that was asked, and would have shipped a second, parallel, half-working concept beside the broken one.
+
+**The failure mode is the one this project keeps finding: planning from what was expected rather than from what is there** (Phase 84's omission of R10, Phase 88's `app_id` correction). I had traced one of four relevant code paths and designed for that one. The corrected investigation found that **the path which actually breaks video was not the path I had analysed**, and that a second shell (XWayland) had no handling at all.
+
+### What actually happens today -- all four paths, traced
+
+| Path | Client | State | Result |
+|---|---|---|---|
+| A | Wayland | floating | Fills all but the bar strip |
+| **B** | **Wayland** | **maximized** | **Nothing happens at all** |
+| B' | Wayland | exit from B | Window silently un-maximizes |
+| C | XWayland | any | Request dropped -- no listener exists |
+| C' | XWayland | configure fallback | Clamped below the bar |
+
+**Path B is the reported bug.** It is the normal way people watch video: maximize the browser, then fullscreen the player.
+
+`apply_requested_fullscreen()` (`xdg_view.c:674-678`) reads:
+
+```c
+if (hikari_view_is_mapped(view) && !hikari_view_is_hidden(view) &&
+    !hikari_view_is_dirty(view) &&
+    fullscreen != hikari_view_is_fully_maximized(view)) {
+  hikari_view_toggle_full_maximize(view);
+}
+```
+
+On a maximized window: `fullscreen` is `true`, `hikari_view_is_fully_maximized()` is `true`, so `true != true` is **false** and the branch never executes. Meanwhile `wlr_xdg_toplevel_set_fullscreen()` on the line above **has already told the client it is fullscreen**. The client hides its chrome and renders fullscreen content; the compositor never resizes it.
+
+**Nothing at all happens compositor-side.** Fixing the geometry (`view.c:1523`) and the scene layering (`server.c:1002-1008`) -- the two causes my first report named -- would not have fixed this, because the code that reads them is unreachable.
+
+**Path B' is the same expression running in reverse.** On exit, `false != true` is true, so `hikari_view_toggle_full_maximize()` fires `queue_unmaximize()` and **the user's maximized browser comes back un-maximized.** A second visible defect from one line.
+
+The guard's own comment claims it makes this *"a no-op when the view is already in the requested state."* The view is **not** in the requested state; it is in a different state that happens to share a flag. **hikari has no fullscreen state, so there was nothing else to test.**
+
+### Findings, ranked
+
+* **Finding 1 (CRITICAL) -- the fullscreen guard tests the wrong state.** `xdg_view.c:674-678`. Paths B and B'. The operative defect.
+* **Finding 2 (CRITICAL) -- XWayland has no fullscreen handling whatsoever.** `hikari_xwayland_view_init()` registers 10 listeners; `request_fullscreen` is not among them, nor are `request_maximize`, `request_minimize`, `request_activate`. `grep -c wl_signal_add src/xwayland_view.c` = 10, exact. wlroots exposes `events.request_fullscreen` (`xwayland.h:203`), `wlr_xwayland_surface_set_fullscreen()` (`:315`) and a `surface->fullscreen` state field (`:182`); hikari uses none of them. **mpv, VLC, Steam, games and X11 browsers cannot go fullscreen at all.** Invisible in the source because it is an *absence* -- and unobservable before Phase 78, since XWayland windows rendered no content until then.
+* **Finding 3 (HIGH) -- the XWayland configure path clamps to `usable_area`.** `xwayland_view.c:355-364`. Independent of Finding 2; would still defeat a fullscreen X11 window after Finding 2 is fixed.
+* **Finding 4 (HIGH) -- `xdg_toplevel.set_maximized` is a protocol violation.** `grep -n request_maximize src/xdg_view.c` returns nothing. wlroots' own header (`wlr_xdg_shell.h:212-219`) states the compositor **must** listen and send a configure *"even if it didn't actually change the state ... not doing so is a protocol violation."* The comment sits directly above `request_maximize` and `request_fullscreen`; hikari handles the second and ignores the first. **This is why a client's own titlebar maximize button has never worked** -- directly on point for the user's stated model, *"the maximise is the maximise button"*.
+* **Finding 5 (MEDIUM) -- `is_dirty` silently drops a fullscreen request.** `xdg_view.c:676`. The client was acked on the line above. Permanent desync, no diagnostic.
+* **Finding 6 (MEDIUM) -- `requested.fullscreen_output` ignored** (`wlr_xdg_shell.h:185`). Relevant on the 3840x1200 dual-output setup.
+* **Finding 7 (LOW) -- entering fullscreen warps the cursor, to the wrong place.** `queue_full_maximize()` sets `op->center = true` (`view.c:1524`); `hikari_view_center_cursor()` centres against `usable_area` (`view.c:1884`), so on a fullscreen window the pointer lands off-centre by half the bar height. An artefact of fullscreen borrowing maximize's machinery.
+
+Findings from the first pass that still stand and are still necessary: geometry taken from `usable_area` (`view.c:1523`); bar in `layers.top` above `layers.views` (`server.c:1002-1008`). **Both are real. Neither is sufficient, because Findings 1 and 2 gate them.**
+
+### Design decisions
+
+* **D1 -- No new keybinding.** `L+f` / `view-toggle-maximize-full` untouched. User ruling; see the scoping correction above.
+* **D2 -- `FLAG(fullscreen, 5UL)`, not a new `hikari_maximization` member.** That enum is switched on in 8 places (`view.c:194/851/1601/1654/1709/1734`, `indicator_frame.c:114`, `maximized_state.c:16`); a flag touches only opt-in paths. `flags` is `uint16_t` with bits 0-4 used and 11 free (`view.h:172-177`).
+* **D3 -- Fullscreen SHADOWS maximize; it does not replace it.** One branch at the top of `refresh_geometry()` (`view.c:792`), above the `maximized_state` test. Exiting fullscreen clears the flag and the view falls straight back through to `maximized_state`, its tile, or its float geometry. **Path B' is fixed structurally, with no restore bookkeeping to get wrong.** `hikari_view_geometry()` returns `view->current_geometry`, which `hikari_view_refresh_geometry()` sets from this one function, so the shadowing propagates everywhere for free.
+* **D4 -- New `HIKARI_OPERATION_TYPE_FULLSCREEN`.** Verified exhaustively by `grep -rn HIKARI_OPERATION_TYPE_`: exactly **two** switches on the enum -- `commit_operation()` (`view.c:2206-2233`) and the tiled-edge switch (`xdg_view.c:82-97`). The second matters on its own merits: a fullscreen window must get **`WLR_EDGE_NONE`**, not `set_tiled`, or the client suppresses the wrong chrome.
+* **D5 -- `bool obscured` on `hikari_bar`, separate from `enabled`.** `hikari_bar_reserve()` (`bar.c:650`) keys off `enabled`; clearing it would change `usable_area` and **reflow every tiled window on the output** (`sheet.c:434`) -- windows would jump on entering and leaving fullscreen. Visibility is not reservation.
+* **D6 -- Geometry from `output->geometry` dimensions, never `usable_area`.** `usable_area` is also shrunk by layer-shell exclusive zones (`layer_shell.c:171`), so a waybar with an exclusive zone would otherwise shrink fullscreen too.
+* **D7 -- Client-reported geometry must not overwrite the fullscreen box.** Both commit handlers write surface dimensions back through `hikari_view_geometry()` (`xdg_view.c` else-branch, `xwayland_view.c` else-branch) -- under D3 that pointer is `&view->fullscreen_geometry`. A client reporting a slightly different size would silently un-fullscreen itself. The same hazard already exists for `maximized_state->geometry` and is pre-existing; for fullscreen it is guarded.
+* **D8 -- Single entry point `hikari_view_set_fullscreen(view, bool)`.** Three protocol paths (xdg, XWayland, foreign-toplevel) must not each re-derive the guard. That duplication is precisely what produced Finding 1.
+
+### User ruling on scope: (a) now, (b) tracked
+
+Asked whether fullscreen should also cover layer-shell `TOP`/`OVERLAY` surfaces, the user ruled **"A NOW B TRACKED"**.
+
+* **(a), building now:** fullscreen covers the native top bar.
+* **(b), recorded but not built:** fullscreen over layer-shell surfaces (waybar, notification daemons, and the left-edge side panel of `PLANS.md` item -15, which BLUEPRINT section 16 specifies as a `TOP`-layer client). Filed as **FS-2** in `PLANS.md` item -16. **Gate FS-2 on the side panel work, and do not build the panel without it** -- the moment that panel exists it covers fullscreen video.
+  Verified while scoping FS-2: `override_visibility()` disables the whole `top` tree, so a fullscreen view parented there would still be correctly hidden while locked, and `layers.lock` sits above `top` regardless. The blocker for FS-2 is not lock safety, it is the map-time layer derivation at `view.c:1160-1167`, which re-derives a view's parent on every map and would silently drop a remapped fullscreen view back into `layers.views`.
+
+### Issue 1 -- the media block -- separate subsystem, separate finding set
+
+Four independent omissions, any one of which would have prevented the symptom:
+
+* **No length policy at the source.** `topbar.c:183` is `char mpris[128]`; `get_mpris_info()` (`:226`) `fgets` straight into it. The file's own header correctly identifies this string as *"fully attacker/user controlled"* for **escaping** and then applies no bound to its **length**.
+* **No width constraint at the renderer.** `hikari_bar_refresh()` makes three Pango calls -- `set_font_description` and two `set_text`. There is **no `pango_layout_set_width()`, no `set_ellipsize()`, and no `cairo_clip()` anywhere in `bar.c`.**
+* **The overflow guard is structurally wrong, three ways.** `bar.c:820` tests `x > width` -- the block's **origin**, not its extent, so it can only reject a block that was already entirely off-screen. The left run has no upper bound at all (`bar.c:772-774`: three cursors computed independently with no knowledge of each other). And the same class of bug exists unnoticed on the other two runs -- `center_x` and `right_x` can both go **negative** and draw off the left edge.
+* **It is not a scene-graph problem.** All blocks paint into **one** cairo surface in emission order with `CAIRO_OPERATOR_OVER` (`bar.c:776-831`). Media is emitted before network/backlight/volume/battery/clock (`topbar.c:511` vs `:540-570`), so the long title is drawn first and every later block is composited **on top of it**. That is the whole of the "layering under the bar" appearance. There is exactly one `wlr_scene_buffer` per output.
+
+**Two false comments found, both of the FB-4 class -- a claim that was never true, aging into a fact:**
+
+* `bar.c:41-44` says `HIKARI_BAR_MAX_BLOCK_WIDTH` is an *"upper bound on a single block's requested width ... any wider request cannot be displayed"*. It is applied **only** to the parsed `min_width` field (`bar.c:190-194`) and never bounds rendered text. An auditor would reasonably conclude block widths are capped. They are not.
+* `bar.c:32-34` says `HIKARI_BAR_PADDING` is applied *"at each end of the bar **and between** the left-aligned and right-aligned block runs."* It is applied only at the two outer edges. There is no inter-run gap in the layout.
+
+**A live latent bug, not merely a fix-time hazard: no UTF-8 validation.** Pango requires valid UTF-8. `fgets` into `mpris[128]` cuts on a **byte** boundary, `json_escape()` truncates on a byte boundary, and `json_string_field()` (`bar.c:113-159`, read in full) copies bytes with **no validation** before `pango_layout_set_text()`. Any track title with an accent, em-dash or CJK glyph landing near byte 127 already hands Pango invalid UTF-8. **A character cap makes this routine rather than occasional**, so it must be fixed in the same change.
+
+### Decision: the cap and scroll live in `src/bar.c`, not `src/topbar.c`
+
+Four reasons, in order of weight:
+
+1. **The helper's configuration is not reloadable.** `hikari_topbar_source_init()` (`bar.c:498`) is called from exactly one place, `server_init()` (`server.c:1736`). The child is `execl`'d with **no argv and no env**, after `closefrom(STDERR_FILENO + 1)`. There is no restart path on SIGHUP or config reload. **Any knob placed in `topbar.c` could never be reloaded without restarting the compositor.**
+2. The compositor already links Pango and needs the UTF-8 helper anyway.
+3. It applies to *any* block, not only the one the helper happens to mark.
+4. `topbar.c`'s own header scopes it to telemetry, *"display-only"*. Layout is `bar.c`'s job -- the AGENTS.md section 4 separation argument.
+
+The render cost is identical either way (the compositor re-renders because the text changed), so nothing is lost by choosing the compositor side.
+
+**Rejected, recorded so it is not re-proposed:** marking scrollable blocks with the standard swaybar `"name"` field. It works and is protocol-shaped, but re-introduces reason 1 for the *policy* and adds a coupling a uniform cap does not need.
+
+**Cost stated rather than discovered:** `build_cache_key()` (`bar.c:291`) hashes every block's `full_text`, so a shifting scroll window invalidates the cache naturally -- which means a full cairo surface allocation plus N Pango layouts at the scroll rate. Today the bar re-renders roughly once per second when the clock ticks; at 300 ms per step on a 3840x24 bar that is ~3.3 full re-renders per second, ~370 KB each. Bounded and acceptable. The scroll timer is armed only while a block actually overflows, so an idle desktop with no media incurs **zero** extra wakeups.
+
+### Sequencing
+
+Encoded from Phase 84's principles, which were themselves learned from this project's own failures:
+
+* **Cycle 1 -- W-1 + W-2 + W-3.** Fixes native Wayland video end to end (Paths A, B, B'). `src/view.c` heavy, therefore ships alone.
+* **Cycle 2 -- W-4 + W-5.** XWayland (Paths C, C') plus the foreign-toplevel split. Separate because an X11 crash must not be ambiguous between two independently risky changes -- the exact reasoning Phase 78 used to defer W7b.
+* **The bar work (W-A, W-B) is a different subsystem in different files** and can ship before, between or after either cycle.
+
+**Emergency rollback for the whole fullscreen programme is one line:** make `hikari_view_set_fullscreen()` an unconditional early return, and every path reverts to today's behaviour.
+
+### What this closes elsewhere in the trackers
+
+`TODOS.md` Phase 89 item -- *"fullscreen maps to full-maximize ... External switchers should expose maximise only"* -- is not a permanent property of the design. W-5 splits the two requests and closes it.
+
+---
+
 ## [2026-08-22 21:35] Phase 89: zwlr_foreign_toplevel_management_v1 -- the acting half of window listing
 
 **Status:** IMPLEMENTED, UNBUILT -- awaiting the user build. The three changed translation units (`foreign_toplevel.c`, `view.c`, `server.c`) compile in-tree with 0 warnings; the link needs the privileged build.

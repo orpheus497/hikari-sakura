@@ -38,6 +38,40 @@ static void
 apply_requested_fullscreen(struct hikari_xdg_view *xdg_view);
 
 static void
+apply_requested_maximized(struct hikari_xdg_view *xdg_view);
+
+/* [COMMENT] Function purpose: Re-run any state request that arrived while the
+view had a resize in flight.
+
+Called from commit_handler() the moment the pending operation is acked, which is
+the first point at which the single pending_operation slot is free again. Both
+apply_* functions re-read the client's CURRENT requested state rather than the
+value that was parked, so a client that toggled twice while busy converges on
+what it actually wants instead of replaying a stale intermediate step. The
+parked booleans therefore serve only as "something is outstanding" markers.
+
+Fullscreen is drained before maximize because a maximize parked underneath a
+fullscreen only becomes meaningful once the fullscreen has resolved. */
+static void
+drain_pending_state(struct hikari_xdg_view *xdg_view)
+{
+  if (hikari_view_is_dirty((struct hikari_view *)xdg_view)) {
+    return;
+  }
+
+  if (xdg_view->pending_fullscreen) {
+    xdg_view->pending_fullscreen = false;
+    apply_requested_fullscreen(xdg_view);
+  }
+
+  if (xdg_view->pending_maximized &&
+      !hikari_view_is_dirty((struct hikari_view *)xdg_view)) {
+    xdg_view->pending_maximized = false;
+    apply_requested_maximized(xdg_view);
+  }
+}
+
+static void
 set_title_handler(struct wl_listener *listener, void *data)
 {
   struct hikari_xdg_view *xdg_view =
@@ -88,8 +122,16 @@ commit_handler(struct wl_listener *listener, void *data)
             WLR_EDGE_LEFT | WLR_EDGE_RIGHT | WLR_EDGE_TOP | WLR_EDGE_BOTTOM);
         break;
 
+      /* [COMMENT] Action purpose: Fullscreen belongs HERE, with the untiled
+      cases, and not with the maximize block above. set_tiled tells a client its
+      edges are constrained by neighbours so it should drop rounded corners and
+      shadows on those sides; a fullscreen window has no neighbours and has
+      already been told it is fullscreen, which carries that meaning properly.
+      Sending both would have the client suppressing chrome for two different
+      reasons and, on the way out, restoring it against the wrong one. */
       case HIKARI_OPERATION_TYPE_RESET:
       case HIKARI_OPERATION_TYPE_UNMAXIMIZE:
+      case HIKARI_OPERATION_TYPE_FULLSCREEN:
         wlr_xdg_toplevel_set_tiled(xdg_view->xdg_toplevel, WLR_EDGE_NONE);
         break;
 
@@ -97,12 +139,37 @@ commit_handler(struct wl_listener *listener, void *data)
         break;
     }
     hikari_view_commit_pending_operation(view, &new_geometry);
+
+    /* [COMMENT] Action purpose: The pending_operation slot has just been
+    released, so anything parked while it was busy can run now. Fullscreen
+    first: a maximize parked underneath a fullscreen is only meaningful once the
+    fullscreen has resolved. */
+    drain_pending_state(xdg_view);
   } else {
     struct wlr_box *geometry = hikari_view_geometry(view);
     struct hikari_output *output = view->output;
     bool visible = !hikari_view_is_hidden(view);
 
     struct wlr_box new_geometry = surface->geometry;
+
+    /* [COMMENT] Action purpose: A fullscreen view's size is the compositor's,
+    and this branch would hand it back to the client.
+
+    `geometry` here is hikari_view_geometry(view), which for a fullscreen view is
+    &view->fullscreen_geometry -- so the two assignments below would write the
+    client's self-reported size straight into the whole-output box. A client that
+    reports even a pixel less than it was given (rounding, a fixed aspect ratio,
+    a size hint) would quietly shrink its own fullscreen and expose a strip of
+    whatever is behind it, permanently, because nothing recomputes that box until
+    fullscreen is left. Damage and schedule as normal, but do not adopt the size. */
+    if (hikari_view_is_fullscreen(view)) {
+      if (visible) {
+        hikari_view_damage_whole(view);
+      } else if (output->enabled) {
+        hikari_output_schedule_frame(output);
+      }
+      return;
+    }
 
     if (new_geometry.width != geometry->width ||
         new_geometry.height != geometry->height) {
@@ -249,9 +316,21 @@ map_handler(struct wl_listener *listener, void *data)
   // map() / hikari_view_map() so the view is mapped by the time
   // apply_requested_fullscreen() drives the full-maximize toggle, which
   // otherwise no-ops on an unmapped view.
+  /* [COMMENT] Action purpose: Compare against the FULLSCREEN state, not the
+  maximization state. The old comparison against hikari_view_is_fully_maximized()
+  meant a window that mapped already-maximized and already-requesting-fullscreen
+  looked reconciled when it was not -- see apply_requested_fullscreen(). */
   if (xdg_view->xdg_toplevel->requested.fullscreen !=
-      hikari_view_is_fully_maximized(view)) {
+      hikari_view_is_fullscreen(view)) {
     apply_requested_fullscreen(xdg_view);
+  }
+
+  /* [COMMENT] Action purpose: The same reconciliation for maximize, which had
+  none at all. A client that asks to be maximized before its first commit -- the
+  usual way a session restores window state -- was never answered. */
+  if (xdg_view->xdg_toplevel->requested.maximized !=
+      hikari_view_is_fully_maximized(view)) {
+    apply_requested_maximized(xdg_view);
   }
 }
 
@@ -340,6 +419,7 @@ destroy_handler(struct wl_listener *listener, void *data)
   the xdg_surface is torn down without ever having had a toplevel role object
   attached. */
   wl_list_remove(&xdg_view->request_fullscreen.link);
+  wl_list_remove(&xdg_view->request_maximize.link);
   wl_list_remove(&xdg_view->toplevel_destroy.link);
   wl_list_remove(&xdg_view->destroy.link);
 
@@ -657,26 +737,126 @@ apply_requested_fullscreen(struct hikari_xdg_view *xdg_view)
 {
   struct hikari_view *view = (struct hikari_view *)xdg_view;
 
-  // [COMMENT] Action purpose: Guard against calling configure before the surface
-// is initialized (initial_commit not yet handled). See tinywl request_fullscreen.
-  if (xdg_view->surface->initialized) {
-    bool fullscreen = xdg_view->xdg_toplevel->requested.fullscreen;
-
-    // [COMMENT] Action purpose: Apply the client's requested fullscreen state via wlroots API.
-    wlr_xdg_toplevel_set_fullscreen(xdg_view->xdg_toplevel, fullscreen);
-
-    // [COMMENT] Action purpose: Acking the protocol request alone leaves the
-    // view at its old geometry -- the client renders assuming it now fills
-    // the output while hikari never resized it. Drive hikari's own
-    // full-maximize state to match, using the same toggle the normal
-    // fullscreen keybinding uses, guarded so this is a no-op when the view is
-    // already in the requested state or a resize is already in flight.
-    if (hikari_view_is_mapped(view) && !hikari_view_is_hidden(view) &&
-        !hikari_view_is_dirty(view) &&
-        fullscreen != hikari_view_is_fully_maximized(view)) {
-      hikari_view_toggle_full_maximize(view);
-    }
+  /* [COMMENT] Action purpose: Guard against calling configure before the surface
+  is initialized (initial_commit not yet handled). See tinywl request_fullscreen. */
+  if (!xdg_view->surface->initialized) {
+    return;
   }
+
+  bool fullscreen = xdg_view->xdg_toplevel->requested.fullscreen;
+
+  /* [COMMENT] Action purpose: Send the configure unconditionally, before doing
+  anything else and regardless of whether the state actually changes. xdg-shell
+  requires a reply to every state request; wlr_xdg_shell.h states plainly that
+  not sending one is a protocol violation. */
+  wlr_xdg_toplevel_set_fullscreen(xdg_view->xdg_toplevel, fullscreen);
+
+  /* [COMMENT] Action purpose: requested.fullscreen_output is DELIBERATELY not
+  honoured yet, and the view is fullscreened on the output it already occupies.
+
+  Acting on it means moving the view between outputs, and the only API for that
+  -- hikari_view_migrate() -- is a full visibility transition: it unlinks the
+  view, re-constrains both geometries, migrates the sheet and shows it again.
+  Driving that from inside a protocol handler, on the same path that is being
+  fixed for the reported bug, would put two independently risky changes in one
+  build cycle and make any crash ambiguous between them. That is the sequencing
+  rule this project has paid for twice (Phases 75 and 78).
+
+  The cost of not doing it is small and bounded: a client that names a different
+  output gets fullscreen on its current one instead. Tracked as Phase 90
+  Finding 6. */
+
+  /* [COMMENT] Action purpose: Acking the protocol request alone leaves the view
+  at its old geometry -- the client renders assuming it fills the output while
+  hikari never resized it.
+
+  This previously compared `fullscreen` against hikari_view_is_fully_maximized()
+  and drove hikari_view_toggle_full_maximize(). Both halves were wrong, and the
+  combination is what made fullscreen video fail:
+
+    * A MAXIMIZED window is already fully maximized, so `true != true` was false
+      and the branch never ran. The client had been acked on the line above, so
+      it hid its chrome and rendered fullscreen content into a window the
+      compositor never touched. Maximizing the browser first is the ordinary way
+      to watch video, which is why this was the common case rather than an edge
+      one.
+    * Leaving fullscreen from that state gave `false != true`, which DID run --
+      and un-maximized the window, so exiting a video also lost the user's
+      maximized browser.
+
+  Comparing against the fullscreen state itself, and setting it rather than
+  toggling, removes both. hikari_view_request_fullscreen() owns the remaining
+  preconditions so there is one place they are stated. */
+  hikari_view_request_fullscreen(view, fullscreen);
+
+  /* [COMMENT] Action purpose: If the request could not be actioned because a
+  resize was still in flight, park it. commit_handler() drains this once the
+  view is no longer dirty. Without it the client stays acked-but-unresized for
+  the rest of its life. */
+  if (hikari_view_is_mapped(view) &&
+      fullscreen != hikari_view_is_fullscreen(view)) {
+    xdg_view->pending_fullscreen = true;
+    xdg_view->pending_fullscreen_value = fullscreen;
+  } else {
+    xdg_view->pending_fullscreen = false;
+  }
+}
+
+/* [COMMENT] Function purpose: Answer xdg_toplevel.set_maximized.
+ *
+ * hikari had no listener on this signal at all. wlr_xdg_shell.h is explicit
+ * that a compositor MUST reply to every state request with a configure "even if
+ * it didn't actually change the state", and that not doing so is a protocol
+ * violation -- so a client's own titlebar maximize button sent a request that
+ * was never answered, which is why it appeared to do nothing.
+ *
+ * Maximize is NOT fullscreen: it takes output->usable_area and leaves the top
+ * bar alone. That distinction is the whole point of this phase, so the two
+ * requests get separate handlers rather than sharing one as they did before. */
+static void
+apply_requested_maximized(struct hikari_xdg_view *xdg_view)
+{
+  struct hikari_view *view = (struct hikari_view *)xdg_view;
+
+  if (!xdg_view->surface->initialized) {
+    return;
+  }
+
+  bool maximized = xdg_view->xdg_toplevel->requested.maximized;
+
+  /* [COMMENT] Action purpose: The configure, unconditionally -- this is the
+  half whose absence was the protocol violation. */
+  wlr_xdg_toplevel_set_maximized(xdg_view->xdg_toplevel, maximized);
+
+  /* [COMMENT] Action purpose: A fullscreen view has a maximize state shadowed
+  underneath it; honouring a maximize request now would change what the view
+  falls back to when it leaves fullscreen, from under a client that is not
+  currently looking at it. Park it and drain on the way out instead. */
+  if (hikari_view_is_fullscreen(view)) {
+    xdg_view->pending_maximized = true;
+    xdg_view->pending_maximized_value = maximized;
+    return;
+  }
+
+  if (hikari_view_is_mapped(view) && !hikari_view_is_hidden(view) &&
+      !hikari_view_is_dirty(view) &&
+      maximized != hikari_view_is_fully_maximized(view)) {
+    hikari_view_toggle_full_maximize(view);
+    xdg_view->pending_maximized = false;
+  } else if (hikari_view_is_mapped(view) &&
+             maximized != hikari_view_is_fully_maximized(view)) {
+    xdg_view->pending_maximized = true;
+    xdg_view->pending_maximized_value = maximized;
+  }
+}
+
+static void
+request_maximize_handler(struct wl_listener *listener, void *data)
+{
+  struct hikari_xdg_view *xdg_view =
+      wl_container_of(listener, xdg_view, request_maximize);
+
+  apply_requested_maximized(xdg_view);
 }
 
 static void
@@ -714,6 +894,9 @@ toplevel_destroy_handler(struct wl_listener *listener, void *data)
 
   wl_list_remove(&xdg_view->request_fullscreen.link);
   wl_list_init(&xdg_view->request_fullscreen.link);
+
+  wl_list_remove(&xdg_view->request_maximize.link);
+  wl_list_init(&xdg_view->request_maximize.link);
 
   wl_list_remove(&xdg_view->toplevel_destroy.link);
   wl_list_init(&xdg_view->toplevel_destroy.link);
@@ -753,6 +936,16 @@ hikari_xdg_view_init(struct hikari_xdg_view *xdg_view,
   bool child = xdg_surface->toplevel->parent != NULL;
 
   hikari_view_init(&xdg_view->view, child, workspace);
+
+  /* [COMMENT] Action purpose: hikari_xdg_view comes from hikari_malloc, which
+  does not zero. drain_pending_state() runs on the very first commit and tests
+  these, so leaving them indeterminate would let a fresh window re-apply a state
+  request that was never made. Same class as the seven list links Phase 56
+  found uninitialised in hikari_view_init(). */
+  xdg_view->pending_fullscreen = false;
+  xdg_view->pending_fullscreen_value = false;
+  xdg_view->pending_maximized = false;
+  xdg_view->pending_maximized_value = false;
 
   if (xdg_surface->surface->mapped) {
     struct wlr_box new_geometry = xdg_surface->geometry;
@@ -838,6 +1031,17 @@ hikari_xdg_view_init(struct hikari_xdg_view *xdg_view,
   xdg_view->request_fullscreen.notify = request_fullscreen_handler;
   wl_signal_add(&xdg_surface->toplevel->events.request_fullscreen,
       &xdg_view->request_fullscreen);
+
+  /* [COMMENT] Action purpose: The maximize half, registered at the same point
+  and for the same reason. hikari had no listener on this signal at all, so
+  xdg_toplevel.set_maximized was never answered -- a protocol violation per
+  wlr_xdg_shell.h, and the reason a client's own titlebar maximize button did
+  nothing. Toplevel-scoped, so it is released in toplevel_destroy_handler
+  alongside request_fullscreen; leaving it registered would trip the wlroots
+  assertion that every toplevel signal has an empty listener list at destroy. */
+  xdg_view->request_maximize.notify = request_maximize_handler;
+  wl_signal_add(&xdg_surface->toplevel->events.request_maximize,
+      &xdg_view->request_maximize);
 
   /* [COMMENT] Action purpose: Release the toplevel-scoped listener above when
   the toplevel itself is destroyed. wlroots destroys the role object before

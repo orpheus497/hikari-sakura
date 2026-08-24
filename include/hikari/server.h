@@ -187,6 +187,15 @@ struct hikari_server {
 
   struct wl_list toplevels;
 
+  /* Control socket. hikari's sheet model has no Wayland protocol that can
+   * express it, so external panels read and drive sheets through this. See
+   * include/hikari/ipc.h. */
+  int ipc_fd;
+  struct wl_event_source *ipc_source;
+  struct wl_list ipc_clients;
+  int ipc_nr_clients;
+  char *ipc_path;
+
   struct hikari_mode *mode;
 
   struct hikari_group_assign_mode group_assign_mode;

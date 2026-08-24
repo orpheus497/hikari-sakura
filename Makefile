@@ -42,6 +42,7 @@ OBJS = \
 	exec.o \
 	font.o \
 	foreign_toplevel.o \
+	ipc.o \
 	geometry.o \
 	gesture_config.o \
 	group.o \

@@ -51,6 +51,20 @@ struct hikari_bar {
   int height;
   bool enabled;
 
+  /* [COMMENT] Class purpose: Set while a genuinely fullscreen view is visible
+  on this output, which is the one case where the bar gets out of a window's
+  way.
+
+  DELIBERATELY SEPARATE FROM `enabled`, and the two must never be merged.
+  `enabled` is what hikari_bar_reserve() tests, so it decides whether the bar's
+  rows are subtracted from output->usable_area -- and usable_area is what the
+  tiling engine lays every window out against. Clearing `enabled` to hide the
+  bar would therefore hand those rows back to the layout and reflow every tiled
+  window on the output the instant a video went fullscreen, then reflow them
+  again on the way out. This field suppresses the scene node and nothing else:
+  the reservation stands, the layout never moves, and only the pixels go away. */
+  bool obscured;
+
   /* [COMMENT] Class purpose: Identity of the last repaint -- a serialised
   snapshot of the rendered block set plus the geometry it was rendered at.
   hikari_bar_refresh() skips the cairo/Pango work entirely when a new refresh
@@ -112,5 +126,20 @@ hikari_bar_refresh(struct hikari_bar *bar);
 // arrangement pass so both agree on the space the bar occupies.
 void
 hikari_bar_reserve(struct hikari_bar *bar, struct wlr_box *usable_area);
+
+/* [COMMENT] Function purpose: Recompute whether this output's bar should be on
+screen, from whether a fullscreen view is currently visible on it, and apply the
+result to the scene node.
+
+Takes the output rather than the bar because the answer is a property of the
+output's visible view set, not of the bar. Deliberately derived by walking that
+set on each call instead of being maintained as a counter: a counter has to be
+decremented on every path a view can stop being visible or stop being fullscreen
+-- which is the same nine-way audit that makes the flag itself delicate -- and a
+single missed decrement leaves the bar hidden for the rest of the session with
+no way for the user to get it back. Walking is O(visible views on one output),
+which is a handful, and it cannot drift. */
+void
+hikari_bar_update_visibility(struct hikari_output *output);
 
 #endif

@@ -28,6 +28,11 @@
 #include <hikari/memory.h>
 #include <hikari/output.h>
 #include <hikari/server.h>
+/* [COMMENT] Action purpose: hikari_bar_update_visibility() asks the view layer
+whether anything on this output is fullscreen, which needs the full definition
+of struct hikari_view -- output.h forward-declares it only. */
+#include <hikari/view.h>
+#include <hikari/workspace.h>
 
 /* [COMMENT] Action purpose: Horizontal padding applied at each end of the bar
 and between the left-aligned and right-aligned block runs. */
@@ -662,6 +667,54 @@ hikari_bar_reserve(struct hikari_bar *bar, struct wlr_box *usable_area)
 }
 
 void
+hikari_bar_update_visibility(struct hikari_output *output)
+{
+  assert(output != NULL);
+
+  struct hikari_bar *bar = &output->bar;
+
+  if (!bar->enabled) {
+    return;
+  }
+
+  /* [COMMENT] Action purpose: workspace->views, not output->views. The former
+  is the VISIBLE set for the displayed sheet; the latter is every view on the
+  output including those parked on sheets that are not showing. Using the wrong
+  one would hide the bar on account of a fullscreen video sitting on a sheet the
+  user has switched away from.
+
+  workspace is NULL during output teardown, which is one of the paths that
+  reaches here, so it is tested rather than assumed. */
+  bool obscured = false;
+  struct hikari_workspace *workspace = output->workspace;
+
+  if (workspace != NULL) {
+    struct hikari_view *view;
+    wl_list_for_each (view, &workspace->views, workspace_views) {
+      if (hikari_view_is_fullscreen(view) && !hikari_view_is_hidden(view)) {
+        obscured = true;
+        break;
+      }
+    }
+  }
+
+  if (obscured == bar->obscured) {
+    return;
+  }
+
+  bar->obscured = obscured;
+
+  if (bar->scene_buffer != NULL) {
+    wlr_scene_node_set_enabled(&bar->scene_buffer->node, !obscured);
+  }
+
+  /* [COMMENT] Action purpose: The bar's strip has just changed what it shows.
+  Nothing else damages it -- the view underneath was already drawn, and the
+  scene node toggling does not itself schedule a frame. */
+  hikari_output_damage_whole(output);
+}
+
+void
 hikari_bar_refresh(struct hikari_bar *bar)
 {
   struct hikari_output *output = bar->output;
@@ -694,6 +747,20 @@ hikari_bar_refresh(struct hikari_bar *bar)
   }
 
   struct hikari_topbar_source *source = &hikari_server.topbar;
+
+  /* [COMMENT] Action purpose: Re-assert the obscured state on every refresh,
+  BEFORE the cache short-circuit below.
+
+  The order is load-bearing. hikari_bar_update_visibility() sets the node's
+  enabled bit directly at the moment a view enters or leaves fullscreen, and
+  that is the fast path; this is the belt-and-braces one, covering any path that
+  changes the answer without routing through a call site -- and it would be
+  useless underneath the cache check, because the telemetry text is unchanged on
+  exactly the frames where only visibility moved, so the function would return
+  before ever reaching it. */
+  if (bar->scene_buffer != NULL) {
+    wlr_scene_node_set_enabled(&bar->scene_buffer->node, !bar->obscured);
+  }
 
   /* [COMMENT] Action purpose: Skip the repaint entirely when neither the
   rendered content nor the geometry changed since the last frame -- the
@@ -875,7 +942,12 @@ hikari_bar_refresh(struct hikari_bar *bar)
       if (newly_created) {
         wlr_scene_node_raise_to_top(&bar->scene_buffer->node);
       }
-      wlr_scene_node_set_enabled(&bar->scene_buffer->node, true);
+      /* [COMMENT] Action purpose: `!obscured`, not an unconditional true. A
+      repaint triggered by new telemetry must not put the bar back on screen
+      over a fullscreen video -- the helper keeps ticking either way, so an
+      unconditional enable here would make the bar reappear within 200ms of
+      being hidden. */
+      wlr_scene_node_set_enabled(&bar->scene_buffer->node, !bar->obscured);
     }
 
     wlr_buffer_drop(buffer);
