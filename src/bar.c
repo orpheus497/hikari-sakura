@@ -11,6 +11,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -619,14 +620,64 @@ parse_line(struct hikari_topbar_source *source, const char *line)
   }
 }
 
-/* [COMMENT] Function purpose: Serialise the current block set into a flat
-string that uniquely identifies what would be painted -- full_text, colour,
-min_width, alignment and scroll position for every block, in order. Used by
-hikari_bar_refresh to detect a no-op repaint request.
+/* [COMMENT] Function purpose: Append one formatted fragment to the growing cache
+key, resizing when it does not fit.
 
-scroll_offset is part of the identity, and has to be: it is the only thing that
-changes between two frames of a banner scroll, so leaving it out would make
-every step look identical to the cache and the text would never move. */
+The sizing pass and the writing pass are driven from one call site with one
+argument list, so they cannot drift: previously each fragment was two duplicated
+literal format strings, and adding a field meant editing both -- editing only one
+would size the buffer for a shorter key than gets written. */
+static void
+key_append(char **key, size_t *len, size_t *cap, const char *fmt, ...)
+{
+  va_list args;
+
+  va_start(args, fmt);
+  int needed = vsnprintf(NULL, 0, fmt, args);
+  va_end(args);
+
+  if (needed < 0) {
+    return;
+  }
+
+  while (*len + (size_t)needed + 1 > *cap) {
+    *cap *= 2;
+    char *grown = hikari_malloc(*cap);
+    memcpy(grown, *key, *len + 1);
+    hikari_free(*key);
+    *key = grown;
+  }
+
+  va_start(args, fmt);
+  *len += (size_t)vsnprintf(*key + *len, *cap - *len, fmt, args);
+  va_end(args);
+}
+
+/* [COMMENT] Function purpose: Serialise everything that determines what would be
+painted into a flat string, so hikari_bar_refresh can detect a no-op repaint.
+
+Two kinds of input go in, and both are needed for the claim in that sentence to
+be true:
+
+  * Per block -- full_text, min_width, alignment, colour, and scroll_offset.
+    scroll_offset has to be here because it is the ONLY thing that differs
+    between two frames of a banner scroll; omitting it would make every step look
+    identical to the cache and the text would never move.
+
+  * The display parameters those blocks are rendered THROUGH -- max_block_chars
+    and scroll_separator. Both change the pixels for identical telemetry:
+    max_block_chars decides whether a block is capped and how wide its window is,
+    and scroll_separator is spliced into the scroll cycle and changes its period.
+    Leaving them out meant a config reload did not invalidate anything, and since
+    hikari_configuration_reload() does not repaint bars either, the bar kept
+    rendering at the OLD cap until some block's text happened to change on its
+    own -- usually the next CPU-percentage tick, but indefinitely on an idle
+    machine with steady telemetry. That contradicted the documented behaviour
+    that these keys take effect on reload rather than needing a restart.
+
+scroll_interval is deliberately NOT included: it changes only how often a step is
+taken, never what a given frame looks like, and update_scroll_timer() and
+scroll_timer_handler() both re-read it live. */
 static char *
 build_cache_key(struct hikari_topbar_source *source)
 {
@@ -635,37 +686,23 @@ build_cache_key(struct hikari_topbar_source *source)
   size_t len = 0;
   key[0] = '\0';
 
+  const struct hikari_bar_config *bar_config =
+      &hikari_configuration->bar_config;
+  const char *separator = bar_config->scroll_separator != NULL
+                              ? bar_config->scroll_separator
+                              : "";
+
+  key_append(&key, &len, &cap, "%d\x1f%s", bar_config->max_block_chars,
+      separator);
+
   for (int i = 0; i < source->nr_blocks; i++) {
     struct hikari_bar_block *block = &source->blocks[i];
     const char *text = block->full_text != NULL ? block->full_text : "";
 
-    /* [COMMENT] Action purpose: The sizing call and the writing call below use
-    ONE shared format string and argument list. They were duplicated literals
-    before; adding a field meant editing both, and editing only one would size
-    the buffer for a shorter key than gets written. */
-#define HIKARI_BAR_KEY_FORMAT "\x1f%s\x1f%d\x1f%d\x1f%d\x1f%.6f,%.6f,%.6f,%.6f"
-#define HIKARI_BAR_KEY_ARGS                                                    \
-  text, block->min_width, (int)block->align, block->scroll_offset,             \
-      block->color[0], block->color[1], block->color[2], block->color[3]
-
-    int needed = snprintf(NULL, 0, HIKARI_BAR_KEY_FORMAT, HIKARI_BAR_KEY_ARGS);
-    if (needed < 0) {
-      continue;
-    }
-
-    while (len + (size_t)needed + 1 > cap) {
-      cap *= 2;
-      char *grown = hikari_malloc(cap);
-      memcpy(grown, key, len + 1);
-      hikari_free(key);
-      key = grown;
-    }
-
-    len += (size_t)snprintf(
-        key + len, cap - len, HIKARI_BAR_KEY_FORMAT, HIKARI_BAR_KEY_ARGS);
-
-#undef HIKARI_BAR_KEY_FORMAT
-#undef HIKARI_BAR_KEY_ARGS
+    key_append(&key, &len, &cap,
+        "\x1f%s\x1f%d\x1f%d\x1f%d\x1f%.6f,%.6f,%.6f,%.6f", text,
+        block->min_width, (int)block->align, block->scroll_offset,
+        block->color[0], block->color[1], block->color[2], block->color[3]);
   }
 
   return key;

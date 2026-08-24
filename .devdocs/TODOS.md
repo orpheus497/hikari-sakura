@@ -1,6 +1,6 @@
 # Granular Task List
 
-*Last Updated:* 2026-08-24 11:42
+*Last Updated:* 2026-08-24 11:52
 
 ## Active List
 
@@ -112,6 +112,13 @@
 - [x] **VALID, FIXED — accepted IPC descriptor had no FD_CLOEXEC.** `accept(2)` returns a descriptor with FD_CLOEXEC **clear**; the listener's `SOCK_CLOEXEC` does not propagate to it. It matters because `hikari_command_execute()` (`src/command.c:14-19`) forks twice and execs `/bin/sh` with **no descriptor hygiene at all** — no `closefrom()`, unlike the topbar (`bar.c:990`) and unlocker (`lock_mode.c:156`) helpers — so every keybinding- or autostart-launched application inherited any open control-socket connection. Fixed with one `fcntl(F_SETFD, FD_CLOEXEC)`; `accept4()` was not used since the only argument for it is an accept→fcntl fork race and hikari is single-threaded.
 - [ ] **REJECTED — "default WITH_FOREIGN_TOPLEVEL_MANAGEMENT to NO until a global filter authorizes trusted clients".** The protocol was added in Phase 89 **at the user's explicit request**, for their sofi window switcher; defaulting it off removes that feature and is barred by AGENTS.md section 3. The underlying observation is fair — it is a privileged protocol any client can bind — but the proposed remedy disables a requested feature rather than fixing anything, and hikari has no client-trust model for a filter to consult (the IPC socket grants comparable powers to anything that can reach `$XDG_RUNTIME_DIR`). **A `wl_display_set_global_filter` is a legitimate future workstream, not a minimal fix; recorded here rather than actioned.**
 - [ ] **REJECTED — "use send() with MSG_NOSIGNAL instead of write() in ipc.c write_all()".** The implied hazard is that writing to a peer that has closed raises SIGPIPE and kills the compositor. **`signal(SIGPIPE, SIG_IGN)` is already set unconditionally in `server_init()` (`src/server.c:1528`)**, before the event loop exists, so `write()` returns `-1`/`EPIPE`, `write_all()` returns false, and the caller closes the connection — which is the intended behaviour and is already correct. The change would be behaviourally a no-op while adding a portability constraint.
+
+#### Review finding triaged 2026-08-24 11:52 — 1 of 1 valid
+
+- [x] **VALID, FIXED — `build_cache_key()` omitted the display parameters, so a config reload did not invalidate the repaint cache.** The key carried per-block state (`full_text`, `min_width`, `align`, `scroll_offset`, colour) but not `max_block_chars` or `scroll_separator`, both of which change the pixels for identical telemetry — the first decides whether a block is capped and how wide its window is, the second is spliced into the scroll cycle and changes its period. **`hikari_configuration_reload()` does not repaint bars either** (verified: it refreshes view geometry, pointers, keyboards, outputs and switches, and touches nothing bar-related), so the only repaint path is the 200ms telemetry tick — which this cache gated. The bar therefore kept rendering at the OLD cap until some block's text changed on its own; usually the next CPU-percentage tick, but indefinitely on an idle machine with steady telemetry. **That contradicted the behaviour documented in `hikari.conf` and the man page**, which state these keys take effect on reload rather than needing a restart.
+  Fixed by prefixing the key with both values. `scroll_interval` deliberately **not** included — it changes only how often a step is taken, never what a frame looks like, and both timer paths re-read it live.
+  The two duplicated literal format strings were replaced by a `key_append()` varargs helper in the same change, so the sizing pass and the writing pass can no longer drift — which is the failure the old code's own comment warned about.
+  **Unit-tested under ASan+UBSan:** identical config still yields an identical key (the cache genuinely still works, no spurious repaints); changing either value changes the key; restoring it restores the key; a scroll step still changes the key; a 4 KB separator exercises the realloc growth path without truncation; a NULL separator is tolerated.
 
 #### Known constraints
 
