@@ -164,11 +164,9 @@ request_minimize_handler(struct wl_listener *listener, void *data)
 /* [COMMENT] Function purpose: Drive hikari's full-maximize state from a
 protocol request.
 
-hikari has no fullscreen state at all -- only HIKARI_MAXIMIZATION_*, so
-set_fullscreen and set_maximized both land here. That is not an approximation
-invented for this protocol: xdg_view.c's apply_requested_fullscreen() already
-drives full-maximize from the client's own xdg-shell fullscreen request, so this
-keeps one meaning for the concept across both paths.
+Maximize means the USABLE area -- the top bar and any layer-shell exclusive zone
+stay where they are. It is a different operation from fullscreen below, and the
+two are deliberately no longer routed together.
 
 hikari_view_toggle_full_maximize() asserts the view is not hidden and is a
 toggle rather than a setter, hence both guards. It returns early on its own when
@@ -185,6 +183,26 @@ set_full_maximize(
   }
 
   hikari_view_toggle_full_maximize(view);
+}
+
+/* [COMMENT] Function purpose: Drive hikari's fullscreen state from a protocol
+request -- the WHOLE output, over the top bar.
+
+This used to call set_full_maximize(), because hikari had no fullscreen state to
+set: there was only HIKARI_MAXIMIZATION_*, so set_fullscreen and set_maximized
+were literally the same operation and a client saw back a state it had not asked
+for. That is why TODOS carried "external switchers should expose maximise only"
+as a known consequence.
+
+Phase 90 gave the compositor a real fullscreen state, so the two requests are now
+distinct. hikari_view_request_fullscreen() is a setter rather than a toggle and
+owns every remaining precondition -- mapped, not hidden, no operation in flight,
+and already-in-the-requested-state -- so there is nothing to re-derive here. */
+static void
+set_fullscreen(
+    struct hikari_foreign_toplevel *foreign_toplevel, bool fullscreen)
+{
+  hikari_view_request_fullscreen(foreign_toplevel->view, fullscreen);
 }
 
 static void
@@ -212,7 +230,7 @@ request_fullscreen_handler(struct wl_listener *listener, void *data)
     return;
   }
 
-  set_full_maximize(foreign_toplevel, event->fullscreen);
+  set_fullscreen(foreign_toplevel, event->fullscreen);
 }
 
 // [COMMENT] Function purpose: Drop every listener and forget the handle. Runs
@@ -405,18 +423,24 @@ hikari_foreign_toplevel_publish_state(
   }
 
   struct hikari_view *view = foreign_toplevel->view;
-  bool maximized = hikari_view_is_fully_maximized(view);
 
   wlr_foreign_toplevel_handle_v1_set_minimized(
       foreign_toplevel->handle, hikari_view_is_hidden(view));
   wlr_foreign_toplevel_handle_v1_set_maximized(
-      foreign_toplevel->handle, maximized);
+      foreign_toplevel->handle, hikari_view_is_fully_maximized(view));
 
-  // [COMMENT] Action purpose: hikari has no fullscreen state -- see
-  // set_full_maximize() above. Reporting full-maximize as fullscreen keeps what
-  // is read back consistent with what a set_fullscreen request actually did.
+  /* [COMMENT] Action purpose: Published from the fullscreen state itself, not
+  from the maximization state.
+
+  This used to report full-maximize AS fullscreen, because the two were the same
+  operation. A switcher therefore saw a window it had merely maximized come back
+  flagged fullscreen as well. They are independent now, and note they are not
+  mutually exclusive: fullscreen SHADOWS whatever maximization is underneath it
+  (refresh_geometry(), src/view.c), so a maximized window that a client
+  fullscreens correctly reports both -- and reports only maximized again once the
+  fullscreen is released. */
   wlr_foreign_toplevel_handle_v1_set_fullscreen(
-      foreign_toplevel->handle, maximized);
+      foreign_toplevel->handle, hikari_view_is_fullscreen(view));
 }
 
 void

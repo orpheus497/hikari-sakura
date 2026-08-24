@@ -373,6 +373,26 @@ socket_connection(int fd, uint32_t mask, void *data)
     return 0;
   }
 
+  /* [COMMENT] Action purpose: Close-on-exec, set explicitly because accept(2)
+  does NOT inherit it from the listening socket -- POSIX specifies the accepted
+  descriptor comes back with FD_CLOEXEC clear, so creating the listener with
+  SOCK_CLOEXEC (see hikari_ipc_setup) does nothing for this one.
+
+  It matters here because hikari_command_execute() forks twice and execs
+  /bin/sh with no descriptor hygiene of its own -- no closefrom(), unlike the
+  topbar and unlocker helpers -- so every application launched from a keybinding
+  or from autostart would otherwise inherit whatever control-socket connections
+  happened to be open at the time.
+
+  Set with F_SETFD rather than by switching to accept4(SOCK_CLOEXEC) so this
+  needs nothing beyond POSIX; the usual argument for accept4 is the fork race
+  between accept and fcntl, and hikari is single-threaded with every fork
+  happening in an event handler on this same thread. */
+  if (fcntl(client_fd, F_SETFD, FD_CLOEXEC) < 0) {
+    close(client_fd);
+    return 0;
+  }
+
   int flags = fcntl(client_fd, F_GETFL, 0);
   if (flags < 0 || fcntl(client_fd, F_SETFL, flags | O_NONBLOCK) < 0) {
     close(client_fd);

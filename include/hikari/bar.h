@@ -37,6 +37,17 @@ struct hikari_bar_block {
   bool has_color;
   int min_width;
   enum hikari_bar_align align;
+
+  /* [COMMENT] Class purpose: How far this block's banner has scrolled, in
+  CODEPOINTS from the start of `full_text`. Only meaningful when the block is
+  longer than the configured cap; otherwise pinned at 0.
+
+  Carried across parses rather than reset with the block set: the helper re-emits
+  every block several times a second, so clearing this on each line would restart
+  the scroll before a single step was visible. parse_line() copies it forward
+  when the block at the same index still holds the same text, and drops it the
+  moment the text changes -- a new track starts reading from its beginning. */
+  int scroll_offset;
 };
 
 #define HIKARI_BAR_MAX_BLOCKS 32
@@ -94,6 +105,18 @@ struct hikari_topbar_source {
 
   struct hikari_bar_block blocks[HIKARI_BAR_MAX_BLOCKS];
   int nr_blocks;
+
+  /* [COMMENT] Class purpose: Drives the banner scroll, and is ARMED ONLY WHILE
+  SOME BLOCK IS OVER THE CAP. That condition is the point: every step repaints
+  the whole bar, so a permanently-running timer would have the compositor
+  re-rendering several times a second forever. With nothing playing there is no
+  timer and no wakeups at all.
+
+  Deliberately not driven off the helper's own 200ms tick, which would couple
+  scrolling to telemetry arriving and would freeze mid-title if the helper
+  wedged. NULL when disarmed. */
+  struct wl_event_source *scroll_timer;
+  bool scroll_armed;
 };
 
 // Function purpose: Spawn the hikari-topbar helper and register its

@@ -1,3 +1,62 @@
+## [2026-08-24 11:35] Phase 90 W-A/W-B: EXECUTED -- top bar containment, character cap and banner scroll
+
+**Status:** IMPLEMENTED, UNBUILT. **0 warnings across all 66 translation units in all three build configurations**, plus `topbar.c`. The text logic is **unit-tested standalone and clean under ASan+UBSan**; the config **parses with real libucl**; the man page **converts with pandoc**. Not linked, not run.
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
+
+### Why this was still outstanding
+
+Cycle 1 fixed fullscreen. The bar overflow was scoped as a separate subsystem from the start and was not part of it, so the media block still rendered its full text and still painted under the clock. The user confirmed fullscreen works and asked for this half.
+
+### W-A -- containment is structural, and does not depend on the cap
+
+Three independent holes, fixed at the layout level so that **no helper output, however long, can paint outside its own run** -- with the cap as a presentation policy on top rather than as the safety net:
+
+* **The overflow guard tested the wrong thing.** `if (x > width) continue;` tests whether a block's ORIGIN has left the output. A block starting inside and running 900px wide passed it and drew the whole way across. Replaced with a per-run right-hand limit: the left run stops where the centre run begins (or the right run, when there is no centre content), the centre stops where the right begins.
+* **Two of the three origins could go NEGATIVE.** A centre or right run wider than the output produced `center_x`/`right_x` below zero, drawing that run off the left edge and across the left run. Both are now clamped to the padding. This was never reachable through the media block but was reachable through the right run, and would have survived the cap entirely.
+* **Every block is now hard-clipped** with `cairo_save`/`cairo_rectangle`/`cairo_clip`/`cairo_restore`.
+
+**`cairo_clip()` chosen over `pango_layout_set_width()` + `PANGO_ELLIPSIZE_END`.** `set_width` without ellipsize *wraps* rather than truncating, and the exact interaction of width, ellipsize and height on a single-line layout varies enough between Pango versions that it is not the right instrument for something that must hold unconditionally. A clip either holds or it does not.
+
+**Two false comments corrected at source** -- both the FB-4 class, a claim that was never true aging into a fact:
+* `HIKARI_BAR_MAX_BLOCK_WIDTH` described itself as an "upper bound on a single block's requested width" such that "any wider request cannot be displayed". It only ever clamped the swaybar `min_width` field and bounded nothing about rendered text -- which is precisely the thing that was unbounded.
+* `HIKARI_BAR_PADDING` claimed to be applied "between the left-aligned and right-aligned block runs". It was not; it was used only at the two outer edges. It now genuinely is the inter-run gap.
+
+### UTF-8: a live defect, not a consequence of the cap
+
+`pango_layout_set_text()` requires valid UTF-8 and hikari could not promise it. `get_mpris_info()` reads with `fgets()` into a fixed 128-byte buffer and `json_escape()` truncates into another, **both on byte boundaries**, and `json_string_field()` copies the result without inspecting it. Any track title with an accent or a CJK glyph landing near the limit already reached Pango cut through the middle of a sequence. **This was true before this phase**; the cap merely makes it routine rather than occasional.
+
+Fixed with a local decoder rather than `g_utf8_validate()`: the same routine is needed for stepping the scroll by codepoints, and writing it out allows the rejection to be exact. It rejects **overlong forms, UTF-16 surrogates and anything above U+10FFFF**, which a naive length-table decoder waves through and which Pango's own validation rejects anyway.
+
+### W-B -- the cap and the banner
+
+* **Codepoints, not bytes.** 26 *characters*, so a non-ASCII title is cut where a reader would expect.
+* **The window wraps through a separator** (`   •   ` by default) back into the title, so the banner reads as a loop instead of snapping back. Indices are taken modulo the period on every step rather than by splicing three substrings, so the wrap point needs no special case.
+* **`scroll_offset` is carried across parses.** The helper re-emits every block several times a second; resetting the offset with the block set would restart the banner on every tick and nothing would ever move. `parse_line()` matches by slot AND text -- a changed string means a new track, and the banner restarts from its beginning.
+  **This required making the carry-forward an ownership TRANSFER rather than a copy.** The obvious spelling -- snapshot the old blocks, `clear_blocks()`, then compare -- is a use-after-free: `clear_blocks()` frees the very strings the comparison reads. The previous set is moved aside with its strings and released at the end of the function instead.
+* **`scroll_offset` is part of the cache key**, and has to be: it is the only thing that differs between two frames of a scroll, so omitting it would make every step look identical to the repaint cache and the text would never move. The sizing and writing `snprintf` calls -- previously duplicated literals, where editing one and not the other would size the buffer for a shorter key than gets written -- now share one format macro.
+* **The timer is armed only while a block is actually over the cap.** Every step repaints the whole bar, so a permanently-armed timer would have the compositor re-rendering several times a second for the entire session. With nothing playing there is no timer and no wakeups. Deliberately not driven off the helper's own 200ms tick, which would couple scrolling to telemetry arriving and freeze mid-title if the helper wedged.
+
+### The display buffer nearly became a stack problem
+
+First cut resolved every block into a fixed `char[MAX_BLOCKS][...]`. With the config bound at 1024 codepoints that is ~131KB of stack per refresh, and with capping disabled (`max-block-chars = 0`) a fixed buffer cannot hold the text at all.
+
+Resolved by carrying **(pointer, byte length)** instead of copies: a block that fits points straight at `full_text` with the length of its valid UTF-8 prefix -- no copy, and no bound needed on how long the helper's text may be. Only a genuinely scrolling block needs a buffer, and that is bounded by the cap, which is in turn bound to `HIKARI_BAR_MAX_CAP_CHARS` (256) in the parser. `pango_layout_set_text()` taking an explicit length is what makes this work.
+
+### Compositor-side, and why that is not arbitrary
+
+`hikari_topbar_source_init()` is called from exactly one place, `server_init()`, and `execl`s the helper with **no argv and no environment**, after `closefrom()`. There is no restart path on SIGHUP or config reload. **A limit configured in `topbar.c` could therefore never be changed without restarting the compositor.** Beyond that, the compositor already links Pango, already needs the UTF-8 decoder, and `topbar.c`'s own header scopes it to telemetry -- "display-only". Layout is `bar.c`'s business.
+
+### Validation
+
+`block_display_text()` and the UTF-8 helpers were exercised by **including the real translation unit** in a test rather than by reproducing the algorithm, with link stubs for the symbols the unit references but the test never reaches. Verified: continuation bytes, overlong forms and surrogates all rejected; a truncated `é` yields the valid prefix rather than invalid UTF-8; under-cap blocks pass through untouched; the banner wraps correctly through the separator and back; and a multibyte title steps one codepoint at a time, **never** producing a cut sequence at any offset. Clean under ASan+UBSan.
+
+### Not done
+
+`hikari.conf`'s shipped `ui { bar { ... } }` block is new, so a deployed `~/.config/hikari/hikari.conf` keeps the built-in defaults (26 / 300ms / `   •   `) until the block is added there -- the same caveat Phase 60 carried for the `bar` colour.
+
+---
+
 ## [2026-08-24 10:09] Phase 90 cycle 1: EXECUTED -- what the plan got wrong, and an IPC audit
 
 **Status:** IMPLEMENTED, UNBUILT. W-1, W-2, W-3 complete. **0 warnings across all 66 translation units in all three build configurations** (full / default / bare), plus `topbar.c`. Not linked, not run.

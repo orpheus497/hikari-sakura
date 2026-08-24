@@ -990,6 +990,54 @@ blank-timeout-battery = 60
 Views marked **public** are still displayed on the lock screen as before, and
 are drawn above the blurred backdrop. See **view-toggle-public**.
 
+### bar
+
+The *bar* subsection of *ui* governs how the top bar handles blocks whose text
+is longer than the space available. In practice that is the media block, whose
+content is whatever the currently playing track happens to be called and is
+therefore unbounded.
+
+An over-long block is cut to *max-block-chars* and then scrolled as a banner, so
+the whole title remains readable over time without any one block painting across
+the clock or the status icons.
+
+These keys are read by the compositor rather than by the **hikari-topbar**
+helper, so changes take effect on a configuration reload and do not require the
+session to be restarted.
+
+* **max-block-chars**
+
+  Longest a block may be, in **characters**, before it begins to scroll.
+  Counted in characters rather than bytes, so accented, CJK and emoji titles are
+  cut where one would expect rather than part way through a character.
+
+  A value of **0** disables capping and scrolling. Blocks are still prevented
+  from painting outside their own section of the bar; that guarantee is
+  structural and does not depend on this setting.
+
+  Accepts **0**-**256**.
+
+* **scroll-interval**
+
+  Milliseconds per character of scroll. The timer that drives it is only running
+  while some block is actually over the limit, so a bar with nothing playing
+  costs nothing.
+
+  Accepts **50**-**10000**.
+
+* **scroll-separator**
+
+  Placed between the end of the text and its beginning as the banner wraps
+  around, so that it reads as a continuous loop rather than snapping back.
+
+```
+bar {
+  max-block-chars  = 26
+  scroll-interval  = 300
+  scroll-separator = "   •   "
+}
+```
+
 Colorschemes
 ------------
 **hikari** uses color to indicate different states of views and their indicator

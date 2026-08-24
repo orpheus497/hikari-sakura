@@ -22,6 +22,7 @@
 
 #include <wlr/types/wlr_buffer.h>
 #include <wlr/types/wlr_scene.h>
+#include <wlr/util/log.h>
 
 #include <hikari/color.h>
 #include <hikari/configuration.h>
@@ -34,8 +35,14 @@ of struct hikari_view -- output.h forward-declares it only. */
 #include <hikari/view.h>
 #include <hikari/workspace.h>
 
-/* [COMMENT] Action purpose: Horizontal padding applied at each end of the bar
-and between the left-aligned and right-aligned block runs. */
+/* [COMMENT] Action purpose: Horizontal padding applied at each end of the bar,
+and as the gap each run leaves before the run that follows it.
+
+The second half of that was a lie until Phase 90: this comment claimed padding
+was applied "between the left-aligned and right-aligned block runs", and it was
+not -- the value was only ever used at the two outer edges, and the runs had no
+awareness of each other at all. It is now genuinely used as the inter-run gap
+when computing each run's right-hand limit. */
 #define HIKARI_BAR_PADDING 6
 
 /* [COMMENT] Action purpose: Upper bound on a single helper line. The swaybar
@@ -43,10 +50,28 @@ protocol emits one array per tick; anything beyond this is a malformed or
 hostile stream and is discarded rather than grown without limit. */
 #define HIKARI_BAR_MAX_LINE (64 * 1024)
 
-/* [COMMENT] Action purpose: Upper bound on a single block's requested width.
-Any wider request cannot be displayed and would overflow the int accumulator
-used for right-aligned layout. */
+/* [COMMENT] Action purpose: Upper bound on a block's requested MIN_WIDTH -- the
+swaybar `min_width` field, which pads a block out to a fixed pixel width.
+
+This previously claimed to be an "upper bound on a single block's requested
+width" such that "any wider request cannot be displayed". It never was: it is
+applied in json_int_field()'s clamp and bounds nothing about how wide a block's
+TEXT renders, which was unbounded and is what let one long block paint across
+the whole bar. Rendered width is now bounded structurally by the per-run clip in
+hikari_bar_refresh(). Corrected Phase 90. */
 #define HIKARI_BAR_MAX_BLOCK_WIDTH 8192
+
+/* [COMMENT] Action purpose: Longest block, in codepoints, that may be requested
+through `ui { bar { max-block-chars } }`. Bounds the per-block scroll buffer
+below; a status-bar block anywhere near this is already unreadable. */
+#define HIKARI_BAR_MAX_CAP_CHARS 256
+
+/* [COMMENT] Action purpose: Bytes needed for one scrolled block's window --
+HIKARI_BAR_MAX_CAP_CHARS codepoints at UTF-8's 4-byte maximum, plus the
+terminator. Only blocks actually over the cap use one of these; a block that
+fits is pointed at directly with a length and never copied, which is why
+disabling the cap entirely (max-block-chars = 0) needs no buffer at all. */
+#define HIKARI_BAR_SCROLL_BYTES (HIKARI_BAR_MAX_CAP_CHARS * 4 + 1)
 
 /* [COMMENT] Action purpose: The bar draws with cairo and hands the pixels to
 hikari_buffer_create_argb8888(), which is CPU-backed rather than
@@ -55,6 +80,273 @@ allocator a compositor can write pixels into, on any platform, so every
 compositor that draws its own UI supplies a wlr_buffer_impl of its own. See
 BLUEPRINT.md section 13, FB-2, which corrects the earlier Phase 33 framing, and
 the implementation in src/buffer.c. */
+
+void
+hikari_bar_config_init(struct hikari_bar_config *bar_config)
+{
+  bar_config->max_block_chars = 26;
+  bar_config->scroll_interval = 300;
+
+  static const char default_separator[] = "   •   ";
+  bar_config->scroll_separator = hikari_malloc(sizeof(default_separator));
+  memcpy(bar_config->scroll_separator, default_separator,
+      sizeof(default_separator));
+}
+
+void
+hikari_bar_config_fini(struct hikari_bar_config *bar_config)
+{
+  hikari_free(bar_config->scroll_separator);
+  bar_config->scroll_separator = NULL;
+}
+
+/* [COMMENT] Function purpose: Byte length of one UTF-8 sequence starting at s,
+or 0 if what is there is not a well-formed sequence.
+
+Written out rather than reached for from glib because the result is needed for
+two different jobs -- refusing malformed input, and stepping the scroll by
+codepoints -- and because it lets the rejection be exact. Rejects overlong
+encodings, surrogates and anything above U+10FFFF, all of which are ill-formed
+UTF-8 that a naive length-table decoder would wave through. */
+static int
+utf8_sequence_len(const char *s)
+{
+  const unsigned char *u = (const unsigned char *)s;
+  unsigned char c = u[0];
+
+  if (c < 0x80) {
+    return 1;
+  }
+
+  int len;
+  unsigned int cp;
+
+  if ((c & 0xe0) == 0xc0) {
+    len = 2;
+    cp = c & 0x1fu;
+  } else if ((c & 0xf0) == 0xe0) {
+    len = 3;
+    cp = c & 0x0fu;
+  } else if ((c & 0xf8) == 0xf0) {
+    len = 4;
+    cp = c & 0x07u;
+  } else {
+    return 0; /* continuation byte or 5/6-byte form: not valid UTF-8 */
+  }
+
+  for (int i = 1; i < len; i++) {
+    if ((u[i] & 0xc0) != 0x80) {
+      return 0;
+    }
+    cp = (cp << 6) | (u[i] & 0x3fu);
+  }
+
+  /* [COMMENT] Action purpose: Overlong forms encode a codepoint in more bytes
+  than needed and are a classic way to smuggle characters past a filter; UTF-16
+  surrogates have no business in UTF-8; and nothing above U+10FFFF exists.
+  Pango's own validation rejects all three, so accepting them here would only
+  move the failure. */
+  static const unsigned int minimum[] = { 0, 0, 0x80, 0x800, 0x10000 };
+  if (cp < minimum[len] || cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff)) {
+    return 0;
+  }
+
+  return len;
+}
+
+/* [COMMENT] Function purpose: Length in bytes of the longest leading run of s
+that is valid UTF-8.
+
+Every string reaching the layout has to pass through this. pango_layout_set_text
+() requires valid UTF-8 and hikari cannot promise it: the helper reads MPRIS
+metadata with fgets() into a fixed 128-byte buffer and escapes it into another
+fixed buffer, and BOTH truncate on a byte boundary -- so a track title with an
+accent or a CJK glyph landing near the limit already arrives here cut through
+the middle of a sequence. json_string_field() then copies those bytes without
+inspecting them. This is a live defect independent of the character cap; the cap
+merely makes it routine rather than occasional. */
+static size_t
+utf8_valid_prefix_len(const char *s)
+{
+  size_t off = 0;
+
+  while (s[off] != '\0') {
+    int len = utf8_sequence_len(s + off);
+
+    if (len == 0) {
+      break;
+    }
+    off += (size_t)len;
+  }
+
+  return off;
+}
+
+/* [COMMENT] Function purpose: Count codepoints in the valid prefix of s, and
+report the prefix's byte length through *valid_bytes. */
+static int
+utf8_count(const char *s, size_t *valid_bytes)
+{
+  size_t off = 0;
+  int count = 0;
+
+  while (s[off] != '\0') {
+    int len = utf8_sequence_len(s + off);
+
+    if (len == 0) {
+      break;
+    }
+    off += (size_t)len;
+    count++;
+  }
+
+  if (valid_bytes != NULL) {
+    *valid_bytes = off;
+  }
+
+  return count;
+}
+
+/* [COMMENT] Function purpose: Byte offset of the nth codepoint of s, clamped to
+the end of the valid prefix. */
+static size_t
+utf8_offset_of(const char *s, int n)
+{
+  size_t off = 0;
+
+  for (int i = 0; i < n && s[off] != '\0'; i++) {
+    int len = utf8_sequence_len(s + off);
+
+    if (len == 0) {
+      break;
+    }
+    off += (size_t)len;
+  }
+
+  return off;
+}
+
+/* [COMMENT] Function purpose: Decide whether a block needs the banner treatment
+and, if so, how many codepoints its scroll cycle spans.
+
+The cycle is the text plus the separator, so the offset wraps through the
+separator and back into the title rather than snapping from the end to the
+start. Returns 0 when the block fits and should be drawn verbatim. */
+static int
+block_scroll_period(const struct hikari_bar_block *block, int cap)
+{
+  if (cap <= 0 || block->full_text == NULL) {
+    return 0;
+  }
+
+  int chars = utf8_count(block->full_text, NULL);
+
+  if (chars <= cap) {
+    return 0;
+  }
+
+  const char *separator = hikari_configuration->bar_config.scroll_separator;
+  int sep_chars = separator != NULL ? utf8_count(separator, NULL) : 0;
+
+  return chars + sep_chars;
+}
+
+/* [COMMENT] Function purpose: Produce the text actually drawn for a block --
+either the block verbatim, or a `cap`-codepoint window onto text+separator
+starting at the block's current scroll offset.
+
+Always writes a NUL-terminated, VALID UTF-8 string into out, so this is the one
+place the layout's input contract is established. Returns out. */
+static const char *
+block_display_text(const struct hikari_bar_block *block,
+    int cap,
+    char *out,
+    size_t out_size)
+{
+  const char *text = block->full_text != NULL ? block->full_text : "";
+
+  int period = block_scroll_period(block, cap);
+
+  if (period == 0) {
+    /* [COMMENT] Action purpose: Fits the cap, so it is drawn as-is -- but only
+    its VALID prefix, because an invalid tail handed to Pango is undefined
+    behaviour. Copied a whole sequence at a time so a buffer that runs out
+    cannot itself sever one, which would reintroduce the bug being fixed. */
+    size_t written = 0;
+    size_t off = 0;
+
+    while (text[off] != '\0') {
+      int len = utf8_sequence_len(text + off);
+
+      if (len == 0 || written + (size_t)len + 1 > out_size) {
+        break;
+      }
+
+      memcpy(out + written, text + off, (size_t)len);
+      written += (size_t)len;
+      off += (size_t)len;
+    }
+
+    out[written] = '\0';
+
+    return out;
+  }
+
+  const char *separator = hikari_configuration->bar_config.scroll_separator;
+  if (separator == NULL) {
+    separator = " ";
+  }
+
+  int text_chars = utf8_count(text, NULL);
+  int sep_chars = utf8_count(separator, NULL);
+
+  int start = block->scroll_offset;
+  if (period > 0) {
+    start %= period;
+    if (start < 0) {
+      start += period;
+    }
+  }
+
+  size_t written = 0;
+
+  /* [COMMENT] Action purpose: Walk `cap` codepoints from `start`, wrapping
+  through the separator and back into the title. Indices are taken modulo the
+  period on every step rather than by splicing three substrings, so the wrap
+  point needs no special case. */
+  for (int i = 0; i < cap; i++) {
+    int idx = (start + i) % period;
+
+    const char *src;
+    int src_idx;
+
+    if (idx < text_chars) {
+      src = text;
+      src_idx = idx;
+    } else {
+      src = separator;
+      src_idx = idx - text_chars;
+
+      if (src_idx >= sep_chars) {
+        continue;
+      }
+    }
+
+    size_t begin = utf8_offset_of(src, src_idx);
+    int len = utf8_sequence_len(src + begin);
+
+    if (len == 0 || written + (size_t)len + 1 > out_size) {
+      break;
+    }
+
+    memcpy(out + written, src + begin, (size_t)len);
+    written += (size_t)len;
+  }
+
+  out[written] = '\0';
+
+  return out;
+}
 
 // [COMMENT] Function purpose: Release the strings owned by the current block
 // set and reset the count.
@@ -237,12 +529,29 @@ regardless of what the helper emits. */
 static void
 parse_line(struct hikari_topbar_source *source, const char *line)
 {
-  clear_blocks(source);
-
   const char *p = strchr(line, '[');
   if (p == NULL) {
+    /* [COMMENT] Action purpose: A malformed line leaves the previous blocks in
+    place rather than blanking the bar for a tick. */
     return;
   }
+
+  /* [COMMENT] Action purpose: MOVE the previous block set aside, taking
+  ownership of its strings, so a still-scrolling block can keep its position.
+
+  The helper re-emits every block several times a second; resetting
+  scroll_offset with the block set would restart the banner on every tick and
+  nothing would ever appear to move. The move must be an ownership transfer
+  rather than a copy plus clear_blocks() -- clear_blocks() frees the strings,
+  and the comparison below reads them. They are released at the end of this
+  function instead, once nothing refers to them. */
+  struct hikari_bar_block previous[HIKARI_BAR_MAX_BLOCKS];
+  int nr_previous = source->nr_blocks;
+
+  memcpy(previous, source->blocks,
+      sizeof(struct hikari_bar_block) * (size_t)nr_previous);
+
+  source->nr_blocks = 0;
 
   while (source->nr_blocks < HIKARI_BAR_MAX_BLOCKS) {
     const char *obj = strchr(p, '{');
@@ -280,18 +589,44 @@ parse_line(struct hikari_topbar_source *source, const char *line)
     }
     hikari_free(align);
 
+    /* [COMMENT] Action purpose: Carry the scroll position forward when this
+    slot still holds the same text. Matching by index as well as by text keeps
+    it cheap and is exactly right for this producer: the helper emits a fixed
+    sequence of blocks, so a given slot is the same conceptual block from tick
+    to tick. A changed string -- a new track -- drops the offset, so the banner
+    restarts from the beginning of the new title rather than resuming halfway
+    through it. */
+    if (block->full_text != NULL && source->nr_blocks < nr_previous) {
+      struct hikari_bar_block *old = &previous[source->nr_blocks];
+
+      if (old->full_text != NULL &&
+          strcmp(old->full_text, block->full_text) == 0) {
+        block->scroll_offset = old->scroll_offset;
+      }
+    }
+
     if (block->full_text != NULL) {
       source->nr_blocks++;
     }
 
     p = end + 1;
   }
+
+  /* [COMMENT] Action purpose: Release the strings the move above took ownership
+  of. Last, once the comparison loop can no longer reach them. */
+  for (int i = 0; i < nr_previous; i++) {
+    hikari_free(previous[i].full_text);
+  }
 }
 
 /* [COMMENT] Function purpose: Serialise the current block set into a flat
 string that uniquely identifies what would be painted -- full_text, colour,
-min_width, and alignment for every block, in order. Used by hikari_bar_refresh
-to detect a no-op repaint request. */
+min_width, alignment and scroll position for every block, in order. Used by
+hikari_bar_refresh to detect a no-op repaint request.
+
+scroll_offset is part of the identity, and has to be: it is the only thing that
+changes between two frames of a banner scroll, so leaving it out would make
+every step look identical to the cache and the text would never move. */
 static char *
 build_cache_key(struct hikari_topbar_source *source)
 {
@@ -304,9 +639,16 @@ build_cache_key(struct hikari_topbar_source *source)
     struct hikari_bar_block *block = &source->blocks[i];
     const char *text = block->full_text != NULL ? block->full_text : "";
 
-    int needed = snprintf(NULL, 0, "\x1f%s\x1f%d\x1f%d\x1f%.6f,%.6f,%.6f,%.6f",
-        text, block->min_width, (int)block->align,
-        block->color[0], block->color[1], block->color[2], block->color[3]);
+    /* [COMMENT] Action purpose: The sizing call and the writing call below use
+    ONE shared format string and argument list. They were duplicated literals
+    before; adding a field meant editing both, and editing only one would size
+    the buffer for a shorter key than gets written. */
+#define HIKARI_BAR_KEY_FORMAT "\x1f%s\x1f%d\x1f%d\x1f%d\x1f%.6f,%.6f,%.6f,%.6f"
+#define HIKARI_BAR_KEY_ARGS                                                    \
+  text, block->min_width, (int)block->align, block->scroll_offset,             \
+      block->color[0], block->color[1], block->color[2], block->color[3]
+
+    int needed = snprintf(NULL, 0, HIKARI_BAR_KEY_FORMAT, HIKARI_BAR_KEY_ARGS);
     if (needed < 0) {
       continue;
     }
@@ -319,10 +661,11 @@ build_cache_key(struct hikari_topbar_source *source)
       key = grown;
     }
 
-    len += (size_t)snprintf(key + len, cap - len,
-        "\x1f%s\x1f%d\x1f%d\x1f%.6f,%.6f,%.6f,%.6f",
-        text, block->min_width, (int)block->align,
-        block->color[0], block->color[1], block->color[2], block->color[3]);
+    len += (size_t)snprintf(
+        key + len, cap - len, HIKARI_BAR_KEY_FORMAT, HIKARI_BAR_KEY_ARGS);
+
+#undef HIKARI_BAR_KEY_FORMAT
+#undef HIKARI_BAR_KEY_ARGS
   }
 
   return key;
@@ -336,6 +679,106 @@ refresh_all_bars(void)
   wl_list_for_each (output, &hikari_server.outputs, server_outputs) {
     hikari_bar_refresh(&output->bar);
   }
+}
+
+static int
+scroll_timer_handler(void *data);
+
+/* [COMMENT] Function purpose: Arm the scroll timer if any block is currently
+over the cap, and disarm it if none is.
+
+Called after every parse, so the timer's existence tracks whether there is
+anything to animate. THIS IS THE POINT: a step repaints the whole bar, so a
+permanently-armed timer would have the compositor re-rendering several times a
+second for the entire session. With nothing playing, or with a title that fits,
+there is no timer and no wakeups at all. */
+static void
+update_scroll_timer(struct hikari_topbar_source *source)
+{
+  int cap = hikari_configuration->bar_config.max_block_chars;
+
+  bool wanted = false;
+  for (int i = 0; i < source->nr_blocks; i++) {
+    if (block_scroll_period(&source->blocks[i], cap) > 0) {
+      wanted = true;
+      break;
+    }
+  }
+
+  if (!wanted) {
+    if (source->scroll_armed && source->scroll_timer != NULL) {
+      /* [COMMENT] Action purpose: Disarm by updating to 0, which cancels a
+      wl_event_source_timer without destroying it -- the source is reusable, so
+      it is created once and kept for the process lifetime rather than churned
+      every time a track ends. */
+      wl_event_source_timer_update(source->scroll_timer, 0);
+      source->scroll_armed = false;
+    }
+    return;
+  }
+
+  if (source->scroll_timer == NULL) {
+    source->scroll_timer = wl_event_loop_add_timer(
+        hikari_server.event_loop, scroll_timer_handler, source);
+
+    if (source->scroll_timer == NULL) {
+      /* [COMMENT] Action purpose: Degrade rather than fail. Without a timer the
+      banner does not move, but the text is still capped and still clipped, so
+      the bar remains correct -- just static. */
+      wlr_log(WLR_ERROR,
+          "could not create the top bar scroll timer; long blocks will be "
+          "truncated but will not scroll");
+      return;
+    }
+  }
+
+  if (!source->scroll_armed) {
+    wl_event_source_timer_update(
+        source->scroll_timer, hikari_configuration->bar_config.scroll_interval);
+    source->scroll_armed = true;
+  }
+}
+
+/* [COMMENT] Function purpose: Advance every over-long block by one codepoint and
+repaint.
+
+wl_event_loop timers are one-shot, so the re-arm at the end is what keeps the
+banner moving; dropping it would scroll exactly one step. Re-reads the interval
+from configuration each time so a config reload takes effect on the next step
+rather than needing a restart. */
+static int
+scroll_timer_handler(void *data)
+{
+  struct hikari_topbar_source *source = data;
+
+  int cap = hikari_configuration->bar_config.max_block_chars;
+  bool moved = false;
+
+  for (int i = 0; i < source->nr_blocks; i++) {
+    struct hikari_bar_block *block = &source->blocks[i];
+    int period = block_scroll_period(block, cap);
+
+    if (period <= 0) {
+      /* [COMMENT] Action purpose: Reset rather than leave stale. A block that
+      has stopped overflowing must not keep a non-zero offset, or it would
+      resume mid-word if it ever grows again. */
+      block->scroll_offset = 0;
+      continue;
+    }
+
+    block->scroll_offset = (block->scroll_offset + 1) % period;
+    moved = true;
+  }
+
+  if (moved) {
+    refresh_all_bars();
+    wl_event_source_timer_update(
+        source->scroll_timer, hikari_configuration->bar_config.scroll_interval);
+  } else {
+    source->scroll_armed = false;
+  }
+
+  return 0;
 }
 
 // [COMMENT] Function purpose: Terminate and reap a just-forked topbar helper
@@ -487,6 +930,12 @@ topbar_readable(int fd, uint32_t mask, void *data)
 
   if (last != NULL) {
     parse_line(source, last);
+
+    /* [COMMENT] Action purpose: Re-evaluate whether anything still needs to
+    scroll before repainting -- a track that just ended should stop the timer on
+    the same tick its text disappears, not on the next one. */
+    update_scroll_timer(source);
+
     refresh_all_bars();
 
     /* [COMMENT] Action purpose: Retain the trailing partial line so the next
@@ -592,6 +1041,15 @@ hikari_topbar_source_init(struct hikari_topbar_source *source)
 void
 hikari_topbar_source_fini(struct hikari_topbar_source *source)
 {
+  /* [COMMENT] Action purpose: Drop the scroll timer before the event loop it is
+  registered with is destroyed, on the same terms as the pipe's event source
+  below. */
+  if (source->scroll_timer != NULL) {
+    wl_event_source_remove(source->scroll_timer);
+    source->scroll_timer = NULL;
+  }
+  source->scroll_armed = false;
+
   if (source->event_source != NULL) {
     wl_event_source_remove(source->event_source);
     source->event_source = NULL;
@@ -815,6 +1273,36 @@ hikari_bar_refresh(struct hikari_bar *bar)
   from the left edge. The centre run is anchored to the true midpoint of the
   output, which is what makes it stay centred regardless of how wide the left
   run happens to be -- the previous fixed-width spacer could not do that. */
+  int cap = hikari_configuration->bar_config.max_block_chars;
+
+  /* [COMMENT] Action purpose: Resolve every block's DISPLAYED text once, up
+  front, and lay out from that rather than from full_text. The measure pass, the
+  origins and the draw must all agree on the same string, or the centre run is
+  measured at one width and painted at another.
+
+  Held as (pointer, byte length) rather than as copies. A block that fits points
+  straight at full_text with the length of its VALID UTF-8 prefix -- no copy, and
+  no upper bound needed on how long the helper's text may be, which matters
+  because max-block-chars = 0 disables capping entirely. Only a block that is
+  actually scrolling needs a buffer, and that is bounded by the cap. */
+  const char *display[HIKARI_BAR_MAX_BLOCKS];
+  int display_len[HIKARI_BAR_MAX_BLOCKS];
+  char scroll_buf[HIKARI_BAR_MAX_BLOCKS][HIKARI_BAR_SCROLL_BYTES];
+
+  for (int i = 0; i < source->nr_blocks; i++) {
+    struct hikari_bar_block *block = &source->blocks[i];
+    const char *text = block->full_text != NULL ? block->full_text : "";
+
+    if (block_scroll_period(block, cap) == 0) {
+      display[i] = text;
+      display_len[i] = (int)utf8_valid_prefix_len(text);
+    } else {
+      display[i] = block_display_text(
+          block, cap, scroll_buf[i], HIKARI_BAR_SCROLL_BYTES);
+      display_len[i] = (int)strlen(display[i]);
+    }
+  }
+
   int center_width = 0;
   int right_width = 0;
   for (int i = 0; i < source->nr_blocks; i++) {
@@ -824,7 +1312,7 @@ hikari_bar_refresh(struct hikari_bar *bar)
       continue;
     }
 
-    pango_layout_set_text(layout, block->full_text, -1);
+    pango_layout_set_text(layout, display[i], display_len[i]);
     int w, h;
     pango_layout_get_pixel_size(layout, &w, &h);
     int advance = w > block->min_width ? w : block->min_width;
@@ -840,10 +1328,38 @@ hikari_bar_refresh(struct hikari_bar *bar)
   int center_x = (width - center_width) / 2;
   int right_x = width - HIKARI_BAR_PADDING - right_width;
 
+  /* [COMMENT] Action purpose: Clamp both computed origins to the left padding.
+  A centre or right run wider than the output produced a NEGATIVE origin, which
+  drew that run off the left edge and straight across the left run. The
+  character cap makes this unlikely, but the guarantee below must not depend on
+  the cap being configured -- max-block-chars = 0 disables it. */
+  if (center_x < HIKARI_BAR_PADDING) {
+    center_x = HIKARI_BAR_PADDING;
+  }
+  if (right_x < HIKARI_BAR_PADDING) {
+    right_x = HIKARI_BAR_PADDING;
+  }
+
+  /* [COMMENT] Action purpose: The right edge each run may not paint past.
+
+  This is what actually stops the media block writing across the clock, and it
+  is deliberately structural rather than a length policy: no helper output, however
+  long or however hostile, can now paint outside its own run. The left run stops
+  where the centre run begins -- or where the right run begins when there is no
+  centre content -- and the centre run stops where the right run begins.
+
+  The previous guard tested `x > width`, i.e. whether a block's ORIGIN had left
+  the output. A block starting inside and running 900px wide passed it and drew
+  the whole way across, which is exactly what was happening. */
+  int center_limit = right_x - HIKARI_BAR_PADDING;
+  int left_limit = center_width > 0 ? center_x - HIKARI_BAR_PADDING
+                                    : right_x - HIKARI_BAR_PADDING;
+  int right_limit = width - HIKARI_BAR_PADDING;
+
   for (int i = 0; i < source->nr_blocks; i++) {
     struct hikari_bar_block *block = &source->blocks[i];
 
-    pango_layout_set_text(layout, block->full_text, -1);
+    pango_layout_set_text(layout, display[i], display_len[i]);
     int w, h;
     pango_layout_get_pixel_size(layout, &w, &h);
 
@@ -861,32 +1377,51 @@ hikari_bar_refresh(struct hikari_bar *bar)
     within a run keep their emission order left-to-right regardless of which
     run they belong to. */
     int x;
+    int limit;
     switch (block->align) {
       case HIKARI_BAR_ALIGN_CENTER:
         x = center_x;
+        limit = center_limit;
         center_x += advance;
         break;
 
       case HIKARI_BAR_ALIGN_RIGHT:
         x = right_x;
+        limit = right_limit;
         right_x += advance;
         break;
 
       case HIKARI_BAR_ALIGN_LEFT:
       default:
         x = left_x;
+        limit = left_limit;
         left_x += advance;
         break;
     }
 
-    /* [COMMENT] Action purpose: Skip a block whose run starts outside the
-    output width, without stopping the loop. Left- and right-aligned blocks
-    are laid out from independent origins in the same pass, so one
-    overflowing left-aligned block (e.g. behind a wide spacer) must not
-    suppress the right-aligned blocks that still fit. */
-    if (x > width) {
+    /* [COMMENT] Action purpose: Skip a block with no room left in its run,
+    without stopping the loop. The three runs are laid out from independent
+    origins in the same pass, so one overflowing block must not suppress the
+    blocks of another run that still fit. */
+    int room = limit - x;
+    if (room <= 0) {
       continue;
     }
+
+    /* [COMMENT] Action purpose: Hard-clip each block to the room its run has
+    left. This is the structural half of the containment guarantee -- the
+    character cap is a presentation policy on top of it, and can be switched off
+    (max-block-chars = 0) without reopening the hole.
+
+    cairo_clip() is used rather than pango_layout_set_width() plus
+    PANGO_ELLIPSIZE_END: set_width without ellipsize WRAPS instead of
+    truncating, and the exact interaction of width, ellipsize and height on a
+    single-line layout varies enough between Pango versions that it is not the
+    right tool for something that has to hold unconditionally. A clip either
+    holds or it does not, and it holds. */
+    cairo_save(cairo);
+    cairo_rectangle(cairo, (double)x, 0.0, (double)room, (double)height);
+    cairo_clip(cairo);
 
     /* [COMMENT] Action purpose: Centre the text vertically. The division is
     done in floating point because cairo_move_to takes doubles -- integer
@@ -895,6 +1430,8 @@ hikari_bar_refresh(struct hikari_bar *bar)
     cairo_move_to(cairo, (double)x, (double)(height - h) / 2.0);
     pango_cairo_update_layout(cairo, layout);
     pango_cairo_show_layout(cairo, layout);
+
+    cairo_restore(cairo);
   }
 
   cairo_surface_flush(surface);

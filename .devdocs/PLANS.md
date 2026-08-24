@@ -1,10 +1,10 @@
 # Forward Strategy & Plans
 
-*Last Updated:* 2026-08-24 09:11
+*Last Updated:* 2026-08-24 11:35
 
 ## Implementations to be Fully Implemented
 
--16. **PHASE 90 -- CLIENT-DRIVEN FULLSCREEN + TOP-BAR MEDIA OVERFLOW. Planned 2026-08-24 09:11. APPROVED FOR EXECUTION; cycle 1 not yet started.**
+-16. **PHASE 90 -- CLIENT-DRIVEN FULLSCREEN + TOP-BAR MEDIA OVERFLOW. Planned 2026-08-24 09:11. CYCLE 1 EXECUTED 10:09; W-A/W-B EXECUTED 11:35. Remaining: cycle 2 (W-4 XWayland + W-5 foreign-toplevel) and W-3.5, both unstarted.**
 
    Two user-reported issues. Full analysis in `DECISIONS_LOG.md` Phase 90; task list in `TODOS.md` Phase 90.
 
