@@ -14,6 +14,7 @@
 #include <wlr/util/box.h>
 
 #include <hikari/border.h>
+#include <hikari/foreign_toplevel.h>
 #include <hikari/group.h>
 #include <hikari/indicator_frame.h>
 #include <hikari/maximized_state.h>
@@ -62,12 +63,26 @@ struct hikari_view {
   taskbar. NULL whenever the view is not mapped. `id` doubles as the app_id
   published through it. */
   struct wlr_ext_foreign_toplevel_handle_v1 *foreign_toplevel;
+
+  /* [COMMENT] Class purpose: This view's zwlr_foreign_toplevel_management_v1
+  handle and the listeners for the requests that arrive through it -- the half
+  that lets an external window switcher FOCUS, close or minimise this window
+  rather than merely list it. Same lifetime as the handle above: created on map,
+  destroyed on unmap. See src/foreign_toplevel.c. */
+  struct hikari_foreign_toplevel foreign_toplevel_management;
   struct hikari_border border;
   struct hikari_indicator_frame indicator_frame;
   struct hikari_tile *tile;
 
   struct wlr_box geometry;
   struct hikari_maximized_state *maximized_state;
+
+  /* [COMMENT] Class purpose: The whole-output box a fullscreen view occupies,
+  valid only while the fullscreen flag is set. Held by value rather than behind
+  a pointer like maximized_state: there is exactly one per view, it is cheap,
+  and it has no lifetime to get wrong on any of the teardown paths BLUEPRINT
+  section 15 enumerates. */
+  struct wlr_box fullscreen_geometry;
 
   struct wl_list output_views;
   struct wl_list workspace_views;
@@ -166,6 +181,19 @@ FLAG(invisible, 1UL)
 FLAG(floating, 2UL)
 FLAG(public, 3UL)
 FLAG(forced, 4UL)
+
+/* [COMMENT] Action purpose: Genuine fullscreen, set only from a client's own
+protocol request. A flag rather than a fourth `enum hikari_maximization` member
+on purpose: that enum is switched on exhaustively in eight places, so a new
+member would force every one of them to change, whereas a flag touches only the
+paths that opt in. `flags` is uint16_t and bits 0-4 were the only ones in use.
+
+The flag SHADOWS the maximization state rather than replacing it --
+refresh_geometry() tests it above maximized_state, and maximized_state is left
+untouched while fullscreen. That is what makes leaving fullscreen restore a
+maximized, tiled or floating window with no bookkeeping: the shadow lifts and
+whatever was underneath is still there. See BLUEPRINT section 17. */
+FLAG(fullscreen, 5UL)
 #undef FLAG
 
 void
@@ -196,6 +224,28 @@ VIEW_ACTION(toggle_invisible)
 VIEW_ACTION(toggle_public)
 VIEW_ACTION(reset_geometry)
 #undef VIEW_ACTION
+
+/* [COMMENT] Function purpose: THE entry point for genuine fullscreen. Every
+protocol path -- xdg-shell request_fullscreen, XWayland request_fullscreen, and
+zwlr_foreign_toplevel_management set_fullscreen -- goes through this and nothing
+else.
+
+Takes a desired STATE rather than toggling, because that is what a client sends.
+Guarding a toggle by first comparing against the current state is precisely how
+the xdg-shell path came to compare against the *maximization* state as a proxy
+and silently no-op on every maximized window.
+
+Named `request_` and not `set_`: FLAG(fullscreen, ...) above already generates
+`hikari_view_set_fullscreen(view)` as the raw bit setter, and the two must not
+be confused. This one performs the whole transition -- geometry, borders, the
+top bar -- while that one flips a bit. The name also says the honest thing: this
+answers a request, and may decline it (unmapped, hidden, or mid-resize).
+
+Not a VIEW_ACTION: those are void(view) so they can be bound to keys, and this
+deliberately cannot be. hikari binds no key to fullscreen -- applications
+already own F11. */
+void
+hikari_view_request_fullscreen(struct hikari_view *view, bool fullscreen);
 
 void
 hikari_view_map(struct hikari_view *view, struct wlr_surface *surface);

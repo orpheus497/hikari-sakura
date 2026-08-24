@@ -37,6 +37,17 @@ struct hikari_bar_block {
   bool has_color;
   int min_width;
   enum hikari_bar_align align;
+
+  /* [COMMENT] Class purpose: How far this block's banner has scrolled, in
+  CODEPOINTS from the start of `full_text`. Only meaningful when the block is
+  longer than the configured cap; otherwise pinned at 0.
+
+  Carried across parses rather than reset with the block set: the helper re-emits
+  every block several times a second, so clearing this on each line would restart
+  the scroll before a single step was visible. parse_line() copies it forward
+  when the block at the same index still holds the same text, and drops it the
+  moment the text changes -- a new track starts reading from its beginning. */
+  int scroll_offset;
 };
 
 #define HIKARI_BAR_MAX_BLOCKS 32
@@ -50,6 +61,20 @@ struct hikari_bar {
   struct wlr_scene_buffer *scene_buffer;
   int height;
   bool enabled;
+
+  /* [COMMENT] Class purpose: Set while a genuinely fullscreen view is visible
+  on this output, which is the one case where the bar gets out of a window's
+  way.
+
+  DELIBERATELY SEPARATE FROM `enabled`, and the two must never be merged.
+  `enabled` is what hikari_bar_reserve() tests, so it decides whether the bar's
+  rows are subtracted from output->usable_area -- and usable_area is what the
+  tiling engine lays every window out against. Clearing `enabled` to hide the
+  bar would therefore hand those rows back to the layout and reflow every tiled
+  window on the output the instant a video went fullscreen, then reflow them
+  again on the way out. This field suppresses the scene node and nothing else:
+  the reservation stands, the layout never moves, and only the pixels go away. */
+  bool obscured;
 
   /* [COMMENT] Class purpose: Identity of the last repaint -- a serialised
   snapshot of the rendered block set plus the geometry it was rendered at.
@@ -80,6 +105,18 @@ struct hikari_topbar_source {
 
   struct hikari_bar_block blocks[HIKARI_BAR_MAX_BLOCKS];
   int nr_blocks;
+
+  /* [COMMENT] Class purpose: Drives the banner scroll, and is ARMED ONLY WHILE
+  SOME BLOCK IS OVER THE CAP. That condition is the point: every step repaints
+  the whole bar, so a permanently-running timer would have the compositor
+  re-rendering several times a second forever. With nothing playing there is no
+  timer and no wakeups at all.
+
+  Deliberately not driven off the helper's own 200ms tick, which would couple
+  scrolling to telemetry arriving and would freeze mid-title if the helper
+  wedged. NULL when disarmed. */
+  struct wl_event_source *scroll_timer;
+  bool scroll_armed;
 };
 
 // Function purpose: Spawn the hikari-topbar helper and register its
@@ -112,5 +149,20 @@ hikari_bar_refresh(struct hikari_bar *bar);
 // arrangement pass so both agree on the space the bar occupies.
 void
 hikari_bar_reserve(struct hikari_bar *bar, struct wlr_box *usable_area);
+
+/* [COMMENT] Function purpose: Recompute whether this output's bar should be on
+screen, from whether a fullscreen view is currently visible on it, and apply the
+result to the scene node.
+
+Takes the output rather than the bar because the answer is a property of the
+output's visible view set, not of the bar. Deliberately derived by walking that
+set on each call instead of being maintained as a counter: a counter has to be
+decremented on every path a view can stop being visible or stop being fullscreen
+-- which is the same nine-way audit that makes the flag itself delicate -- and a
+single missed decrement leaves the bar hidden for the rest of the session with
+no way for the user to get it back. Walking is O(visible views on one output),
+which is a handful, and it cannot drift. */
+void
+hikari_bar_update_visibility(struct hikari_output *output);
 
 #endif

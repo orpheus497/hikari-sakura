@@ -1729,6 +1729,76 @@ done:
   return success;
 }
 
+/* [COMMENT] Function purpose: Parse the `ui { bar { ... } }` block -- how long a
+top bar block may be before it is capped and scrolled, and how fast. */
+static bool
+parse_bar(struct hikari_bar_config *bar_config, const ucl_object_t *bar_obj)
+{
+  bool success = false;
+  ucl_object_iter_t it = ucl_object_iterate_new(bar_obj);
+
+  const ucl_object_t *cur;
+  while ((cur = ucl_object_iterate_safe(it, false)) != NULL) {
+    const char *key = ucl_object_key(cur);
+
+    if (!strcmp(key, "max-block-chars")) {
+      int64_t chars;
+
+      /* [COMMENT] Action purpose: 256 is HIKARI_BAR_MAX_CAP_CHARS in
+      src/bar.c, which sizes the per-block scroll buffer. The two must not
+      drift. 0 disables capping and scrolling entirely. */
+      if (!ucl_object_toint_safe(cur, &chars) || chars < 0 || chars > 256) {
+        fprintf(stderr,
+            "configuration error: expected integer 0-256 for "
+            "\"max-block-chars\"\n");
+        goto done;
+      }
+
+      bar_config->max_block_chars = (int)chars;
+    } else if (!strcmp(key, "scroll-interval")) {
+      int64_t interval;
+
+      /* [COMMENT] Action purpose: Floor at 50ms. The timer repaints the whole
+      bar on every step, so an unbounded value here is a way to make the
+      compositor busy-render itself; below this the motion is not readable
+      anyway. */
+      if (!ucl_object_toint_safe(cur, &interval) || interval < 50 ||
+          interval > 10000) {
+        fprintf(stderr,
+            "configuration error: expected integer 50-10000 for "
+            "\"scroll-interval\"\n");
+        goto done;
+      }
+
+      bar_config->scroll_interval = (int)interval;
+    } else if (!strcmp(key, "scroll-separator")) {
+      const char *separator;
+
+      if (!ucl_object_tostring_safe(cur, &separator)) {
+        fprintf(stderr,
+            "configuration error: expected string for \"scroll-separator\"\n");
+        goto done;
+      }
+
+      hikari_free(bar_config->scroll_separator);
+      bar_config->scroll_separator = hikari_malloc(strlen(separator) + 1);
+      strcpy(bar_config->scroll_separator, separator);
+    } else {
+      fprintf(stderr,
+          "configuration error: unknown \"bar\" key \"%s\"\n",
+          key);
+      goto done;
+    }
+  }
+
+  success = true;
+
+done:
+  ucl_object_iterate_free(it);
+
+  return success;
+}
+
 /* [COMMENT] Function purpose: Parse `ui { lock { ... } }` -- the clock, the
 blur, and how long the screen stays lit while locked. */
 static bool
@@ -1863,6 +1933,10 @@ parse_ui(struct hikari_configuration *configuration, const ucl_object_t *ui_obj)
       }
     } else if (!strcmp(key, "lock")) {
       if (!parse_lock(&configuration->lock, cur)) {
+        goto done;
+      }
+    } else if (!strcmp(key, "bar")) {
+      if (!parse_bar(&configuration->bar_config, cur)) {
         goto done;
       }
     }
@@ -2122,6 +2196,7 @@ hikari_configuration_init(struct hikari_configuration *configuration)
   hikari_font_init(&configuration->font, "monospace 10");
 
   hikari_lock_config_init(&configuration->lock);
+  hikari_bar_config_init(&configuration->bar_config);
 
   configuration->border = 1;
   configuration->gap = 5;
@@ -2136,6 +2211,7 @@ void
 hikari_configuration_fini(struct hikari_configuration *configuration)
 {
   hikari_lock_config_fini(&configuration->lock);
+  hikari_bar_config_fini(&configuration->bar_config);
 
   struct hikari_view_config *view_config, *view_config_temp;
   wl_list_for_each_safe (

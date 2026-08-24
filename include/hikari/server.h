@@ -38,6 +38,11 @@
 
 struct wlr_input_device;
 
+/* [COMMENT] Class purpose: Forward-declared rather than included, so only
+foreign_toplevel.c pulls in the zwlr-foreign-toplevel-management header. A
+pointer to an incomplete type is all hikari_server needs to hold. */
+struct wlr_foreign_toplevel_manager_v1;
+
 struct hikari_output;
 struct hikari_group;
 
@@ -146,6 +151,15 @@ struct hikari_server {
   see hikari_view_map()/unmap(). */
   struct wlr_ext_foreign_toplevel_list_v1 *foreign_toplevel_list;
 
+  /* [COMMENT] Class purpose: zwlr_foreign_toplevel_management_v1 -- the acting
+  half of window listing. Where foreign_toplevel_list above only lets a client
+  ENUMERATE windows, this lets it focus, close, minimise and maximise one, which
+  is what an external window switcher or task manager needs. NULL when the
+  protocol is compiled out or its global could not be created; either way the
+  session runs, it simply cannot be driven from outside. See
+  src/foreign_toplevel.c. */
+  struct wlr_foreign_toplevel_manager_v1 *foreign_toplevel_manager;
+
   struct wlr_xdg_activation_v1 *xdg_activation;
   struct wl_listener request_activate;
 
@@ -172,6 +186,15 @@ struct hikari_server {
   struct wl_list visible_views;
 
   struct wl_list toplevels;
+
+  /* Control socket. hikari's sheet model has no Wayland protocol that can
+   * express it, so external panels read and drive sheets through this. See
+   * include/hikari/ipc.h. */
+  int ipc_fd;
+  struct wl_event_source *ipc_source;
+  struct wl_list ipc_clients;
+  int ipc_nr_clients;
+  char *ipc_path;
 
   struct hikari_mode *mode;
 

@@ -706,6 +706,17 @@ reset_visibility(void)
             view->scene_node, !hikari_view_is_hidden(view));
       }
     }
+
+    /* [COMMENT] Action purpose: Re-derive the top bar for this output now that
+    its views are back.
+
+    This call is NOT redundant with the ones in hikari_view_show()/hide(). The
+    loop above writes hikari_view_set_hidden()/unset_hidden() DIRECTLY, which is
+    the whole point of it -- restoring the pre-lock flags without going through
+    the show/hide transitions -- so nothing else recomputes the bar on this
+    path. Windows can map and unmap while the screen is locked (Phase 70 F2), so
+    the answer genuinely can have changed since the lock. */
+    hikari_bar_update_visibility(output);
   }
 }
 

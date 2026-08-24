@@ -1,8 +1,168 @@
 # Granular Task List
 
-*Last Updated:* 2026-08-22 16:23
+*Last Updated:* 2026-08-24 11:52
 
 ## Active List
+
+### Phase 90: Client-driven fullscreen + top-bar media overflow — CYCLE 1 + W-A/W-B IMPLEMENTED, UNBUILT
+
+*(Analysis: `DECISIONS_LOG.md` Phase 90. Plan: `PLANS.md` item -16.)*
+
+**Scope ruling from the user:** no new keybinding — `L+f` stays maximize. Fullscreen is a **client protocol request** (F11, a video player's own button) and is answered where the client asks for it. Bar coverage **(a) now**; layer-shell coverage **(b) tracked as FS-2, not built**.
+
+#### Cycle 1 — W-1 + W-2 + W-3 (native Wayland; `src/view.c` heavy, ships alone)
+
+- [x] **W-1.1** `FLAG(fullscreen, 5UL)` (`view.h:176`); `struct wlr_box fullscreen_geometry` by value; `HIKARI_OPERATION_TYPE_FULLSCREEN` (`operation.h`).
+- [x] **W-1.2** Fullscreen branch atop `refresh_geometry()` (`view.c:792`), **above** the `maximized_state` test. This is the line that makes exit-from-fullscreen restore correctly with no bookkeeping.
+- [x] **W-1.3** `queue_fullscreen()` — `{0, 0, output->geometry.width, output->geometry.height}`, **`op->center = false`** (Finding 7).
+- [x] **W-1.4** `commit_fullscreen()` — sets flag, stores box, `HIKARI_BORDER_NONE` unconditionally, **leaves `maximized_state` untouched**.
+- [x] **W-1.5** `queue_unfullscreen()` — clears flag, re-queues maximized / tiled / floating as found.
+- [x] **W-1.6** `hikari_view_set_fullscreen()` — the single D8 entry point; **defers** on `is_dirty` rather than dropping (Finding 5).
+- [x] **W-1.7** Two switch cases. `xdg_view.c:82-97` gets **`WLR_EDGE_NONE`** for fullscreen — grouped with RESET/UNMAXIMIZE, **not** with the maximize cases.
+- [x] **W-1.8** **Flag-clearing audit, 9 sites** — `commit_reset` `:810`, `commit_unmaximize` `:1528`, `commit_tile` `:1438`, `toggle_vertical_maximize` `:1709`, `toggle_horizontal_maximize` `:1734`, `toggle_floating` `:1751`, `hikari_view_unmap` `:1211`, `hikari_view_fini` `:440`, `hikari_view_evacuate` `:1610`. **A stranded flag leaves the bar hidden forever.**
+- [x] **W-1.9** New `is_fullscreen` early-returns in `move_view()` `:194` and `queue_resize()` `:851` — the existing `FULLY_MAXIMIZED` guards do not fire for a **floating** window that went fullscreen.
+- [x] **W-2.1** `bool obscured` on `struct hikari_bar`. **`hikari_bar_reserve()` (`bar.c:650`) must not read it** — else `usable_area` changes and every tiled window reflows (D5).
+- [x] **W-2.2** Move `hikari_bar_refresh()`'s cache-hit early-return **below** the obscured check, or a cached frame skips the visibility change.
+- [x] **W-2.3** `hikari_bar_update_visibility()` over `output->workspace->views` (the *visible* list — a fullscreen window on another sheet must not hide the bar).
+- [x] **W-2.4** **Five call sites** — `show` `:1299`, `hide` `:1334`, `unmap` `:1211`, `commit_pending_operation` `:2236`, **and `reset_visibility()` in `lock_mode.c`**, which writes `set_hidden`/`unset_hidden` **directly, bypassing show/hide**, so the other four miss it.
+- [x] **W-3.1** Rewrite `apply_requested_fullscreen()` (`xdg_view.c:656`) — delete the `!= hikari_view_is_fully_maximized(view)` guard. **This is Finding 1, the operative defect.**
+- [x] **W-3.2** Same substitution at the map-time reconciliation (`xdg_view.c:252-255`).
+- [x] **W-3.3** Deferred re-apply drained in the existing `commit_handler` (Finding 5).
+- [x] **W-3.4** **Add the missing `request_maximize` listener (Finding 4 — a protocol violation** per `wlr_xdg_shell.h:212-219`). Registered at new_toplevel time; removed in `toplevel_destroy_handler` or wlroots asserts on teardown. **Makes a client's own maximize button work for the first time.**
+- [ ] **W-3.5 — DEFERRED to its own cycle, not done.** `requested.fullscreen_output` is left unhonoured; a client naming another output gets fullscreen on its current one. The only API for moving a view between outputs, `hikari_view_migrate()`, is a full visibility transition (unlink → re-constrain both geometries → migrate sheet → show), and driving that from inside a protocol handler on the same path being fixed would bundle two risky changes into one build cycle. Sequencing rule, Phases 75/78. Recorded at the call site in `xdg_view.c` as well as here.
+
+#### Cycle 2 — W-4 + W-5 (XWayland + foreign-toplevel)
+
+- [ ] **W-4.1** **`request_fullscreen` listener — Finding 2.** hikari registers 10 listeners and this is not one of them, so **mpv, VLC, Steam and X11 browsers cannot go fullscreen at all**. Removal added to the 9-link block at `xwayland_view.c:277-286`.
+- [ ] **W-4.2** `request_configure_handler` (`:333-366`) must not clamp a fullscreen view to `usable_area` — Finding 3, independent of W-4.1.
+- [ ] **W-4.3** Map-time reconciliation from `surface->fullscreen` (`xwayland.h:182`).
+- [ ] **W-4.4** D7 guard in both commit handlers' else-branches — they write surface dimensions back through `hikari_view_geometry()`, which under D3 is `&view->fullscreen_geometry`.
+- [ ] **W-4.5** All 10 → 11 listeners re-verified for exactly-once removal (Phase 57/78 precedent).
+- [x] **W-5 DONE 2026-08-24 11:42** (pulled forward from cycle 2 by an external review finding, verified valid against current code). `request_fullscreen_handler` now routes to a new thin `set_fullscreen()` → `hikari_view_request_fullscreen()`; `request_maximize_handler` → `set_full_maximize()`, **unchanged**. `publish_state` reports maximized from `hikari_view_is_fully_maximized()` and fullscreen from `hikari_view_is_fullscreen()`, independently. Both now-false comments replaced. **Note the two are not mutually exclusive** — fullscreen shadows maximization, so a maximized window that a client fullscreens correctly reports both, and reports only maximized once released. 0 warnings in all three configurations. **Still unbuilt/unverified on hardware.**
+
+#### W-A / W-B — top-bar media overflow (independent subsystem, any order)
+
+- [x] **W-A.1** Per-run right limits; clamp `center_x`/`right_x` to `>= PADDING` — **both can currently go negative** and draw off the left edge.
+- [x] **W-A.2** `cairo_save`/`cairo_rectangle`/`cairo_clip`/`cairo_restore` per block. Chosen over `pango_layout_set_width` + ellipsize, whose wrap/ellipsize interaction is too version-dependent to be the tool for a *guarantee*.
+- [x] **W-A.3** Local `utf8_valid_prefix_len()` before `pango_layout_set_text()`. **This is a live latent bug today** — `json_string_field()` copies bytes with no validation and both upstream truncations cut on byte boundaries.
+- [x] **W-A.4** Correct two false comments: `bar.c:32-34` (inter-run padding that does not exist) and `bar.c:41-44` (`HIKARI_BAR_MAX_BLOCK_WIDTH` bounds only `min_width`, never rendered text).
+- [x] **W-B.1** `int scroll_offset` on `struct hikari_bar_block`; `parse_line()` (`:233`) carries it forward on identical text, resets on change.
+- [x] **W-B.2** Render `max_chars` **codepoints** from `full_text + separator` modulo the combined length, so the banner wraps continuously rather than snapping back.
+- [x] **W-B.3** `scroll_offset` into **both** the sizing and writing `snprintf` calls in `build_cache_key()` (`:291`) — they are duplicated and must stay in sync.
+- [x] **W-B.4** `wl_event_source *scroll_timer`, armed **only while a block overflows** (zero wakeups on an idle desktop), torn down in `hikari_topbar_source_fini()`.
+- [x] **W-B.5** `ui { bar { max-block-chars = 26; scroll-interval = 300; scroll-separator = "   *   "; } }` following the `hikari_lock_config` pattern; `0` disables. **Must be compositor-side** — the helper is `execl`'d once with no argv/env and has no reload path, so a knob in `topbar.c` could never be reloaded.
+
+#### TEST (USER-RUN) — cycle 1
+
+- [ ] **1. Video fullscreen from a MAXIMIZED browser** — the reported bug (Path B). Covers whole screen, bar gone.
+- [ ] **2. Exit that fullscreen (Path B')** — **returns to maximized**, not un-maximized.
+- [ ] **3.** Video fullscreen from a floating window (Path A). **4.** Exit restores size and position.
+- [ ] **5.** F11 in a browser — same as 1–4.
+- [ ] **6.** `L+f` on an ordinary window — **unchanged**, maximizes below the bar, bar visible.
+- [ ] **7.** `L+x` / `L+y` while fullscreen — drops fullscreen cleanly, bar returns. *(Targets the stranded-flag risk directly.)*
+- [ ] **8.** Client's own CSD maximize button — **now works**; it never has.
+- [ ] **9.** Fullscreen, switch sheet — bar returns on the other sheet. **10.** Lock and unlock — bar state correct. **11.** Close the window — bar returns.
+- [ ] **12.** Fullscreen on the second monitor — bar hidden on **that output only**.
+- [ ] **13.** Tile several windows, fullscreen one, exit — **no tiled window moves at all** (the D5 trap).
+
+#### TEST (USER-RUN) — cycle 2
+
+- [ ] **14.** `mpv` fullscreen (`f`) — covers whole screen. Currently impossible.
+- [ ] **15.** VLC / Steam Big Picture. **16.** Exit restores previous geometry.
+- [ ] **17.** X11 window that self-reconfigures while fullscreen — stays fullscreen (W-4.2).
+- [ ] **18.** waybar taskbar: maximize vs fullscreen buttons are now **distinct operations** (W-5).
+
+#### Found during execution (2026-08-24 10:09) — see DECISIONS_LOG Phase 90 cycle 1
+
+- [x] **Name collision caught by the IDE on the first edit.** `FLAG(fullscreen, 5UL)` generates `hikari_view_set_fullscreen(view)`, colliding with the planned public setter of the same name. Renamed to **`hikari_view_request_fullscreen(view, bool)`** — the better name anyway: it answers a request and may decline it.
+- [x] **Use-after-free in my own first draft of `queue_unfullscreen()`.** Restoring a *tiled* view as `queue_tile(view, view->tile->layout, view->tile, false)` reads correctly and is wrong: `commit_tile()` frees the current tile then assigns `operation->tile`, so passing the same pointer frees it and stores the dangling value. `queue_reset()` is not a substitute either — it frees the tile outright, dropping the window from its layout. Replaced with a plain RESIZE to `tile->view_geometry`, which touches no ownership. **Phase 55 class; caught by reading `commit_tile()`, not by the compiler.**
+- [x] **Uninitialised state, twice.** `hikari_xdg_view` comes from `hikari_malloc` (non-zeroing) and `drain_pending_state()` runs on the first commit, so the four `pending_*` booleans are now cleared in `hikari_xdg_view_init()`; `fullscreen_geometry` zeroed in `hikari_view_init()`. **`view->flags` was checked and is already zeroed** — the fullscreen bit could never start set.
+- [ ] **PRE-EXISTING, not fixed, do not lose:** `hikari_view_toggle_horizontal_maximize()` lacks the `if (hikari_view_is_dirty(view)) return;` guard that its vertical twin has, so it can queue over an unacked operation. Unrelated to fullscreen; belongs in its own change.
+
+#### IPC audit (`src/ipc.c`, arrived from a concurrent session 09:03–09:05) — 3 defects fixed
+
+- [x] **CRITICAL — no mode gating at all.** `hikari_view_pin_to_sheet()` asserts `!is_hidden` and calls `hikari_view_hide()`, which asserts `!is_forced`; **lock mode forces every view**, so `pin` on a locked session violates that — and under `-DNDEBUG` it corrupts the visibility linkage rather than aborting (Phase 55 class). **The exact hazard Phase 89 gated with `can_act()`, reproduced.** Fixed with one gate in front of the whole command table so a later command cannot be forgotten. One test closes both the modal-abort hole and *an external process switching sheets on a locked screen*; `state` is gated too, since its view counts leak how many windows are open.
+- [x] **MEDIUM — `close(0)`.** `hikari_server` is a global, so `ipc_fd` is **0** if setup never ran, and `if (ipc_fd >= 0) close(ipc_fd)` would close **stdin**. The client list was guarded against exactly this; the descriptor was not. Now `> 0`.
+- [x] **MEDIUM — `pin` could queue over an in-flight resize.** One `pending_operation` slot per view; every in-tree caller of that class already guards on `is_dirty`, and an IPC request is the one whose timing the compositor does not control.
+- [ ] **Reported, not changed:** `hikari_ipc_setup()` is called from inside `setup_xdg_activation()`. Layering wart, predates this module (`hikari_foreign_toplevel_manager_setup()` is there too). Not this phase's business.
+- [ ] **USER-RUN — IPC cannot be verified beyond compilation from here.** On the next run check the `WLR_INFO` line naming the socket path, then: `printf 'state\n' | nc -U $XDG_RUNTIME_DIR/hikari.sock` returns sheet/output/counts; `sheet 3` switches; `pin 2` moves the focused window; **and all three return `error compositor busy` while the screen is locked.**
+
+#### W-A/W-B execution notes (2026-08-24 11:35) — see DECISIONS_LOG
+
+- [x] **Two more origin bugs found beyond the reported one.** `center_x` and `right_x` could both go **negative** when a run was wider than the output, drawing that run off the left edge and across the left run. Never reachable via the media block, and the character cap would not have covered it. Both clamped.
+- [x] **The display buffer nearly became a stack problem.** A fixed `char[MAX_BLOCKS][...]` is ~131KB of stack per refresh at the original 1024-codepoint config bound, and cannot hold the text at all when capping is disabled. Resolved by carrying **(pointer, byte length)** — a block that fits points straight at `full_text` with its valid-UTF-8 prefix length, no copy; only a scrolling block needs a buffer, bounded by `HIKARI_BAR_MAX_CAP_CHARS` (256).
+- [x] **Second use-after-free avoided.** Carrying `scroll_offset` across parses by snapshotting the old blocks and then calling `clear_blocks()` frees the very strings the comparison reads. Made an ownership **transfer** instead, released at the end of `parse_line()`.
+- [x] **UTF-8 validation is fixing a LIVE defect, not a consequence of the cap.** `fgets` into `mpris[128]` and `json_escape` both truncate on byte boundaries and `json_string_field` copies without inspecting, so accented/CJK titles already reached Pango cut mid-sequence. Local decoder rejects overlong forms, surrogates and >U+10FFFF.
+- [x] **UNIT-TESTED standalone, clean under ASan+UBSan.** The real translation unit is included by the test rather than the algorithm reproduced. Verified: malformed sequences rejected; truncated `é` yields the valid prefix; under-cap blocks untouched; banner wraps through the separator and back; multibyte titles step one codepoint at a time and **never** produce a cut sequence at any offset.
+- [x] **Config parses with real libucl** (`max-block-chars=26 scroll-interval=300 scroll-separator="   •   "`); **man page converts with pandoc**.
+
+#### TEST (USER-RUN) — top bar
+
+- [ ] **Play something with a long title.** It must cap at 26 characters and scroll as a banner, wrapping through `   •   ` back to the start.
+- [ ] **It must never paint under or across the clock, the network/volume/battery icons, or the right-hand run.** This is the reported bug.
+- [ ] **A short title must not scroll** and must render exactly as before.
+- [ ] **Pause/stop media** — the block goes to `Idle`, and the scroll timer must disarm (no ongoing repaints).
+- [ ] **A non-ASCII title** (accents, CJK, emoji) must scroll without ever showing a replacement glyph or a cut character.
+- [ ] **Reload the config** with a different `max-block-chars` — it must take effect without restarting the session, which is the whole reason this lives compositor-side.
+- [ ] **Note:** a deployed `~/.config/hikari/hikari.conf` keeps the built-in defaults until a `ui { bar { ... } }` block is added to it — same caveat as the Phase 60 `bar` colour.
+
+#### External review findings triaged 2026-08-24 11:42 — 2 of 4 valid
+
+- [x] **VALID, FIXED — foreign-toplevel fullscreen used the maximize lifecycle.** This was W-5, already scoped for cycle 2; the finding matched the existing analysis and was verified still current. See W-5 above.
+- [x] **VALID, FIXED — accepted IPC descriptor had no FD_CLOEXEC.** `accept(2)` returns a descriptor with FD_CLOEXEC **clear**; the listener's `SOCK_CLOEXEC` does not propagate to it. It matters because `hikari_command_execute()` (`src/command.c:14-19`) forks twice and execs `/bin/sh` with **no descriptor hygiene at all** — no `closefrom()`, unlike the topbar (`bar.c:990`) and unlocker (`lock_mode.c:156`) helpers — so every keybinding- or autostart-launched application inherited any open control-socket connection. Fixed with one `fcntl(F_SETFD, FD_CLOEXEC)`; `accept4()` was not used since the only argument for it is an accept→fcntl fork race and hikari is single-threaded.
+- [ ] **REJECTED — "default WITH_FOREIGN_TOPLEVEL_MANAGEMENT to NO until a global filter authorizes trusted clients".** The protocol was added in Phase 89 **at the user's explicit request**, for their sofi window switcher; defaulting it off removes that feature and is barred by AGENTS.md section 3. The underlying observation is fair — it is a privileged protocol any client can bind — but the proposed remedy disables a requested feature rather than fixing anything, and hikari has no client-trust model for a filter to consult (the IPC socket grants comparable powers to anything that can reach `$XDG_RUNTIME_DIR`). **A `wl_display_set_global_filter` is a legitimate future workstream, not a minimal fix; recorded here rather than actioned.**
+- [ ] **REJECTED — "use send() with MSG_NOSIGNAL instead of write() in ipc.c write_all()".** The implied hazard is that writing to a peer that has closed raises SIGPIPE and kills the compositor. **`signal(SIGPIPE, SIG_IGN)` is already set unconditionally in `server_init()` (`src/server.c:1528`)**, before the event loop exists, so `write()` returns `-1`/`EPIPE`, `write_all()` returns false, and the caller closes the connection — which is the intended behaviour and is already correct. The change would be behaviourally a no-op while adding a portability constraint.
+
+#### Review finding triaged 2026-08-24 11:52 — 1 of 1 valid
+
+- [x] **VALID, FIXED — `build_cache_key()` omitted the display parameters, so a config reload did not invalidate the repaint cache.** The key carried per-block state (`full_text`, `min_width`, `align`, `scroll_offset`, colour) but not `max_block_chars` or `scroll_separator`, both of which change the pixels for identical telemetry — the first decides whether a block is capped and how wide its window is, the second is spliced into the scroll cycle and changes its period. **`hikari_configuration_reload()` does not repaint bars either** (verified: it refreshes view geometry, pointers, keyboards, outputs and switches, and touches nothing bar-related), so the only repaint path is the 200ms telemetry tick — which this cache gated. The bar therefore kept rendering at the OLD cap until some block's text changed on its own; usually the next CPU-percentage tick, but indefinitely on an idle machine with steady telemetry. **That contradicted the behaviour documented in `hikari.conf` and the man page**, which state these keys take effect on reload rather than needing a restart.
+  Fixed by prefixing the key with both values. `scroll_interval` deliberately **not** included — it changes only how often a step is taken, never what a frame looks like, and both timer paths re-read it live.
+  The two duplicated literal format strings were replaced by a `key_append()` varargs helper in the same change, so the sizing pass and the writing pass can no longer drift — which is the failure the old code's own comment warned about.
+  **Unit-tested under ASan+UBSan:** identical config still yields an identical key (the cache genuinely still works, no spurious repaints); changing either value changes the key; restoring it restores the key; a scroll step still changes the key; a 4 KB separator exercises the realloc growth path without truncation; a NULL separator is tolerated.
+
+#### Known constraints
+
+- [ ] **BUILD BLOCKED — needs `sudo make clean` first.** Carried from Phase 89: `main.o` is root-owned. Unchanged by this phase.
+- [ ] **FS-2 — TRACKED, NOT BUILT.** Fullscreen over layer-shell `TOP`/`OVERLAY` surfaces. No such client runs today, so it fixes nothing observable; **the moment the side panel of `PLANS.md` item -15 lands it covers fullscreen video. Gate FS-2 on that work and do not build the panel without it.** Blocker is not lock safety (verified: `override_visibility()` disables the whole `top` tree) but the map-time layer derivation at `view.c:1160-1167`.
+
+### Phase 89: `zwlr_foreign_toplevel_management_v1` — the acting half
+
+- [x] **New `src/foreign_toplevel.c`** (523 lines) + `include/hikari/foreign_toplevel.h`, per AGENTS.md separation rather than growing `view.c`.
+- [x] **One pointer in `hikari_view`**, embedded like `hikari_view_decoration` — a mapped view carries no extra allocation.
+- [x] **Lifecycle mirrors the ext-list handle exactly.** `init` in view init, `create` on map, `destroy` on unmap **and** in `fini` (BLUEPRINT §15: three init-failure paths call `fini` on a view that never mapped).
+- [x] **Modal hazard closed.** Single `can_act()` gate — `hikari_server_in_normal_mode() && is_mapped && !is_forced` — on every handler. `hikari_workspace_focus_view()` asserts normal mode and a client-driven request can arrive mid-drag, in mark-select, or on a locked screen. Because lock mode is not normal mode, **one test closes both the modal-abort hole and the act-on-a-locked-session hole.**
+- [x] **Activation uses the mark path, not `focus_view`.** Workspaces are per-output and output focus follows the cursor; focusing a view on another output via `focus_view` leaves `hikari_server.workspace` stale. Sequence: switch sheet if needed → show-or-raise → `center_cursor` → `cursor_focus`.
+- [x] **Double-request safe in both directions.** `hide()` asserts `!hidden`, `show()` asserts `hidden`; both minimise branches return early when already in the requested state. The activate path **re-tests `is_hidden` after the sheet switch**, because switching shows the incoming sheet's views.
+- [x] **`app_id` from `view->id`** — the Phase 88 scoping correction applies again; no new string storage.
+- [x] **`WITH_FOREIGN_TOPLEVEL_MANAGEMENT`** build switch, default YES. The wlroots header declares itself unstable and its listing half is already superseded by ext-list; a future drop becomes a one-flag problem.
+- [x] **Compiles with 0 warnings** at project flags (`-Wall`, `-DNDEBUG`, all `HAVE_*` on).
+- [ ] **BUILD BLOCKED — needs `sudo make clean` first.** The `.o` files and the `hikari` binary are owned by **root** from a `sudo make` at 16:18; a user-run `make` cannot overwrite `main.o`. Only `foreign_toplevel.o` (21:31) is user-owned. Building as root again would perpetuate it.
+- [ ] **NOT YET RUN — nothing here is hardware-confirmed.** Requires a compositor restart, which ends the running session. Verify: waybar/sofi can focus a window; close works; minimise round-trips; a request during move-mode or on a locked screen is ignored rather than aborting.
+- [ ] **Known consequence to communicate:** fullscreen maps to full-maximize (matching `xdg_view.c:656`), so `set_fullscreen` and `set_maximized` are the same operation and clients see back a state they did not ask for. **External switchers should expose maximise only.**
+  **SCOPED FOR CLOSURE 2026-08-24 (Phase 90 W-5).** This is not a permanent property of the design. Phase 90 gives hikari a real fullscreen state and splits the two requests — `request_fullscreen` → fullscreen, `request_maximized` → full-maximize — with `publish_state` reporting each from its own state. **IMPLEMENTED 2026-08-24 11:42 (W-5). Close this item when it is verified on hardware, not before.**
+- [ ] **Send-to-workspace is NOT delivered by this phase and cannot be.** Verified against the protocol XML: `zwlr-foreign-toplevel-management` contains zero occurrences of "workspace", and `ext-workspace-v1`'s `assign` request moves a *workspace to an output group*, not a *window to a workspace*. No standards-track protocol expresses it. It needs a hikari-specific protocol or a CLI escape hatch — decide before building Part B.
+
+### Phase 89: `zwlr_foreign_toplevel_management_v1` — the acting half of window listing
+
+**IMPLEMENTED, UNBUILT — awaiting the user build.**
+
+- [x] **Route verified before writing code.** No standards-track toplevel-control protocol exists (installed `wayland-protocols` staging + unstable enumerated), and `xdg-activation-v1` cannot substitute — its `activate` takes a `wl_surface` the requester owns, which a switcher does not have for another client's window. wlroots 0.20 exports the implementation (`nm -D`); no new dependency, no XML, **no `wayland-scanner` step**.
+- [x] **`hikari_server.foreign_toplevel_manager`** created non-fatally beside the ext-list global, via `hikari_foreign_toplevel_manager_setup()` so `server.c` never pulls in the wlroots header.
+- [x] **One handle per mapped view**, embedded in `hikari_view` like `hikari_view_decoration`. Created in `map`, destroyed in `unmap`, defensively in `fini` — BLUEPRINT §15's three init-failure paths.
+- [x] **THE hazard: `hikari_workspace_focus_view()` asserts `hikari_server_in_normal_mode()`** (`workspace.c:401`). Client-driven requests arrive in any mode, so every handler passes `can_act()` (normal mode + mapped + not forced) first. Lock mode is covered by the same test because lock mode **is** a mode. Does not apply to the read-only Phase 88 protocol — which is why Phase 88 shipping cleanly says nothing about this one.
+- [x] **Activation does not call `hikari_workspace_focus_view()`.** Workspaces are per-output and output focus follows the cursor; it reuses the mark path (switch sheet → show/raise → centre cursor → `hikari_server_cursor_focus()`). Hidden state **re-tested** after the sheet switch, because `display_sheet()` may already have shown the view and `hikari_view_show()` asserts hidden.
+- [x] **Fullscreen → full-maximize.** hikari has no fullscreen state; `xdg_view.c`'s `apply_requested_fullscreen()` already makes this mapping for the client-side request, so both paths now mean one thing. Read back as fullscreen too, so observation matches the request.
+- [x] **State published from single writers, whole-state:** title/app_id from `publish_foreign_toplevel()` (management fed **before** the ext-list early return); minimized from `show`/`hide`; maximized/fullscreen from `hikari_view_commit_pending_operation()`; activated from `hikari_view_activate()`'s **explicit bool** (not `hikari_view_has_focus()`, which dereferences a `hikari_server.workspace` that is NULL during output teardown — the Phase 63 SIGSEGV shape); outputs from `evacuate`/`migrate`, leave-then-enter, guarded on an actual change.
+- [x] **Shared ownership handled without betting on a contract.** A listener on the handle's own `events.destroy` drops all six listeners and nulls the pointer; `hikari_foreign_toplevel_destroy()` tolerates wlroots emitting it or not. wlroots sources are not installed here, so this removes a guess rather than making one. Phase 78 pattern, applied deliberately.
+- [x] **`WITH_FOREIGN_TOPLEVEL_MANAGEMENT` switch**, in `WITH_ALL` (unlike `WITH_EXT_IMAGE_CAPTURE` — this regresses nothing). Exists because the wlroots header declares itself unstable and its listing half is already superseded. Stubs under `#else` keep every call site in `view.c` unconditional, rather than threading eleven `#ifdef`s through the file behind eight crash phases.
+- [x] **0 warnings** compiling `foreign_toplevel.o`, `view.o`, `server.o` in-tree.
+- [ ] **BUILD (USER-RUN) — three configurations.** I cannot build: it needs `sudo bmake` in-tree and I have no sudo.
+  1. `sudo bmake clean && sudo bmake`
+  2. `sudo bmake clean && sudo bmake DEBUG=YES` — the one that matters, `-Werror`
+  3. `sudo bmake clean && sudo bmake DEBUG=YES WITH_FOREIGN_TOPLEVEL_MANAGEMENT=NO` — proves the switch is real, per the Makefile's own rule that every `WITH_*` switch is tested
+- [ ] **TEST (USER-RUN).** Verify with sofi and/or waybar: the global appears; clicking an entry focuses the window **including one on another sheet and another output**; close works; minimise/unminimise round-trips; titles update live. Then check nothing regressed while **locked** — no focus, close or minimise from outside.
+- [ ] **Known consequence:** both foreign-toplevel protocols are now advertised. A client binding both sees every window twice. **sofi should bind zwlr only**; waybar's `wlr/taskbar` will move to it by itself.
+- [ ] **`ext-workspace-v1` (workspace switcher) — NOT in this phase, deliberately.** Independent of this work and touches output lifecycle, so bundling would make a crash ambiguous. Model mismatch to settle first: hikari's `hikari_workspace` is a per-output *viewport*; the thing users switch between is a **sheet**. One group per real output (not the noop output), ten workspace handles per group, `ACTIVATE` capability only — no create/remove (fixed at 10), no assign (`hikari_workspace_switch_sheet()` asserts `workspace == sheet->workspace`).
 
 ### Phase 88: R2 — foreign-toplevel list delivered; side-panel intent documented
 
@@ -13,7 +173,7 @@
 - [x] **Scoping correction recorded.** The Phase 84 plan budgeted for storing `app_id` — `view->id` already holds it. Same failure shape as the Phase 84 R10 omission: **planning from what was expected rather than from what is there.**
 - [x] **Future intent documented** (`PLANS.md` item -15): a left-edge sliding application panel. Unscoped and not approved — recorded so later work does not foreclose it. Key note: it can be an **ordinary layer-shell client**, not compositor code, and lock mode already hides the whole `top` tree so it cannot leak titles onto a locked screen.
 - [x] **BUILD AND TEST (USER-RUN) — DONE, confirmed on hardware 2026-08-22.** **waybar works.** The protocol is doing its job: an external dock enumerates hikari's windows. *(Scope of the confirmation: waybar runs and lists. Retitle-live and no-stale-entries-across-many-open/close cycles were not separately reported — they follow from the implementation but are not independently attested.)*
-- [ ] **Known limit, worth knowing before choosing a panel:** this protocol carries **title and app_id only** — no icons, no activation, no minimise. Clicking an entry to focus a window needs `zwlr_foreign_toplevel_management_v1` (**not** advertised) or `xdg-activation-v1` (**is** advertised). Check which the chosen dock expects.
+- [x] **Known limit — ADDRESSED IN PHASE 89.** This protocol carries **title and app_id only** — no icons, no activation, no minimise. `zwlr_foreign_toplevel_management_v1` is now implemented (unbuilt) to supply activation, close and minimise; `xdg-activation-v1` was checked and **cannot** substitute for a switcher, because its `activate` takes a `wl_surface` the requester owns. Icons remain unprovided by either.
 
 ### Phase 84: Remaining-work programme R1–R9 planned — AWAITING APPROVAL (see PLANS item -14)
 

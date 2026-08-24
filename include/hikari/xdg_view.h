@@ -22,6 +22,20 @@ struct hikari_xdg_view {
   struct wlr_scene_tree *scene_tree;
   struct wlr_scene_tree *surface_tree;
 
+  /* [COMMENT] Class purpose: A fullscreen or maximize request that arrived
+  while a resize was still in flight.
+
+  There is one pending_operation slot per view, so a state request that lands
+  mid-resize cannot be actioned immediately -- but the client has already been
+  sent its configure and believes the state changed, so DROPPING the request
+  desynchronises the two permanently. Parking the desired state here and
+  draining it from commit_handler(), once the in-flight operation has been
+  acked, turns a permanent desync into a one-frame delay. */
+  bool pending_fullscreen;
+  bool pending_fullscreen_value;
+  bool pending_maximized;
+  bool pending_maximized_value;
+
   struct wl_listener map;
   struct wl_listener unmap;
   struct wl_listener destroy;
@@ -29,6 +43,12 @@ struct hikari_xdg_view {
   struct wl_listener new_popup;
   struct wl_listener set_title;
   struct wl_listener request_fullscreen;
+  /* [COMMENT] xdg-shell requires a configure in reply to set_maximized even
+  when the state does not change -- wlr_xdg_shell.h states that omitting it is a
+  protocol violation. hikari had no listener at all here, which is why a client's
+  own titlebar maximize button did nothing. Toplevel-scoped, so released in
+  toplevel_destroy like request_fullscreen. */
+  struct wl_listener request_maximize;
   /* [COMMENT] Listener on the xdg_toplevel's own destroy signal. wlroots
   destroys the toplevel role object BEFORE emitting the xdg_surface destroy
   signal, and destroy_xdg_toplevel() asserts that every toplevel-scoped signal

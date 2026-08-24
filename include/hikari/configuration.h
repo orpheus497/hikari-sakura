@@ -6,6 +6,7 @@
 #include <wayland-util.h>
 
 #include <hikari/exec.h>
+#include <hikari/bar_config.h>
 #include <hikari/font.h>
 #include <hikari/lock_config.h>
 #include <hikari/mark.h>
@@ -32,6 +33,12 @@ struct hikari_configuration {
   desktop background, which is what sharing `clear` forced. Alpha is honoured
   -- see parse_color() in src/configuration.c. */
   float bar[4];
+
+  /* [COMMENT] Class purpose: Top bar length limits and banner scrolling -- the
+  `ui { bar { ... } }` block. Kept compositor-side because the hikari-topbar
+  helper is spawned once with no argv and never restarted, so nothing configured
+  in it could survive a reload. */
+  struct hikari_bar_config bar_config;
 
   struct hikari_font font;
 

@@ -15,6 +15,7 @@ WITH_SCREENCOPY = YES
 WITH_GAMMACONTROL = YES
 WITH_LAYERSHELL = YES
 WITH_VIRTUAL_INPUT = YES
+WITH_FOREIGN_TOPLEVEL_MANAGEMENT = YES
 .endif
 
 OS != uname
@@ -40,6 +41,8 @@ OBJS = \
 	dnd_mode.o \
 	exec.o \
 	font.o \
+	foreign_toplevel.o \
+	ipc.o \
 	geometry.o \
 	gesture_config.o \
 	group.o \
@@ -158,6 +161,24 @@ CFLAGS += -DHAVE_SCREENCOPY=1
 # FB-3 in BLUEPRINT.md section 13 is resolved.
 .if defined(WITH_EXT_IMAGE_CAPTURE) && ${WITH_EXT_IMAGE_CAPTURE:tu} != "NO"
 CFLAGS += -DHAVE_EXT_IMAGE_CAPTURE=1
+.endif
+
+# [COMMENT] Action purpose: zwlr_foreign_toplevel_management_v1 -- the acting
+# half of window listing, and the only protocol that lets an external window
+# switcher or task manager focus, close or minimise another client's window.
+# Included in WITH_ALL, unlike WITH_EXT_IMAGE_CAPTURE above, because it costs
+# nothing to advertise and nothing else regresses when it is present.
+#
+# It has a switch at all because its wlroots header opens with "This an unstable
+# interface of wlroots. No guarantees are made regarding the future consistency
+# of this API", and its listing half is already superseded by the
+# standards-track ext-foreign-toplevel-list-v1 that hikari also advertises. If a
+# future wlroots drops it, `make WITH_FOREIGN_TOPLEVEL_MANAGEMENT=NO` keeps the
+# tree building while the replacement is written: src/foreign_toplevel.c carries
+# stub definitions so every call site in view.c stays unconditional.
+.if defined(WITH_FOREIGN_TOPLEVEL_MANAGEMENT) && \
+    ${WITH_FOREIGN_TOPLEVEL_MANAGEMENT:tu} != "NO"
+CFLAGS += -DHAVE_FOREIGN_TOPLEVEL_MANAGEMENT=1
 .endif
 
 .if defined(WITH_LAYERSHELL) && ${WITH_LAYERSHELL:tu} != "NO"

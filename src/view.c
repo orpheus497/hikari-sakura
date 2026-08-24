@@ -11,6 +11,7 @@
 
 #include <hikari/color.h>
 #include <hikari/configuration.h>
+#include <hikari/foreign_toplevel.h>
 #include <hikari/geometry.h>
 #include <hikari/group.h>
 #include <hikari/indicator.h>
@@ -186,6 +187,18 @@ move_view_constrained(
 static void
 move_view(struct hikari_view *view, struct wlr_box *geometry, int x, int y)
 {
+  /* [COMMENT] Action purpose: A fullscreen view is pinned to its output and
+  cannot be moved.
+
+  This is NOT redundant with the FULLY_MAXIMIZED case below. Fullscreen shadows
+  whatever the view already was, and a view that was FLOATING when the client
+  fullscreened it has no maximized_state at all -- so it would fall through to
+  the else branch and be moveable out of its own fullscreen. The maximize guard
+  only happens to cover the fullscreen-over-maximized case. */
+  if (hikari_view_is_fullscreen(view)) {
+    return;
+  }
+
   if (view->maximized_state != NULL) {
     struct wlr_box *usable_area;
 
@@ -428,10 +441,53 @@ commit_pending_operation(
   }
 }
 
+/* [COMMENT] Function purpose: Drop the fullscreen shadow and give the view its
+border back. Idempotent, so every exit path can call it unconditionally.
+
+This exists because fullscreen is reachable from a client at any moment but
+leaveable from a dozen directions the client knows nothing about -- the view can
+be reset, tiled, untiled, re-maximized on either axis, unmapped, finalised, or
+evacuated to another output. Each of those already ends fullscreen in substance;
+this makes them end it in state as well.
+
+Getting that wrong is not cosmetic. A view left flagged fullscreen keeps
+refresh_geometry() shadowing a stale whole-output box, and keeps
+hikari_bar_update_visibility() hiding the top bar -- for the rest of the
+session, with no way for the user to recover it. That is why this is one helper
+called from every exit rather than a line repeated at each. */
+static void
+unshadow_fullscreen(struct hikari_view *view)
+{
+  assert(view != NULL);
+
+  if (!hikari_view_is_fullscreen(view)) {
+    return;
+  }
+
+  hikari_view_unset_fullscreen(view);
+
+  /* [COMMENT] Action purpose: commit_fullscreen() cleared the border
+  unconditionally, including for CSD views whose border was already NONE and
+  must stay that way. Restore only what we are entitled to restore.
+  hikari_server.workspace is NULL during output teardown -- one of the paths
+  that reaches here -- so it is tested rather than assumed. */
+  if (!view->use_csd) {
+    bool focused = hikari_server.workspace != NULL &&
+                   view == hikari_server.workspace->focus_view;
+
+    view->border.state = focused ? HIKARI_BORDER_ACTIVE : HIKARI_BORDER_INACTIVE;
+  }
+}
+
 // [COMMENT] Function purpose: Handle resetting view state operations.
 static void
 commit_reset(struct hikari_view *view, struct hikari_operation *operation)
 {
+  /* [COMMENT] Action purpose: A reset drops every derived geometry, fullscreen
+  included -- view-reset-geometry must not leave a window flagged fullscreen
+  over its restored floating box. */
+  unshadow_fullscreen(view);
+
   // [COMMENT] Action purpose: Skip indicator repositioning for hidden views.
   if (!hikari_view_is_hidden(view)) {
     hikari_indicator_position(&hikari_server.indicator, view);
@@ -522,6 +578,13 @@ hikari_view_init(
   view->mark = NULL;
   view->surface = NULL;
   view->maximized_state = NULL;
+
+  /* [COMMENT] Action purpose: Zeroed even though the fullscreen flag (cleared
+  by `view->flags = 0` above) is what gates every read of it. Views come from
+  hikari_malloc, which does not zero, and leaving a box indeterminate on the
+  strength of a flag elsewhere being right is the pattern this file has already
+  been burned by -- see the scene_node comment below. */
+  view->fullscreen_geometry = (struct wlr_box){ 0, 0, 0, 0 };
   /* [COMMENT] Action purpose: Seed the output from the workspace the view is
   being created on, rather than leaving it NULL until hikari_view_configure()
   runs. Both first_map() paths (xdg and xwayland) call
@@ -549,6 +612,12 @@ hikari_view_init(
   three init-failure paths in the shell wrappers call fini directly -- see
   BLUEPRINT.md section 15. */
   view->foreign_toplevel = NULL;
+
+  /* [COMMENT] Action purpose: Same reasoning for the management handle, which
+  additionally carries six listeners -- establishing the back-pointer and the
+  NULL handle here is what makes hikari_foreign_toplevel_destroy() a safe no-op
+  on a view that never mapped. */
+  hikari_foreign_toplevel_init(&view->foreign_toplevel_management, view);
 
   view->use_csd = false;
   view->child = child;
@@ -587,6 +656,12 @@ hikari_view_fini(struct hikari_view *view)
   printf("DESTROY VIEW %p\n", view);
 #endif
 
+  /* [COMMENT] Action purpose: Defensive, matching the foreign-toplevel release
+  below. hikari_view_unmap() clears this on every ordinary path, but the shell
+  wrappers call fini directly from three init-failure paths where the view never
+  mapped -- and this must leave no view flagged fullscreen behind it. */
+  unshadow_fullscreen(view);
+
   if (view->decoration.wlr_decoration != NULL) {
     wl_list_remove(&view->decoration.mode.link);
     wl_list_remove(&view->decoration.destroy.link);
@@ -600,6 +675,8 @@ hikari_view_fini(struct hikari_view *view)
     wlr_ext_foreign_toplevel_handle_v1_destroy(view->foreign_toplevel);
     view->foreign_toplevel = NULL;
   }
+
+  hikari_foreign_toplevel_destroy(&view->foreign_toplevel_management);
 
   hikari_free(view->title);
   hikari_free(view->id);
@@ -671,6 +748,12 @@ nothing at all. */
 static void
 publish_foreign_toplevel(struct hikari_view *view)
 {
+  /* [COMMENT] Action purpose: Feed both protocols from the one place, and feed
+  the management handle BEFORE the ext-list early return below. The two handles
+  are created independently and either can be absent, so a return keyed on one
+  must not silence the other. */
+  hikari_foreign_toplevel_publish_title(&view->foreign_toplevel_management);
+
   if (view->foreign_toplevel == NULL) {
     return;
   }
@@ -778,6 +861,17 @@ refresh_geometry(struct hikari_view *view)
 {
   assert(view != NULL);
 
+  /* [COMMENT] Action purpose: Fullscreen SHADOWS every other geometry rather
+  than replacing it. Tested first and returning early, with maximized_state left
+  intact underneath -- so clearing the flag makes the view fall straight back to
+  whatever it already was (maximized, tiled or floating) and leaving fullscreen
+  needs no saved state and no restore path. Every caller reaches this through
+  hikari_view_geometry() -> current_geometry, which hikari_view_refresh_geometry
+  () sets from here, so the shadow applies everywhere at once. */
+  if (hikari_view_is_fullscreen(view)) {
+    return &view->fullscreen_geometry;
+  }
+
   if (view->maximized_state != NULL) {
     return &view->maximized_state->geometry;
   } else {
@@ -818,6 +912,15 @@ queue_resize(struct hikari_view *view,
   // NULL output. There is nothing to constrain the resize against yet, so
   // simply defer it.
   if (view->output == NULL) {
+    return;
+  }
+
+  /* [COMMENT] Action purpose: A fullscreen view's size is the compositor's to
+  decide, not the client's or the user's. Same reasoning as the matching guard
+  in move_view(): the FULLY_MAXIMIZED case below does not cover a view that was
+  floating when it was fullscreened, because such a view has no
+  maximized_state. */
+  if (hikari_view_is_fullscreen(view)) {
     return;
   }
 
@@ -1125,6 +1228,12 @@ hikari_view_map(struct hikari_view *view, struct wlr_surface *surface)
     }
   }
 
+  /* [COMMENT] Action purpose: The acting half, created at the same point and on
+  the same terms -- a window that can be listed should also be actionable. It
+  publishes its own title, state and output at creation, so like the handle
+  above it depends on hikari_view_configure() having already run. */
+  hikari_foreign_toplevel_create(&view->foreign_toplevel_management);
+
   /* [COMMENT] Action purpose: Decide the view's layer before anything shows or
   raises it, and do so unconditionally rather than only in the lock-mode case.
 
@@ -1180,6 +1289,14 @@ hikari_view_unmap(struct hikari_view *view)
   assert(!hikari_view_is_unmanaged(view));
   assert(hikari_view_is_mapped(view));
 
+  /* [COMMENT] Action purpose: A window closing or unmapping while fullscreen
+  must release the top bar, and must not carry the flag across a remap -- the
+  view struct survives unmap (BLUEPRINT section 15), so a stale flag would put
+  the next map straight back into a whole-output box sized for whatever output
+  it used to be on. Cleared before the visibility unlink below, so the bar
+  recomputation that follows sees the final state. */
+  unshadow_fullscreen(view);
+
   wl_list_remove(&view->new_subsurface.link);
 
   // [COMMENT] Action purpose: Dispatch through each child's own fini pointer
@@ -1215,6 +1332,12 @@ hikari_view_unmap(struct hikari_view *view)
     wlr_ext_foreign_toplevel_handle_v1_destroy(view->foreign_toplevel);
     view->foreign_toplevel = NULL;
   }
+
+  /* [COMMENT] Action purpose: Withdrawn here rather than in the shells' destroy
+  handlers, so an unmapped window stops being actionable at the same moment it
+  stops being listed. Every publish call below this point no-ops on the now-NULL
+  handle, including the one inside the hikari_view_hide() a few lines down. */
+  hikari_foreign_toplevel_destroy(&view->foreign_toplevel_management);
 
   if (hikari_view_is_forced(view)) {
     view_unlink_visible(view);
@@ -1263,6 +1386,14 @@ hikari_view_unmap(struct hikari_view *view)
 
   hikari_view_unset_dirty(view);
 
+  /* [COMMENT] Action purpose: Last, once every list this view was in has been
+  left, so the walk in hikari_bar_update_visibility() cannot still see it. A
+  fullscreen window that is closed rather than un-fullscreened reaches the bar
+  only through here. */
+  if (view->output != NULL) {
+    hikari_bar_update_visibility(view->output);
+  }
+
   assert(!hikari_view_is_tiling(view));
   assert(!hikari_view_is_tiled(view));
 }
@@ -1295,6 +1426,17 @@ hikari_view_show(struct hikari_view *view)
 
   hikari_view_damage_whole(view);
 
+  // [COMMENT] Action purpose: hikari's `hidden` flag IS minimised as far as
+  // foreign-toplevel clients are concerned, and show/hide are its only writers.
+  hikari_foreign_toplevel_publish_state(&view->foreign_toplevel_management);
+
+  /* [COMMENT] Action purpose: Showing a view can reveal a fullscreen one --
+  switching to a sheet that holds a fullscreen video, or unminimising it -- so
+  the bar has to be re-evaluated here and not only where fullscreen is entered. */
+  if (view->output != NULL) {
+    hikari_bar_update_visibility(view->output);
+  }
+
   assert(is_first_view(view));
 }
 
@@ -1325,6 +1467,17 @@ hikari_view_hide(struct hikari_view *view)
   hikari_indicator_frame_hide(&view->indicator_frame);
 
   hikari_view_damage_whole(view);
+
+  // [COMMENT] Action purpose: The other half of the minimised state -- see
+  // hikari_view_show() above.
+  hikari_foreign_toplevel_publish_state(&view->foreign_toplevel_management);
+
+  /* [COMMENT] Action purpose: The mirror of the call in hikari_view_show(): a
+  fullscreen view being hidden -- minimised, or left behind by a sheet switch --
+  must give the bar back. */
+  if (view->output != NULL) {
+    hikari_bar_update_visibility(view->output);
+  }
 }
 
 void
@@ -1375,6 +1528,11 @@ hikari_view_lower(struct hikari_view *view)
 static void
 commit_tile(struct hikari_view *view, struct hikari_operation *operation)
 {
+  /* [COMMENT] Action purpose: A tiled view occupies a tile, which is by
+  definition not the whole output. Laying out a sheet while one of its views is
+  fullscreen must end the fullscreen, not tile a shadowed box. */
+  unshadow_fullscreen(view);
+
   if (view->maximized_state) {
     hikari_maximized_state_destroy(view->maximized_state);
     view->maximized_state = NULL;
@@ -1496,6 +1654,11 @@ commit_unmaximize(struct hikari_view *view, struct hikari_operation *operation)
 {
   hikari_view_damage_whole(view);
 
+  /* [COMMENT] Action purpose: queue_unmaximize() is reachable on its own -- the
+  L+f binding, and the foreign-toplevel unmaximize request -- so a view that is
+  fullscreen over a maximized state can arrive here with the shadow still up. */
+  unshadow_fullscreen(view);
+
   hikari_free(view->maximized_state);
   view->maximized_state = NULL;
 
@@ -1542,6 +1705,7 @@ hikari_view_toggle_full_maximize(struct hikari_view *view)
     queue_full_maximize(view);
   }
 }
+
 
 void
 hikari_view_toggle_public(struct hikari_view *view)
@@ -1669,6 +1833,15 @@ hikari_view_toggle_vertical_maximize(struct hikari_view *view)
     return;
   }
 
+  /* [COMMENT] Action purpose: Leave fullscreen before re-deriving from the
+  maximization state. Without this, pressing this binding while a video is
+  fullscreen would queue a half-maximized geometry while the view stayed flagged
+  fullscreen -- the window shrinks and the top bar never comes back. Clearing
+  first also means the queue_* call below measures against the real state rather
+  than the whole-output box refresh_geometry() would otherwise still be
+  shadowing. */
+  unshadow_fullscreen(view);
+
   if (view->maximized_state != NULL) {
     switch (view->maximized_state->maximization) {
       case HIKARI_MAXIMIZATION_FULLY_MAXIMIZED:
@@ -1694,6 +1867,10 @@ hikari_view_toggle_horizontal_maximize(struct hikari_view *view)
   assert(view != NULL);
   assert(!hikari_view_is_hidden(view));
 
+  /* [COMMENT] Action purpose: See the matching comment in
+  hikari_view_toggle_vertical_maximize(). */
+  unshadow_fullscreen(view);
+
   if (view->maximized_state != NULL) {
     switch (view->maximized_state->maximization) {
       case HIKARI_MAXIMIZATION_FULLY_MAXIMIZED:
@@ -1710,6 +1887,166 @@ hikari_view_toggle_horizontal_maximize(struct hikari_view *view)
     }
   } else {
     queue_horizontal_maximize(view);
+  }
+}
+
+static void
+commit_fullscreen(struct hikari_view *view, struct hikari_operation *operation)
+{
+  /* [COMMENT] Action purpose: Box first, flag second. refresh_geometry() hands
+  out &view->fullscreen_geometry the instant the flag is set, so setting the flag
+  over an unwritten box -- even with nothing between the two statements today --
+  is an ordering that only stays safe by accident. */
+  view->fullscreen_geometry = operation->geometry;
+  hikari_view_set_fullscreen(view);
+
+  /* [COMMENT] Action purpose: No frame, unconditionally -- unlike
+  commit_full_maximize(), which only drops the border for server-side-decorated
+  views. A fullscreen window owns every pixel of the output by definition, so
+  there is nowhere for a border to go; and a CSD client has already been told it
+  is fullscreen and hidden its own chrome, so leaving hikari's border on would
+  draw a frame around content that has stopped expecting one. */
+  view->border.state = HIKARI_BORDER_NONE;
+
+  commit_pending_operation(view, operation);
+}
+
+/* [COMMENT] Function purpose: Size a view to the WHOLE output and mark it
+fullscreen.
+
+Deliberately not output->usable_area, which is what queue_full_maximize() uses:
+usable_area has already had the top bar subtracted (hikari_bar_reserve) and is
+further shrunk by any layer-shell exclusive zone (wlr_scene_layer_surface_v1_
+configure). Fullscreen means the output, so the box is built from
+output->geometry's dimensions directly. The origin is 0,0 because view geometry
+is output-LOCAL -- hikari_view_refresh_geometry() adds output->geometry.x/y when
+it positions the scene node.
+
+maximized_state is left exactly as it was. That is the whole trick: the view may
+be maximized, tiled or floating underneath, and clearing the flag restores it
+without this function having recorded anything. */
+static void
+queue_fullscreen(struct hikari_view *view)
+{
+  assert(view != NULL);
+  assert(!hikari_view_is_hidden(view));
+
+  struct hikari_operation *op = &view->pending_operation;
+  struct hikari_output *output = view->output;
+
+  op->type = HIKARI_OPERATION_TYPE_FULLSCREEN;
+  op->geometry = (struct wlr_box){ .x = 0,
+    .y = 0,
+    .width = output->geometry.width,
+    .height = output->geometry.height };
+
+  /* [COMMENT] Action purpose: Do NOT warp the cursor. Every maximize path sets
+  this true, and hikari_view_center_cursor() centres against usable_area -- so on
+  a genuinely fullscreen window it would land half a bar-height off centre. More
+  to the point, entering fullscreen is a client-driven event the user did not aim
+  at with the pointer, and moving their cursor under them is wrong. */
+  op->center = false;
+
+  resize(view, op, commit_fullscreen);
+}
+
+/* [COMMENT] Function purpose: Leave fullscreen, restoring whatever the view was
+underneath.
+
+The flag is cleared FIRST so refresh_geometry() stops shadowing, and only then
+is the underlying state re-queued -- otherwise the queue_* call below would
+measure against the fullscreen box it is trying to leave. */
+static void
+queue_unfullscreen(struct hikari_view *view)
+{
+  assert(view != NULL);
+  assert(!hikari_view_is_hidden(view));
+
+  hikari_view_unset_fullscreen(view);
+
+  if (!view->use_csd) {
+    view->border.state = view == hikari_server.workspace->focus_view
+                             ? HIKARI_BORDER_ACTIVE
+                             : HIKARI_BORDER_INACTIVE;
+  }
+
+  if (view->maximized_state != NULL) {
+    /* [COMMENT] Action purpose: Re-apply the maximization that was shadowed.
+    Dispatching on the state rather than assuming full-maximize matters: a
+    vertically maximized window that a client fullscreened must come back
+    vertically maximized, not fully. */
+    switch (view->maximized_state->maximization) {
+      case HIKARI_MAXIMIZATION_FULLY_MAXIMIZED:
+        queue_full_maximize(view);
+        break;
+
+      case HIKARI_MAXIMIZATION_VERTICALLY_MAXIMIZED:
+        queue_vertical_maximize(view);
+        break;
+
+      case HIKARI_MAXIMIZATION_HORIZONTALLY_MAXIMIZED:
+        queue_horizontal_maximize(view);
+        break;
+    }
+  } else {
+    /* [COMMENT] Action purpose: Resize back to the box the view already owns,
+    rather than re-running the operation that produced it.
+
+    For a tiled view the obvious spelling -- queue_tile(view, tile->layout,
+    view->tile, false) -- is a USE-AFTER-FREE. commit_tile() frees the view's
+    current tile and then assigns operation->tile; handing it the same pointer
+    for both makes it free that tile and store the dangling value. Likewise
+    queue_reset() is not a substitute, because it detaches and frees the tile
+    outright, so a tiled window would silently fall out of its layout on leaving
+    fullscreen.
+
+    A plain resize to tile->view_geometry touches no ownership at all: the tile
+    is still attached, still in its layout, and still holds the right box -- the
+    view simply stops shadowing it. Floating views take the same path against
+    their own geometry. */
+    struct hikari_operation *op = &view->pending_operation;
+
+    op->type = HIKARI_OPERATION_TYPE_RESIZE;
+    op->center = false;
+    op->geometry = hikari_view_is_tiled(view) ? view->tile->view_geometry
+                                              : view->geometry;
+
+    resize(view, op, commit_resize);
+  }
+}
+
+void
+hikari_view_request_fullscreen(struct hikari_view *view, bool fullscreen)
+{
+  assert(view != NULL);
+
+  /* [COMMENT] Action purpose: A protocol request arrives on the client's
+  schedule, not the compositor's, so every precondition the queue_* functions
+  assert has to be TESTED here rather than assumed. An unmapped or hidden view
+  has no geometry to give and no output to give it on; both queue paths assert
+  !hidden. Callers must not have to know that. */
+  if (!hikari_view_is_mapped(view) || hikari_view_is_hidden(view) ||
+      view->output == NULL) {
+    return;
+  }
+
+  if (fullscreen == hikari_view_is_fullscreen(view)) {
+    return;
+  }
+
+  /* [COMMENT] Action purpose: A resize is already in flight. There is one
+  pending_operation slot per view, so queuing over it would lose the operation
+  the client has not acked yet. The shells re-drive this from their commit
+  handler once the slot frees, which is why dropping here is a deferral rather
+  than the silent permanent desync it replaces. */
+  if (hikari_view_is_dirty(view)) {
+    return;
+  }
+
+  if (fullscreen) {
+    queue_fullscreen(view);
+  } else {
+    queue_unfullscreen(view);
   }
 }
 
@@ -1741,6 +2078,14 @@ hikari_view_evacuate(struct hikari_view *view, struct hikari_sheet *sheet)
 
   clear_focus(view);
 
+  /* [COMMENT] Action purpose: The fullscreen box was sized from the OUTGOING
+  output's geometry, and this function is reached from hikari_output_fini() --
+  the output is going away. Carrying the flag across would leave the view
+  shadowing a box for a display that no longer exists, and would hide the
+  incoming output's bar on account of a window that is no longer fullscreen in
+  any meaningful sense. */
+  unshadow_fullscreen(view);
+
   view->output = sheet->workspace->output;
   view->sheet = sheet;
 
@@ -1754,6 +2099,13 @@ hikari_view_evacuate(struct hikari_view *view, struct hikari_sheet *sheet)
 
   wl_list_remove(&view->output_views);
   wl_list_insert(&view->output->views, &view->output_views);
+
+  /* [COMMENT] Action purpose: Re-announce the output through the management
+  handle. Evacuation runs from hikari_output_fini() via
+  hikari_workspace_merge(), and wlroots calls that while the outgoing
+  wlr_output is still alive -- so the leave this emits is always sent to a live
+  output rather than a freed one. */
+  hikari_foreign_toplevel_publish_output(&view->foreign_toplevel_management);
 
   if (!hikari_view_is_hidden(view)) {
     if (hikari_view_is_forced(view)) {
@@ -2189,6 +2541,10 @@ commit_operation(struct hikari_operation *operation, struct hikari_view *view)
     case HIKARI_OPERATION_TYPE_TILE:
       commit_tile(view, operation);
       break;
+
+    case HIKARI_OPERATION_TYPE_FULLSCREEN:
+      commit_fullscreen(view, operation);
+      break;
   }
 }
 
@@ -2209,6 +2565,21 @@ hikari_view_commit_pending_operation(
 
   commit_operation(&view->pending_operation, view);
   hikari_view_unset_dirty(view);
+
+  /* [COMMENT] Action purpose: Maximization changes land here. hikari reaches
+  HIKARI_MAXIMIZATION_FULLY_MAXIMIZED through several commit paths that all
+  converge on this function, so republishing the derivable state once from here
+  covers every one of them without each having to remember. */
+  hikari_foreign_toplevel_publish_state(&view->foreign_toplevel_management);
+
+  /* [COMMENT] Action purpose: The same convergence argument applies to the top
+  bar. Entering and leaving fullscreen are both geometry operations and both
+  commit through here, so one call covers every route in and out -- the client
+  request, the axis-maximize bindings that drop fullscreen, a reset, and a
+  tile -- without each commit_* having to remember. */
+  if (view->output != NULL) {
+    hikari_bar_update_visibility(view->output);
+  }
 }
 
 void
@@ -2223,6 +2594,14 @@ hikari_view_activate(struct hikari_view *view, bool active)
     }
     view->activate(view, active);
   }
+
+  /* [COMMENT] Action purpose: Published from the explicit bool rather than read
+  back from the view, because hikari_view_has_focus() dereferences
+  hikari_server.workspace, which is NULL while an output is being torn down.
+  This is the single writer of activation for both the outgoing and the incoming
+  view -- hikari_workspace_focus_view() calls it once for each. */
+  hikari_foreign_toplevel_publish_activated(
+      &view->foreign_toplevel_management, active);
 }
 
 static void
@@ -2261,6 +2640,10 @@ hikari_view_migrate(struct hikari_view *view,
   hikari_geometry_constrain_relative(view_geometry, &output->usable_area, x, y);
 
   migrate_view(view, sheet, center);
+
+  // [COMMENT] Action purpose: The other way a mapped view changes output --
+  // moving a window across a monitor boundary. See hikari_view_evacuate().
+  hikari_foreign_toplevel_publish_output(&view->foreign_toplevel_management);
 
 #ifdef HAVE_XWAYLAND
   if (view->move != NULL) {
