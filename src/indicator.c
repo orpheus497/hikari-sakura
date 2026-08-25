@@ -5,6 +5,7 @@
 
 
 #include <hikari/configuration.h>
+#include <hikari/group.h>
 #include <hikari/mark.h>
 
 #include <hikari/sheet.h>
@@ -148,6 +149,68 @@ hikari_indicator_update_sheet(struct hikari_indicator *indicator,
   hikari_free(text);
 }
 
+/* [COMMENT] Function purpose: Paint the indicator frames of the focused view's
+GROUP siblings, and restore the two colourscheme keys that had no consumer.
+
+`grouped` and `first` were parsed, validated, documented and defaulted, and
+nothing in the tree ever read either of them -- so configuring them did nothing.
+This is where they belonged. The corroborating evidence is already in the tree:
+src/normal_mode.c brackets both indicator transitions with
+hikari_group_damage(focus_view->group), which damages every visible view in the
+focused group. That call only makes sense if showing the indicator changes how
+those views are drawn, and until now it did not.
+
+`first` marks the group's anchor -- the view hikari_group_first_view() returns,
+which is where the group-cycling actions start from -- and `grouped` marks the
+rest. The focused view itself is skipped: hikari_indicator_show() has already
+given it the `selected` frame, and overpainting it here would lose the
+distinction the three colours exist to draw. */
+static void
+show_group_frames(struct hikari_view *view)
+{
+  struct hikari_group *group = view->group;
+
+  if (group == NULL) {
+    return;
+  }
+
+  struct hikari_view *first = hikari_group_first_view(group);
+
+  struct hikari_view *sibling;
+  wl_list_for_each (sibling, &group->visible_views, visible_group_views) {
+    if (sibling == view) {
+      continue;
+    }
+
+    float *color = sibling == first ? hikari_configuration->indicator_first
+                                    : hikari_configuration->indicator_grouped;
+
+    hikari_indicator_frame_show(&sibling->indicator_frame, color);
+  }
+}
+
+/* [COMMENT] Function purpose: The exact inverse. Walks visible_views rather
+than views, matching what show_group_frames() painted -- a view that left
+visibility in between had its frame hidden by that transition already. */
+static void
+hide_group_frames(struct hikari_view *view)
+{
+  struct hikari_group *group = view->group;
+
+  if (group == NULL) {
+    return;
+  }
+
+  struct hikari_view *sibling;
+  wl_list_for_each (sibling, &group->visible_views, visible_group_views) {
+    if (sibling == view) {
+      continue;
+    }
+
+    hikari_indicator_frame_hide(&sibling->indicator_frame);
+  }
+}
+
 void
 hikari_indicator_position(
     struct hikari_indicator *indicator, struct hikari_view *view)
@@ -193,6 +256,8 @@ hikari_indicator_show(
   hikari_indicator_bar_show(&indicator->mark);
 
   hikari_indicator_frame_show(&view->indicator_frame, indicator->title.color);
+
+  show_group_frames(view);
 }
 
 /* Function purpose: Inverse of hikari_indicator_show. The bars are global to
@@ -211,5 +276,6 @@ hikari_indicator_hide(
 
   if (view != NULL) {
     hikari_indicator_frame_hide(&view->indicator_frame);
+    hide_group_frames(view);
   }
 }

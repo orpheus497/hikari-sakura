@@ -1,4 +1,5 @@
 #include <hikari/position_config.h>
+#include <hikari/config_key.h>
 
 #include <string.h>
 
@@ -86,6 +87,8 @@ parse_position(const ucl_object_t *position_obj, int *x, int *y)
 
   const ucl_object_t *cur;
   while ((cur = ucl_object_iterate_safe(it, false)) != NULL) {
+    hikari_config_warn_duplicate_key(cur, "a position block");
+
     const char *key = ucl_object_key(cur);
 
     if (!strcmp(key, "x")) {

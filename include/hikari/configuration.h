@@ -5,9 +5,11 @@
 #include <stdint.h>
 #include <wayland-util.h>
 
+#include <hikari/animation.h>
 #include <hikari/exec.h>
 #include <hikari/bar_config.h>
 #include <hikari/font.h>
+#include <hikari/layout_policy.h>
 #include <hikari/lock_config.h>
 #include <hikari/mark.h>
 
@@ -17,7 +19,23 @@ struct hikari_sheet;
 struct hikari_view;
 struct hikari_pointer_config;
 
+/* [COMMENT] Class purpose: How many positional colours the palette holds.
+Sixteen because that is the size every terminal palette, every pywal scheme and
+the hikari-topbar helper already use -- picking a different number would mean
+the desktop and the bar could not share one theme. */
+static const int HIKARI_NR_OF_PALETTE_COLORS = 16;
+
 struct hikari_configuration {
+  /* [COMMENT] Class purpose: The positional colour palette -- `color0` through
+  `color15` of the `ui { palette { ... } }` block.
+
+  It holds no meaning of its own. Every colour the compositor actually draws
+  with is one of the SEMANTIC slots below, and the palette exists so those slots
+  can be expressed as references into one place instead of sixteen literals
+  scattered through the file. A configuration that never mentions the palette is
+  unaffected: the semantic slots still accept literal hex exactly as before. */
+  float palette[16][4];
+
   float clear[4];
   float foreground[4];
   float indicator_selected[4];
@@ -45,6 +63,17 @@ struct hikari_configuration {
   /* [COMMENT] Class purpose: Lock screen appearance and blanking
   behaviour -- the `ui { lock { ... } }` block. */
   struct hikari_lock_config lock;
+
+  /* [COMMENT] Class purpose: Window motion -- the `ui { animation { ... } }`
+  block. Position only; see include/hikari/animation.h for why size is not the
+  compositor's to interpolate. */
+  struct hikari_animation_config animation;
+
+  /* [COMMENT] Class purpose: When a sheet re-tiles itself without being asked
+  -- the top-level `layout { ... }` block. Top-level and not under `ui` because
+  it governs behaviour rather than appearance, and singular so it cannot be
+  confused with `layouts`, which owns the layout registers themselves. */
+  struct hikari_layout_policy layout_policy;
 
   int border;
   int gap;

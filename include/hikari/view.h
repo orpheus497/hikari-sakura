@@ -13,6 +13,7 @@
 #include <wlr/types/wlr_output.h>
 #include <wlr/util/box.h>
 
+#include <hikari/animation.h>
 #include <hikari/border.h>
 #include <hikari/foreign_toplevel.h>
 #include <hikari/group.h>
@@ -73,6 +74,12 @@ struct hikari_view {
   struct hikari_border border;
   struct hikari_indicator_frame indicator_frame;
   struct hikari_tile *tile;
+
+  /* [COMMENT] Class purpose: In-flight position interpolation for this view's
+  scene node. Inert -- and every path behaves exactly as it did before it
+  existed -- unless `ui { animation { enabled = true } }` is set. See
+  include/hikari/animation.h. */
+  struct hikari_animation animation;
 
   struct wlr_box geometry;
   struct hikari_maximized_state *maximized_state;

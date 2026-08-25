@@ -1,8 +1,35 @@
 # Forward Strategy & Plans
 
-*Last Updated:* 2026-08-24 11:35
+*Last Updated:* 2026-08-25 08:09
 
 ## Implementations to be Fully Implemented
+
+-17. **PHASE 91 -- LAYOUTS, MOTION, PALETTE. Planned and approved 2026-08-25; WP-A/B/C/D EXECUTED the same day. Remaining: WP-B3 only, deferred by user decision.**
+
+   Four user asks. Full analysis in `DECISIONS_LOG.md` Phase 91; architecture in `BLUEPRINT.md` §18; task list and 24 user-run tests in `TODOS.md` Phase 91.
+
+   **User rulings recorded:** resize animation **deferred**; hidden views are **unhidden and added to the layout**; sequencing in procedural order, not by ease.
+
+   ### Delivered
+
+   | WP | What | State |
+   |---|---|---|
+   | A | Automatic re-tiling on map/unmap, `layout { auto }`, default false | Done |
+   | B1 | Grab anchor for move and resize modes; fixes the `border`-pixel shrink per resize entry | Done |
+   | B2 | Position animation, `ui { animation }`, default off; `node_at()` offset so input follows what is drawn | Done |
+   | B3 | **Resize animation** | **Deferred by user decision** |
+   | C | 16-colour palette; three dead colourscheme keys revived; palette handed to `hikari-topbar` | Done |
+   | D | `grid` border accounting; hidden views incorporated; config and man page rewritten | Done |
+
+   ### What remains, and why
+
+   * **WP-B3 (resize animation).** Only a stale-buffer scale is achievable, because a resize is a protocol round trip and the compositor never possesses intermediate sizes. It is visibly soft on text. **Do not build this speculatively** -- re-open only if the user asks for it after seeing position animation on hardware.
+   * **Hardware verification.** Nothing in this phase has been run. 24 tests are listed in `TODOS.md`; **T9 (map while locked), T10 (rapid opens) and T15 (click a travelling window)** are the three that exercise the reasoning the design rests on, and are the ones to run first.
+   * **The bar cannot re-theme on reload.** `hikari-topbar` is spawned once with no restart path, so a palette change reaches it only at the next compositor start. Making the bar re-readable is a separate, unscoped piece of work and was not attempted.
+
+   ### Sequencing note for whoever picks this up
+
+   The re-tile queue and the animation tick both hook paths that everything else in `view.c` converges on (`hikari_view_commit_pending_operation()` and `hikari_view_refresh_geometry()` respectively). **Both default to off**, so the risk of the hooks themselves is bounded -- but any future change to those two functions must keep the hooks, and `BLUEPRINT.md` §18 explains why each is where it is.
 
 -16. **PHASE 90 -- CLIENT-DRIVEN FULLSCREEN + TOP-BAR MEDIA OVERFLOW. Planned 2026-08-24 09:11. CYCLE 1 EXECUTED 10:09; W-A/W-B EXECUTED 11:35. Remaining: cycle 2 (W-4 XWayland + W-5 foreign-toplevel) and W-3.5, both unstarted.**
 

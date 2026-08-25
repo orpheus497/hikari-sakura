@@ -1,4 +1,5 @@
 #include <hikari/keyboard_config.h>
+#include <hikari/config_key.h>
 
 #include <assert.h>
 #include <stdio.h>
@@ -25,6 +26,8 @@ parse_xkb_rules(
 
   ucl_object_iter_t it = ucl_object_iterate_new(xkb_obj);
   while ((cur = ucl_object_iterate_safe(it, false)) != NULL) {
+    hikari_config_warn_duplicate_key(cur, "an inputs.keyboards xkb block");
+
     const char *key = ucl_object_key(cur);
 
     if (!strcmp("rules", key)) {
@@ -136,6 +139,8 @@ hikari_keyboard_config_parse(struct hikari_keyboard_config *keyboard_config,
 
   ucl_object_iter_t it = ucl_object_iterate_new(keyboard_config_obj);
   while ((cur = ucl_object_iterate_safe(it, false)) != NULL) {
+    hikari_config_warn_duplicate_key(cur, "an inputs.keyboards entry");
+
     const char *key = ucl_object_key(cur);
 
     if (!strcmp("xkb", key)) {

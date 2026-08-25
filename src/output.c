@@ -1,5 +1,6 @@
 // [COMMENT] Script function and purpose: Hikari output management, modesetting, and scene tree setup for display outputs.
 
+#include <hikari/animation.h>
 #include <hikari/output.h>
 
 #include <stdio.h>
@@ -365,6 +366,25 @@ frame_handler(struct wl_listener *listener, void *data)
     return;
   }
 
+  struct timespec now;
+  clock_gettime(CLOCK_MONOTONIC, &now);
+
+  /* [COMMENT] Action purpose: Advance window motion BEFORE the commit, so this
+  frame draws the positions this tick just computed rather than the previous
+  frame's. Inert unless `ui { animation { enabled = true } }`, in which case it
+  walks this output's views and repositions the ones still travelling.
+
+  The next frame is requested here rather than after the commit so that a failed
+  commit cannot strand an animation half way -- the early return below would
+  otherwise skip the reschedule and leave the window parked mid-flight until
+  something else damaged the output. */
+  uint32_t now_msec = (uint32_t)((uint64_t)now.tv_sec * 1000 +
+                                 (uint64_t)now.tv_nsec / 1000000);
+
+  if (hikari_animation_tick(output, now_msec)) {
+    wlr_output_schedule_frame(output->wlr_output);
+  }
+
   // [COMMENT] Action purpose: Check the commit return value so failures are
   // logged rather than silently discarded. send_frame_done is only called on
   // success to avoid advancing client buffer timestamps after a failed commit.
@@ -375,8 +395,6 @@ frame_handler(struct wl_listener *listener, void *data)
     return;
   }
 
-  struct timespec now;
-  clock_gettime(CLOCK_MONOTONIC, &now);
   wlr_scene_output_send_frame_done(scene_output, &now);
 }
 

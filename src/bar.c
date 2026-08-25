@@ -985,12 +985,58 @@ topbar_readable(int fd, uint32_t mask, void *data)
   return 0;
 }
 
+/* [COMMENT] Function purpose: Render the configured palette as the single
+argument the helper is spawned with -- sixteen "#rrggbb" values, comma
+separated.
+
+Built in the PARENT, deliberately. The only alternative that reaches a child is
+setenv(), and calling it between fork() and exec() in a process wlroots has
+given threads to is not async-signal-safe -- the same hazard the write() below
+the exec already documents. An argument is composed while it is still safe to
+compose anything.
+
+This is how the compositor's theme reaches the bar. hikari-topbar previously had
+no source of colour but ~/.cache/wal/colors, so a machine without pywal drew
+every block in white; that path is retained as the fallback, so nothing that
+worked before stops working. */
+static void
+format_palette(char *buffer, size_t size)
+{
+  size_t offset = 0;
+
+  for (int i = 0; i < HIKARI_NR_OF_PALETTE_COLORS; i++) {
+    float *color = hikari_configuration->palette[i];
+
+    int written = snprintf(buffer + offset,
+        size - offset,
+        "%s#%02x%02x%02x",
+        i == 0 ? "" : ",",
+        (unsigned)(color[0] * 255.0f + 0.5f),
+        (unsigned)(color[1] * 255.0f + 0.5f),
+        (unsigned)(color[2] * 255.0f + 0.5f));
+
+    /* [COMMENT] Action purpose: Truncation cannot happen with the buffer the
+    caller declares (16 * 7 + 15 + 1 = 128 bytes), but a silently half-written
+    palette would be a very confusing bar -- so a short buffer terminates what
+    has been written and stops rather than emitting a malformed tail. */
+    if (written < 0 || (size_t)written >= size - offset) {
+      buffer[offset] = '\0';
+      return;
+    }
+
+    offset += (size_t)written;
+  }
+}
+
 void
 hikari_topbar_source_init(struct hikari_topbar_source *source)
 {
   memset(source, 0, sizeof(*source));
   source->fd = -1;
   source->pid = -1;
+
+  char palette[160];
+  format_palette(palette, sizeof(palette));
 
   int fds[2];
   if (pipe(fds) == -1) {
@@ -1028,7 +1074,11 @@ hikari_topbar_source_init(struct hikari_topbar_source *source)
     /* [COMMENT] Action purpose: Resolve the helper through the same
     compile-time absolute prefix used for hikari-unlocker, so a modified PATH
     cannot substitute a different binary into the compositor's pipeline. */
-    execl(HIKARI_TOPBAR_PATH, "hikari-topbar", NULL);
+    /* [COMMENT] Action purpose: The palette is passed as argv[1]. The helper is
+    spawned once and never restarted, so -- like everything else it is told --
+    a palette change reaches it only on the next compositor start, not on a
+    configuration reload. */
+    execl(HIKARI_TOPBAR_PATH, "hikari-topbar", palette, NULL);
     /* [COMMENT] Action purpose: fprintf is not async-signal-safe and must not
     be used this deep post-fork/pre-exec (its internal buffering can deadlock
     on a lock left held by the parent at fork time); write() to a raw fd is. */

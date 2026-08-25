@@ -27,6 +27,7 @@ ETC_PREFIX ?= ${PREFIX}
 OBJS = \
 	action.o \
 	action_config.o \
+	animation.o \
 	binding_config.o \
 	binding_group.o \
 	bar.o \
@@ -57,6 +58,7 @@ OBJS = \
 	layer_shell.o \
 	layout.o \
 	layout_config.o \
+	layout_policy.o \
 	layout_select_mode.o \
 	lock_clock.o \
 	lock_config.o \
@@ -76,6 +78,7 @@ OBJS = \
 	pointer.o \
 	pointer_config.o \
 	position_config.o \
+	reflow.o \
 	resize_mode.o \
 	screen_capture.o \
 	server.o \

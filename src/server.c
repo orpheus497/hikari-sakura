@@ -87,6 +87,8 @@
 #include <hikari/platform.h>
 #include <hikari/pointer.h>
 #include <hikari/pointer_config.h>
+#include <hikari/animation.h>
+#include <hikari/reflow.h>
 #include <hikari/sheet.h>
 #include <hikari/switch.h>
 #include <hikari/touch.h>
@@ -540,9 +542,23 @@ node_at(double lx,
   wl_list_for_each (view, &output_workspace->views, workspace_views) {
     node = (struct hikari_node *)view;
 
+    /* [COMMENT] Action purpose: Hit-test against where the window is DRAWN, not
+    where it is headed.
+
+    hikari hit-tests through its own geometry -- surface_at() reads
+    hikari_view_geometry() -- while an animation moves the scene NODE and leaves
+    that geometry at the destination from the moment the move is committed. The
+    two therefore disagree for the length of every animation, and without this
+    correction the pointer would select and click a travelling window at its
+    final position while the user sees it somewhere else. The offset is zero
+    whenever nothing is animating, which is always unless motion is enabled. */
+    int animation_dx;
+    int animation_dy;
+    hikari_animation_offset(view, &animation_dx, &animation_dy);
+
     if (surface_at(node,
-            lx - output->geometry.x,
-            ly - output->geometry.y,
+            lx - output->geometry.x - animation_dx,
+            ly - output->geometry.y - animation_dy,
             surface,
             sx,
             sy)) {
@@ -1946,6 +1962,11 @@ hikari_server_stop(void)
   wl_list_remove(&server->session_active_listener.link);
   // [COMMENT] Action purpose: Stop the top bar helper and release its pipe and
   // event source before the event loop is destroyed.
+  /* [COMMENT] Action purpose: Drop the deferred re-tile queue before the event
+  loop is destroyed -- it may hold an armed idle source -- and before the
+  workspaces whose sheets the queue links through are torn down. */
+  hikari_reflow_fini();
+
   // [COMMENT] Action purpose: Drop the control socket and unlink its path
   // before the event loop it is registered with goes away.
   hikari_ipc_fini(server);
@@ -2447,6 +2468,23 @@ move_view(int dx, int dy)
       wlr_output_layout_output_at(hikari_server.output_layout, lx, ly);
 
   hikari_server_set_cycling();
+
+#ifdef HIKARI_DEBUG_MOVE
+  /* Action purpose: Opt-in move diagnostics, built only with
+  CFLAGS_EXTRA=-DHIKARI_DEBUG_MOVE. The lookup below is the one place in a
+  keyboard move where the SIGN of dx changes what happens, so it is printed
+  with the point it was asked about and the branch it selected. */
+  fprintf(stderr,
+      "[hikari/move-server] dx=%d dy=%d | geom={%d,%d %dx%d} | out=%s{%d,%d "
+      "%dx%d} | probe=(%.0f,%.0f) -> %s | branch=%s\n",
+      dx, dy, geometry->x, geometry->y, geometry->width, geometry->height,
+      view_output->wlr_output->name, view_output->geometry.x,
+      view_output->geometry.y, view_output->geometry.width,
+      view_output->geometry.height, lx, ly,
+      wlr_output != NULL ? wlr_output->name : "NULL(off-layout)",
+      (wlr_output == NULL || wlr_output->data == view_output) ? "move"
+                                                             : "MIGRATE");
+#endif
 
   if (wlr_output == NULL || wlr_output->data == view_output) {
     hikari_view_move(focus_view, dx, dy);

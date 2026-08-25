@@ -1179,7 +1179,7 @@ Consequences worth preserving:
 
 * A `TOP`-layer panel stacks above windows and below the lock screen with no further compositor change.
 * **Lock mode hides it automatically**, because `override_visibility()` disables the entire `top` tree -- so a panel cannot leak window titles onto a locked screen. Any future panel work must not route around this.
-* **Animation belongs to the client.** `wlr_scene` has no animation facility and hikari adds none; a sliding panel slides by moving or resizing its own surface.
+* **Panel animation belongs to the client.** `wlr_scene` has no animation facility; a sliding panel slides by moving or resizing its own surface. **Amended 2026-08-25 (Phase 91):** hikari now animates the POSITION of its own managed views (`src/animation.c`, section 18) -- that facility is scoped to `hikari_view` scene trees and does not extend to layer surfaces, so the rule for panels is unchanged. The original wording said hikari "adds none", which is no longer true and would mislead.
 * A compositor-side panel is the rejected alternative: it would need its own cairo/Pango rendering and input routing, growing the compositor for something the existing protocols already permit.
 * **A panel will cover fullscreen video** until FS-2 is built (`PLANS.md` item -16). Phase 90 hides only the native top bar; a `TOP`-layer client still stacks above a fullscreen view. **Gate FS-2 on this work and do not ship the panel without it.**
 
@@ -1225,3 +1225,58 @@ Four request paths, and **two of them have no handler at all**:
 ### Scope boundary
 
 Phase 90 covers the **native top bar only**. Layer-shell `TOP`/`OVERLAY` surfaces still stack above a fullscreen view -- tracked as **FS-2** in `PLANS.md` item -16, deferred because no such client runs on this system today. **The blocker for FS-2 is not lock safety** (verified: `override_visibility()` disables the whole `top` tree, and `layers.lock` sits above `top` regardless) **but the map-time layer derivation at `view.c:1160-1167`**, which re-derives a view's parent on every map and would silently drop a remapped fullscreen view back into `layers.views`.
+
+---
+
+## 18. Automatic Re-Tiling and Window Motion (added 2026-08-25, Phase 91)
+
+*Written because both features have a non-obvious ordering constraint that the obvious implementation gets wrong, and because section 16 previously stated as absolute a rule that this phase narrows.*
+
+### 18.1 Why a re-tile cannot be performed where it is requested
+
+`hikari_view_is_tileable()` is false for a **dirty** view, and a view is dirty from the moment a resize is queued until the client acks the configure. A newly mapped window is therefore dirty at exactly the moment something would want to fold it into a layout.
+
+The consequence is specific and silent:
+
+| If the re-tile ran... | ...then |
+|---|---|
+| synchronously in `hikari_view_map()` | `scan_next_tileable_view()` skips the new view; every OTHER window is laid out and the one that triggered it is not |
+| synchronously in `hikari_sheet_apply_split()` | the early-return at the top of that function refuses outright while any tile is dirty, so nothing happens at all |
+
+Both are timing-dependent, so both would present as "automatic tiling works sometimes".
+
+**The design is therefore request-and-drain.** Callers only ever *request* (`hikari_reflow_schedule()`); an idle source drains what it can; anything deferred is retried from `hikari_reflow_settle()`, called once from `hikari_view_commit_pending_operation()` -- the single point every geometry operation in `view.c` converges on, and the same convergence argument sections 15 and 17 already rely on.
+
+**Invariants the queue depends on:**
+
+* The queue link lives **in the sheet** (`hikari_sheet.reflow_pending`) and is self-linked when idle. That makes scheduling idempotent with no separate flag, and it makes `hikari_workspace_fini()` obliged to call `hikari_reflow_cancel()` -- a freed sheet left queued leaves the static list head pointing into freed memory.
+* `drain()` **clears `idle_source` first**. libwayland destroys an idle source as part of dispatching it, so the stored pointer is dangling on entry, and `reflow()` re-enters `hikari_reflow_settle()` through the commits it causes.
+* A deferred sheet is **left queued and NOT re-armed from inside the handler**. Re-arming there is a busy loop that starves the event loop while a client takes its time acking.
+* **Lock mode drops requests rather than deferring them.** Lock mode forces every view while flagging it hidden, and `hikari_view_show()` asserts `!hikari_view_is_forced(view)`. This is the Phase 89 `can_act()` hazard and the Phase 90 `src/ipc.c` hazard for the third time; the guard is in `drain()`, and `hikari_view_map()` additionally only schedules on its non-locked branch.
+
+### 18.2 Why animation is position-only
+
+A resize is a **protocol round trip**: `view->resize()` returns a serial, the view goes dirty, and the client redraws when it gets to it. There is no sequence of intermediate sizes in the compositor's possession -- only the client's old buffer and then its new one. A "resize animation" is therefore necessarily a scale of a stale buffer, which is visibly soft on text. **Deferred by user decision, 2026-08-25.** Position has no such problem: a view's scene tree is positioned by the compositor alone.
+
+**The load-bearing detail is that hikari does not hit-test through the scene graph.** `node_at()` -> `surface_at()` -> `hikari_view_geometry()` reads hikari's own geometry, which an animation leaves at the *destination* from the moment the move commits. Moving the scene node without telling the hit test would put the pointer where the window is not, for the length of every animation. `hikari_animation_offset()` exists for that and `node_at()` applies it; it returns zero when nothing is animating, which is always unless motion is enabled.
+
+Borders and indicator frames need no animation of their own: they are children of the same scene tree and are positioned relative to it (`hikari_border_refresh_geometry()` is explicit about this), so they travel with the window.
+
+**Animation is refused, and the caller places the node instantly, when:** the configuration disables it, duration is 0, the view has never been placed (otherwise every map flies in from the output origin), the view has no scene node or output, the view is hidden, the compositor is in lock mode, or the compositor is in **move or resize mode** -- an interactive drag must track the pointer exactly, and lagging behind it is the very complaint this phase was opened to fix.
+
+### 18.3 New modules
+
+| File | Owns |
+|---|---|
+| `src/layout_policy.c` | `layout { ... }` defaults and register resolution. Distinct from `layout_config.c`, which owns the registers themselves. |
+| `src/reflow.c` | The deferred re-tile queue. Static list head, one idle source. |
+| `src/animation.c` | Per-view position interpolation, easing, and the per-frame tick driven from `frame_handler()` in `src/output.c`. |
+
+### 18.4 The colour palette
+
+`ui { palette { color0..color15 } }` holds **no meaning**. Every colour drawn with is one of the nine semantic slots, and each is a reference into the palette so the two cannot disagree about what the default theme is. Two consequences worth keeping:
+
+* A palette entry may **not** reference another entry (`parse_color()` is passed a NULL configuration from `parse_palette()`), because that would make the file's meaning depend on key order.
+* The palette is resolved by an explicit `ucl_object_lookup()` **before** `parse_ui()`'s iteration, the same idiom `hikari_configuration_load()` uses for `actions` and `layouts`, and for the same reason.
+
+Three colourscheme keys -- `foreground`, `grouped`, `first` -- were parsed, validated, documented in `hikari(1)` and **read by nothing** before this phase. They are now wired to the sites the man page already described. The corroborating evidence that this was the intended home was already in the tree: `src/normal_mode.c` brackets both indicator transitions with `hikari_group_damage(focus_view->group)`, a call that only makes sense if showing the indicator changes how the focused group's views are drawn -- and until now it did not.

@@ -175,7 +175,19 @@ hikari_indicator_bar_update(struct hikari_indicator_bar *indicator_bar,
   cairo_set_line_width(cairo, 1);
   cairo_stroke(cairo);
 
-  cairo_set_source_rgba(cairo, 0, 0, 0, 1);
+  /* [COMMENT] Action purpose: The indicator's text colour, and the only
+  consumer of the `foreground` colourscheme key.
+
+  This was a hardcoded opaque black, which is exactly what `foreground`
+  defaulted to (0x000000) -- so the key parsed, validated and documented a
+  colour that nothing ever read, and setting it did nothing at all. Reading it
+  here restores the meaning the key always claimed to have and changes no
+  default appearance. The stroke above deliberately keeps using
+  `border_inactive`: that is the bar's outline, not its text. */
+  float *foreground = hikari_configuration->foreground;
+  cairo_set_source_rgba(
+      cairo, foreground[0], foreground[1], foreground[2], foreground[3]);
+
   pango_layout_set_font_description(layout, font->desc);
   cairo_move_to(cairo, 4, 4);
   pango_layout_set_text(layout, text, -1);
