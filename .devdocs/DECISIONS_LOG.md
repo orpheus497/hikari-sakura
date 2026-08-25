@@ -1,3 +1,123 @@
+## [2026-08-25 10:23] Phase 91 follow-up: an FB-4-class error in the duplicate-key diagnostic, of my own making
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
+
+**The finding was valid and the comment I wrote was false.** `include/hikari/config_key.h` claimed *"ucl_object_tostring_forced() returns NULL for an object or an array"*, and the rendering was gated on that NULL. I asserted it without checking. Probed against the libucl this actually builds on (0.9.4):
+
+| type | `ucl_object_tostring_forced()` |
+|---|---|
+| UCL_STRING | `hello` |
+| UCL_INT / UCL_FLOAT | `42` / `1.500000` |
+| UCL_BOOLEAN | `true` |
+| UCL_NULL | `null` |
+| **UCL_OBJECT** | **`object`** |
+| **UCL_ARRAY** | **`array`** |
+
+It never returns NULL. So a duplicated *nested block* -- two `outputs` entries for the same monitor, two `views` rules for the same `app_id` -- printed:
+
+```
+configuration warning: "eDP-1" is set 2 times in outputs -- hikari uses the first and ignores the rest
+    in effect: object
+    ignored:   object
+```
+
+**Not merely a stale comment: a real defect.** Those two lines say nothing about the values, describe the type instead, and read like a fault in hikari rather than in the user's configuration -- in a diagnostic whose entire purpose is to make a silent mistake legible. Worse than printing nothing.
+
+**Fixed by gating on `ucl_object_type()` rather than on a return value.** A `config_key_is_renderable()` helper admits the scalars (STRING, INT, FLOAT, BOOLEAN, TIME, NULL) and excludes the containers. `UCL_USERDATA` is excluded with them: nothing in a configuration file can produce one, so whatever it renders is not something the user wrote. The warning line itself still fires for containers -- that is the actionable half, and the key in it identifies the block perfectly well.
+
+**The lesson is the one this project keeps re-learning.** FB-4 was carried as an open CRITICAL blocker for ~60 phases because a recorded claim was never re-checked; the `HIKARI_BAR_MAX_BLOCK_WIDTH` and `HIKARI_BAR_PADDING` comments in Phase 90 were the same shape. This one was written *and shipped in the same session* as the code it described. **A comment asserting the behaviour of a dependency is a claim, and a claim needs a probe.** The two probes that established libucl's chaining behaviour were written for this very file, one turn earlier -- and I did not extend them to the function I was about to depend on.
+
+### Verification
+
+* Type table above established by probe against libucl 0.9.4.
+* Duplicated nested blocks and duplicated arrays: warning fires, values correctly omitted.
+* Duplicated scalars: strings, integers and booleans all still render (`#111111`/`#222222`, `1`/`7`, `false`/`true`, `action-notifications`/`view-raise`).
+* **31 of 31 sites still reachable**; shipped config still silent; no false positive on arrays or nested splits.
+* **All three build configurations clean** -- release, `DEBUG=YES` (`-Werror`), `WITH_ALL=NO`. 71 units, both binaries link.
+
+## [2026-08-25 10:08] Phase 91 follow-up: the silent-duplicate-key footgun closed
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
+
+The `L+n` collision fixed earlier was a symptom. **The compositor discarded a duplicated configuration key without saying anything, anywhere, in any section** -- so the mistake was undiagnosable by construction. Closed at the source rather than at the one site that happened to hit it.
+
+### What libucl actually does, established by probe rather than assumed
+
+Three behaviours were plausible -- reject, last-wins, first-wins -- and the fix depends on which. A probe against real libucl 0.9.4 settled it:
+
+* A repeated key builds an **implicit chain** off the first object via `->next`. Three occurrences of `L+n` gave a chain of three.
+* `ucl_object_iterate_safe()` yields **only the head of that chain, and `expand_values` does not change it** -- that argument governs arrays proper. So every parser in the tree sees the first value and is *structurally incapable* of seeing the rest, whatever it does with the object. This is why raising it in one parser would have been useless.
+* `obj->next != NULL` is therefore the detection, and it is a public field.
+
+**The false-positive risk was checked, not waved past.** Real array elements could plausibly have chained the same way, which would have made the check fire on every `inherit = [ ... ]`. A second probe showed array elements carry **neither a key nor a chain**. Both are tested anyway, so the helper is safe to call from any iteration without the caller knowing which kind it walks.
+
+### Warn, not reject -- and the reasoning is not symmetry with the other errors
+
+Every other configuration mistake here is fatal: unknown key, unknown action, out-of-range value. A duplicate is deliberately not, on two grounds. It produces a configuration that is coherent and runs; and a config that has quietly carried a duplicate for months would otherwise **stop the desktop from starting on the next upgrade**. Turning a cosmetic mistake into a non-booting session is a worse outcome than the silence being fixed. Loud is the fix; fatal would be a regression.
+
+The message names the location, the count, what took effect and what was dropped -- because the count alone does not tell the user which of the two they are running:
+
+```
+configuration warning: "L+n" is set 2 times in bindings.keyboard -- hikari uses the first and ignores the rest
+    in effect: action-notifications
+    ignored:   workspace-switch-to-sheet-next-inhabited
+```
+
+### Applied everywhere, on purpose
+
+`include/hikari/config_key.h`, header-only `static inline` in the idiom of `color.h` and `geometry.h`, so no new object and no Makefile change. Called at **all 31 key-iteration sites across five files** -- `configuration.c` (27), `keyboard_config.c` (2), `position_config.c` (1), `view_config.c` (1).
+
+Covering only bindings was considered and rejected: *some sections warn and some do not* is a worse footgun than uniform silence, because it teaches the user that no warning means no duplicate. The one site deliberately left alone is `view_config.c`'s `inherit` **array** iteration -- a duplicate `inherit` key is caught by the enclosing object loop, and the array's own elements have no keys to duplicate.
+
+### Verification
+
+* **All 31 sites proven reachable** by a coverage suite that plants a duplicate in each block and asserts the reported context: 31 reachable, 0 unreachable, every context string correct.
+* No false positive on arrays, nested splits, or the shipped configuration (silent).
+* **All three build configurations clean** -- release, `DEBUG=YES` (`-Werror`, asserts live), and `WITH_ALL=NO`. 71 units, 0 warnings, both binaries link.
+* Man page renders (1920 lines of roff).
+
+Documented in `hikari(1)` (new *Duplicate keys* subsection, including the note that warnings go to stderr and a display-manager session may discard them -- `HIKARI_LOG` captures it) and in the shipped `hikari.conf` header.
+
+**A note for the next reader:** `parse_gestures()` passes `expand_values = true` while every other site passes `false`. The probe shows this makes no difference for object keys, so the asymmetry is cosmetic rather than behavioural -- but it is the kind of thing that looks meaningful and is not.
+
+## [2026-08-25 09:58] Phase 91 follow-up: four review findings, all verified valid and fixed
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
+
+Four findings were raised against the tree. **All four were checked against current code before any edit**; none was taken on trust. All four proved valid, though two were more serious than their descriptions suggested and one was less so.
+
+### 1. `hikari.conf` -- the media comment described commands that are no longer there
+
+The comment said *"FreeBSD uses `mixer` for volume"* while the commands beneath it were `pactl`. The user had swapped them; the prose was not updated. Corrected -- and corrected accurately rather than minimally: `pactl` is the *portable* half (PulseAudio/PipeWire, FreeBSD and Linux alike) and `backlight` is the FreeBSD-specific half, so the old "port these to Linux with wpctl/pamixer" advice was backwards for volume. The `mixer` fallback is retained as a commented alternative for a machine running neither sound server. **FB-4 class: prose that stopped being true and was left standing.**
+
+### 2. `hikari.conf` -- `L+n` bound twice, and the second binding was silently dead
+
+`"L+n" = action-notifications` (the user's) and `"L+n" = workspace-switch-to-sheet-next-inhabited` (mine, from the Phase 91 rewrite) were both in the same keyboard block.
+
+**Established empirically rather than assumed**, because the outcome determines the severity and there are three plausible behaviours (reject, last-wins, first-wins). A pair of probe configs -- duplicate key with an invalid action in first then second position -- showed **the first occurrence is parsed and the second is silently ignored, with no diagnostic**. So notifications worked and sheet-switching did nothing, which is exactly the sort of thing that never gets reported as a bug.
+
+**The user's binding is left alone; mine moves.** Both directions moved together (`L+bracketright` / `L+bracketleft`) rather than only the conflicting one, because `n`/`b` were chosen for adjacency and splitting the pair would leave the config a worse piece of documentation than it was. Bracket keysyms were **verified to resolve**, with an invalid-keysym control proving the check is live and not merely permissive.
+
+### 3. `src/animation.c` -- `hikari_animation_offset()` recomputed instead of reporting
+
+This was the substantive one, and worse than the finding stated. `hikari_animation_offset()` called `current_position(..., now_msec())` -- the interpolated position *for this instant*, which answers "where would the window be if a frame were drawn right now". The scene node is not there: it is where the last tick put it, and does not move until the next frame.
+
+**Quantified rather than argued.** For an 800px move over 120 ms with the default ease-out, sampled one 60 Hz frame after the tick: **279px of error at the start of the animation, 35% of the whole journey.** An eased curve is fastest early, so the error is worst exactly when the window is most obviously moving. Hit-testing against that value would miss a travelling window by a large fraction of its travel -- which is precisely the desynchronisation this function exists to prevent.
+
+Fixed by recording the placement (`drawn_x`/`drawn_y`) at the four sites that actually move the node: the instant-placement path, the tick, and cancellation. **The retarget origin now reads it too** -- previously it departed from the recomputed position, so a mid-flight retarget made the window jump forward by up to a frame of travel before setting off. The finding did not mention that second consequence.
+
+Validity of `drawn_*` is structural, not incidental: it is written on the only path that sets `placed`, and every read is gated behind `placed` (via `may_animate()`) or `active` (which can only be set after `may_animate()` passed).
+
+### 4. `src/view.c` -- an unmap could strand a deferred re-tile
+
+Valid, and the mechanism is worth recording. `hikari_reflow_schedule()` returns early when the sheet is *already* queued, and deliberately does not re-arm -- so a sheet whose drain was deferred stays queued. Every other path that stops a view blocking a re-tile passes through `hikari_view_commit_pending_operation()`, which settles. **An unmap does not**: it drops the view from the sheet and clears its dirty flag directly. So the drain would hang until some unrelated view happened to commit. One `hikari_reflow_settle()` after the unlink closes it; it is a `wl_list_empty()` test when nothing is queued.
+
+### Verification
+
+71 units rebuilt, 0 warnings, both binaries link. Shipped config accepted by hikari's own `hikari_configuration_load()`. Bracket keysyms confirmed resolvable against an invalid-keysym control. No duplicate keys remain anywhere in the bindings block. `hikari_animation_offset()` unit-tested against the real `animation.o` -- exact-equality on the reported offset, zero when idle and when settled, and the removed divergence tabulated frame by frame.
+
+**Still unverified on hardware:** all of it, as before. Findings 3 and 4 are on paths that only execute with `ui { animation { enabled = true } }` and `layout { auto = true }` respectively, both of which ship off.
+
 ## [2026-08-25 09:06] Phase 91: USER REPORTS IT WORKING ON HARDWARE
 
 *(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*

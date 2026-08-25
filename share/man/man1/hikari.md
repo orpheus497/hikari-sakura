@@ -171,6 +171,28 @@ restart of the compositor to apply.
 On startup **hikari** attempts to execute _~/.config/hikari/autostart_ to
 autostart applications.
 
+Duplicate keys
+--------------
+libucl neither merges a key that is written twice nor rejects it -- it keeps
+both values, and **hikari** reads only the first. The second therefore has no
+effect at all, which is easy to do by accident when two parts of a configuration
+both claim the same binding.
+
+Rather than fail the whole configuration over it -- which would stop a desktop
+that had quietly carried a duplicate for months from starting -- **hikari**
+reports it on standard error and carries on:
+
+```
+configuration warning: "L+n" is set 2 times in bindings.keyboard -- hikari uses the first and ignores the rest
+    in effect: action-notifications
+    ignored:   workspace-switch-to-sheet-next-inhabited
+```
+
+This applies to every section, not only bindings. If something configured
+appears to have no effect, check the startup output first. Note that warnings go
+to standard error, which a session started from a display manager may discard --
+see `HIKARI_LOG` in **start-hikari** to capture it.
+
 Environment Variables
 ---------------------
 

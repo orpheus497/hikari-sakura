@@ -36,6 +36,8 @@ hikari_animation_init(struct hikari_animation *animation)
   animation->from_y = 0;
   animation->to_x = 0;
   animation->to_y = 0;
+  animation->drawn_x = 0;
+  animation->drawn_y = 0;
   animation->start_msec = 0;
 }
 
@@ -169,6 +171,14 @@ hikari_animation_move(struct hikari_view *view, int x, int y)
     animation->to_x = x;
     animation->to_y = y;
 
+    /* [COMMENT] Action purpose: The caller places the node at (x, y) the moment
+    this returns false, so that is where it will be drawn. Recorded here because
+    `drawn_*` is only ever a record of an actual placement -- and because this is
+    the path that first sets `placed`, it is what makes `drawn_*` valid for every
+    later read. */
+    animation->drawn_x = x;
+    animation->drawn_y = y;
+
     return false;
   }
 
@@ -181,13 +191,14 @@ hikari_animation_move(struct hikari_view *view, int x, int y)
   /* [COMMENT] Action purpose: Retarget from where the view is DRAWN, not from
   where it was headed. A second move arriving mid-flight -- two windows closing
   in quick succession, say -- would otherwise restart from the previous target
-  and visibly jump backwards before setting off again. */
-  int current_x;
-  int current_y;
-  current_position(animation, at_msec, &current_x, &current_y);
+  and visibly jump backwards before setting off again.
 
-  animation->from_x = current_x;
-  animation->from_y = current_y;
+  `drawn_*` and not a fresh current_position(): the node is wherever the last
+  tick left it, and the interpolated position for *now* is up to a frame further
+  along than that. Departing from the latter makes the window jump forward by
+  that much at the instant of retargeting. */
+  animation->from_x = animation->drawn_x;
+  animation->from_y = animation->drawn_y;
   animation->to_x = x;
   animation->to_y = y;
   animation->start_msec = at_msec;
@@ -214,12 +225,13 @@ hikari_animation_offset(struct hikari_view *view, int *dx, int *dy)
     return;
   }
 
-  int current_x;
-  int current_y;
-  current_position(animation, now_msec(), &current_x, &current_y);
-
-  *dx = current_x - animation->to_x;
-  *dy = current_y - animation->to_y;
+  /* [COMMENT] Action purpose: Read the recorded placement rather than
+  recomputing one for the current instant. The scene node is where the last tick
+  put it and will not move until the next frame, so that -- and only that -- is
+  the position a pointer is actually over. See the `drawn_*` comment in
+  animation.h for why the difference is large rather than academic. */
+  *dx = animation->drawn_x - animation->to_x;
+  *dy = animation->drawn_y - animation->to_y;
 }
 
 bool
@@ -264,6 +276,11 @@ hikari_animation_tick(struct hikari_output *output, uint32_t at_msec)
     wlr_scene_node_set_position(view->scene_node,
         current_x + output->geometry.x,
         current_y + output->geometry.y);
+
+    // [COMMENT] Action purpose: Record the placement immediately after making
+    // it, so hit testing this frame reads exactly what this frame drew.
+    animation->drawn_x = current_x;
+    animation->drawn_y = current_y;
   }
 
   return running;
@@ -286,5 +303,10 @@ hikari_animation_cancel(struct hikari_view *view)
     wlr_scene_node_set_position(view->scene_node,
         animation->to_x + view->output->geometry.x,
         animation->to_y + view->output->geometry.y);
+
+    // [COMMENT] Action purpose: Cancelling finishes the move at its target, so
+    // that is now where the node is drawn.
+    animation->drawn_x = animation->to_x;
+    animation->drawn_y = animation->to_y;
   }
 }

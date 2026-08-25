@@ -1420,6 +1420,18 @@ hikari_view_unmap(struct hikari_view *view)
 
   hikari_view_unset_dirty(view);
 
+  /* [COMMENT] Action purpose: Re-arm the deferred re-tile, now that this view
+  has left the sheet and dropped its dirty flag.
+
+  Necessary because an unmap is the one way a view stops blocking a re-tile
+  WITHOUT passing through hikari_view_commit_pending_operation(), which is where
+  every other path settles. A sheet whose drain was deferred on this view is
+  still queued, and hikari_reflow_schedule() above returns early precisely
+  because it is -- so nothing would re-arm the idle source, and the re-tile would
+  hang until some unrelated view happened to commit. Cheap: it returns
+  immediately when nothing is queued. */
+  hikari_reflow_settle();
+
   /* [COMMENT] Action purpose: Last, once every list this view was in has been
   left, so the walk in hikari_bar_update_visibility() cannot still see it. A
   fullscreen window that is closed rather than un-fullscreened reaches the bar

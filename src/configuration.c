@@ -15,6 +15,7 @@
 #include <hikari/binding.h>
 #include <hikari/binding_config.h>
 #include <hikari/color.h>
+#include <hikari/config_key.h>
 #include <hikari/command.h>
 #include <hikari/exec.h>
 #include <hikari/geometry.h>
@@ -91,6 +92,8 @@ parse_container(
 
   ucl_object_iter_t it = ucl_object_iterate_new(container_obj);
   while ((cur = ucl_object_iterate_safe(it, false)) != NULL) {
+    hikari_config_warn_duplicate_key(cur, "a layout container");
+
     const char *key = ucl_object_key(cur);
 
     if (!strcmp(key, "layout")) {
@@ -385,6 +388,8 @@ done:
     ucl_object_iter_t it = ucl_object_iterate_new(name##_obj);                 \
                                                                                \
     while ((cur = ucl_object_iterate_safe(it, false)) != NULL) {               \
+      hikari_config_warn_duplicate_key(cur, "a layout split");                 \
+                                                                               \
       const char *key = ucl_object_key(cur);                                   \
                                                                                \
       if (!strcmp(key, "scale")) {                                             \
@@ -664,6 +669,8 @@ parse_palette(
 
   const ucl_object_t *cur;
   while ((cur = ucl_object_iterate_safe(it, false)) != NULL) {
+    hikari_config_warn_duplicate_key(cur, "ui.palette");
+
     const char *key = ucl_object_key(cur);
     int index;
 
@@ -698,6 +705,8 @@ parse_colorscheme(struct hikari_configuration *configuration,
   ucl_object_iter_t it = ucl_object_iterate_new(colorscheme_obj);
 
   while ((cur = ucl_object_iterate_safe(it, false)) != NULL) {
+    hikari_config_warn_duplicate_key(cur, "ui.colorscheme");
+
     const char *key = ucl_object_key(cur);
 
     if (!strcmp("selected", key)) {
@@ -778,6 +787,8 @@ parse_execute(
 
   ucl_object_iter_t it = ucl_object_iterate_new(obj);
   while ((cur = ucl_object_iterate_safe(it, false)) != NULL) {
+    hikari_config_warn_duplicate_key(cur, "marks");
+
     key = ucl_object_key(cur);
 
     struct hikari_exec *execute = NULL;
@@ -825,6 +836,8 @@ parse_view_configs(
 
   const ucl_object_t *cur;
   while ((cur = ucl_object_iterate_safe(it, false)) != NULL) {
+    hikari_config_warn_duplicate_key(cur, "views");
+
     struct hikari_view_config *view_config =
         hikari_malloc(sizeof(struct hikari_view_config));
 
@@ -904,6 +917,8 @@ parse_actions(
   const ucl_object_t *cur;
   ucl_object_iter_t it = ucl_object_iterate_new(actions_obj);
   while ((cur = ucl_object_iterate_safe(it, false)) != NULL) {
+    hikari_config_warn_duplicate_key(cur, "actions");
+
     const char *key = ucl_object_key(cur);
     const char *command;
 
@@ -953,6 +968,8 @@ parse_layouts(
   const ucl_object_t *cur;
   ucl_object_iter_t it = ucl_object_iterate_new(layouts_obj);
   while ((cur = ucl_object_iterate_safe(it, false)) != NULL) {
+    hikari_config_warn_duplicate_key(cur, "layouts");
+
     const char *key = ucl_object_key(cur);
 
     if (strlen(key) > 1 ||
@@ -997,6 +1014,8 @@ parse_layout_policy(
   ucl_object_iter_t it = ucl_object_iterate_new(layout_obj);
 
   while ((cur = ucl_object_iterate_safe(it, false)) != NULL) {
+    hikari_config_warn_duplicate_key(cur, "layout");
+
     const char *key = ucl_object_key(cur);
 
     if (!strcmp(key, "auto") || !strcmp(key, "reflow-on-close")) {
@@ -1114,6 +1133,8 @@ parse_keyboard_bindings(struct hikari_configuration *configuration,
 
   ucl_object_iter_t it = ucl_object_iterate_new(bindings_obj);
   while ((cur = ucl_object_iterate_safe(it, false)) != NULL) {
+    hikari_config_warn_duplicate_key(cur, "bindings.keyboard");
+
     const char *key = ucl_object_key(cur);
 
     binding_config = hikari_malloc(sizeof(struct hikari_binding_config));
@@ -1170,6 +1191,8 @@ parse_mouse_bindings(struct hikari_configuration *configuration,
 
   ucl_object_iter_t it = ucl_object_iterate_new(bindings_obj);
   while ((cur = ucl_object_iterate_safe(it, false)) != NULL) {
+    hikari_config_warn_duplicate_key(cur, "bindings.mouse");
+
     const char *key = ucl_object_key(cur);
 
     binding_config = hikari_malloc(sizeof(struct hikari_binding_config));
@@ -1204,6 +1227,8 @@ parse_bindings(struct hikari_configuration *configuration,
 
   ucl_object_iter_t it = ucl_object_iterate_new(bindings_obj);
   while ((cur = ucl_object_iterate_safe(it, false)) != NULL) {
+    hikari_config_warn_duplicate_key(cur, "bindings");
+
     const char *key = ucl_object_key(cur);
 
     if (!strcmp(key, "keyboard")) {
@@ -1240,6 +1265,8 @@ parse_pointer_config(struct hikari_pointer_config *pointer_config,
 
   ucl_object_iter_t it = ucl_object_iterate_new(pointer_config_obj);
   while ((cur = ucl_object_iterate_safe(it, false)) != NULL) {
+    hikari_config_warn_duplicate_key(cur, "an inputs.pointers entry");
+
     const char *key = ucl_object_key(cur);
 
     if (!strcmp(key, "accel")) {
@@ -1445,6 +1472,8 @@ parse_pointers(struct hikari_configuration *configuration,
 
   const ucl_object_t *cur;
   while ((cur = ucl_object_iterate_safe(it, true)) != NULL) {
+    hikari_config_warn_duplicate_key(cur, "inputs.pointers");
+
     const char *pointer_name = ucl_object_key(cur);
 
     pointer_config = hikari_malloc(sizeof(struct hikari_pointer_config));
@@ -1487,6 +1516,8 @@ parse_keyboards(struct hikari_configuration *configuration,
 
   ucl_object_iter_t it = ucl_object_iterate_new(keyboards_obj);
   while ((cur = ucl_object_iterate_safe(it, true)) != NULL) {
+    hikari_config_warn_duplicate_key(cur, "inputs.keyboards");
+
     const char *keyboard_name = ucl_object_key(cur);
 
     keyboard_config = hikari_malloc(sizeof(struct hikari_keyboard_config));
@@ -1532,6 +1563,8 @@ parse_switches(struct hikari_configuration *configuration,
 
   ucl_object_iter_t it = ucl_object_iterate_new(switches_obj);
   while ((cur = ucl_object_iterate_safe(it, true)) != NULL) {
+    hikari_config_warn_duplicate_key(cur, "inputs.switches");
+
     const char *key = ucl_object_key(cur);
 
     switch_config = hikari_malloc(sizeof(struct hikari_switch_config));
@@ -1567,6 +1600,8 @@ parse_gestures(struct hikari_configuration *configuration,
 
   ucl_object_iter_t it = ucl_object_iterate_new(gestures_obj);
   while ((cur = ucl_object_iterate_safe(it, true)) != NULL) {
+    hikari_config_warn_duplicate_key(cur, "inputs.gestures");
+
     const char *key = ucl_object_key(cur);
 
     gesture_binding_config =
@@ -1609,6 +1644,8 @@ parse_inputs(
 
   const ucl_object_t *cur;
   while ((cur = ucl_object_iterate_safe(it, true)) != NULL) {
+    hikari_config_warn_duplicate_key(cur, "inputs");
+
     const char *key = ucl_object_key(cur);
 
     if (!strcmp(key, "pointers")) {
@@ -1655,6 +1692,8 @@ parse_background(const ucl_object_t *background_obj,
 
   const ucl_object_t *cur;
   while ((cur = ucl_object_iterate_safe(it, true)) != NULL) {
+    hikari_config_warn_duplicate_key(cur, "an outputs background");
+
     const char *key = ucl_object_key(cur);
     if (!strcmp(key, "path")) {
       has_background = true;
@@ -1712,6 +1751,8 @@ parse_output_config(struct hikari_output_config *output_config,
 
   const ucl_object_t *cur;
   while ((cur = ucl_object_iterate_safe(it, true)) != NULL) {
+    hikari_config_warn_duplicate_key(cur, "an outputs entry");
+
     const char *key = ucl_object_key(cur);
 
     if (!strcmp(key, "background")) {
@@ -1783,6 +1824,8 @@ parse_outputs(
 
   const ucl_object_t *cur;
   while ((cur = ucl_object_iterate_safe(it, true)) != NULL) {
+    hikari_config_warn_duplicate_key(cur, "outputs");
+
     const char *output_name = ucl_object_key(cur);
 
     output_config = hikari_malloc(sizeof(struct hikari_output_config));
@@ -1914,6 +1957,8 @@ parse_lock_blur(
 
   const ucl_object_t *cur;
   while ((cur = ucl_object_iterate_safe(it, false)) != NULL) {
+    hikari_config_warn_duplicate_key(cur, "ui.lock.blur");
+
     const char *key = ucl_object_key(cur);
 
     if (!strcmp(key, "radius") || !strcmp(key, "passes")) {
@@ -1956,6 +2001,8 @@ parse_bar(struct hikari_bar_config *bar_config, const ucl_object_t *bar_obj)
 
   const ucl_object_t *cur;
   while ((cur = ucl_object_iterate_safe(it, false)) != NULL) {
+    hikari_config_warn_duplicate_key(cur, "ui.bar");
+
     const char *key = ucl_object_key(cur);
 
     if (!strcmp(key, "max-block-chars")) {
@@ -2033,6 +2080,8 @@ parse_lock(
 
   const ucl_object_t *cur;
   while ((cur = ucl_object_iterate_safe(it, false)) != NULL) {
+    hikari_config_warn_duplicate_key(cur, "ui.lock");
+
     const char *key = ucl_object_key(cur);
 
     if (!strcmp(key, "blur")) {
@@ -2142,6 +2191,8 @@ parse_animation(
   ucl_object_iter_t it = ucl_object_iterate_new(animation_obj);
 
   while ((cur = ucl_object_iterate_safe(it, false)) != NULL) {
+    hikari_config_warn_duplicate_key(cur, "ui.animation");
+
     const char *key = ucl_object_key(cur);
 
     if (!strcmp(key, "enabled")) {
@@ -2225,6 +2276,8 @@ parse_ui(struct hikari_configuration *configuration, const ucl_object_t *ui_obj)
 
   const ucl_object_t *cur;
   while ((cur = ucl_object_iterate_safe(it, false)) != NULL) {
+    hikari_config_warn_duplicate_key(cur, "ui");
+
     const char *key = ucl_object_key(cur);
 
     if (!strcmp(key, "palette")) {
@@ -2338,6 +2391,8 @@ hikari_configuration_load(
   }
 
   while ((cur = ucl_object_iterate_safe(it, false)) != NULL) {
+    hikari_config_warn_duplicate_key(cur, "the configuration");
+
     const char *key = ucl_object_key(cur);
 
     if (!strcmp(key, "ui")) {

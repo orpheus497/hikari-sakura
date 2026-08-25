@@ -59,6 +59,25 @@ struct hikari_animation {
   int to_x;
   int to_y;
 
+  /* [COMMENT] Class purpose: Where the scene node was LAST ACTUALLY PLACED, in
+  output-local coordinates -- written by whoever moved it, never derived.
+
+  This is what hikari_animation_offset() reports against, and it must be a
+  record rather than a recomputation. The interpolated position is a function of
+  the clock, so asking for it at an arbitrary moment answers "where the window
+  would be if a frame were drawn right now" -- which is not where it is. Between
+  frames those differ by a whole frame of travel, and an eased curve is at its
+  fastest early: over a 120 ms move the first 16 ms can cover a third of the
+  distance. Hit-testing against the recomputed value would therefore miss a
+  travelling window by a large fraction of its journey, which is precisely the
+  desynchronisation hikari_animation_offset() exists to prevent.
+
+  Also used as the origin when a move is retargeted mid-flight, for the same
+  reason: the window departs from where it is drawn, not from where the clock
+  says it should be. Valid whenever `placed` is true. */
+  int drawn_x;
+  int drawn_y;
+
   /* [COMMENT] Class purpose: Milliseconds on CLOCK_MONOTONIC, truncated to 32
   bits. Elapsed time is computed as an unsigned difference, which is correct
   across the ~49.7-day wrap; nothing here ever compares two absolute values. */

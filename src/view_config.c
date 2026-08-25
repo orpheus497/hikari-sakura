@@ -1,4 +1,5 @@
 #include <hikari/view_config.h>
+#include <hikari/config_key.h>
 
 #include <assert.h>
 #include <stdlib.h>
@@ -283,6 +284,8 @@ parse_properties(struct hikari_view_properties *properties,
 
   const ucl_object_t *cur;
   while ((cur = ucl_object_iterate_safe(it, false)) != NULL) {
+    hikari_config_warn_duplicate_key(cur, "a views entry");
+
     const char *key = ucl_object_key(cur);
 
     if (!strcmp(key, "inherit")) {

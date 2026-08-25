@@ -1,6 +1,6 @@
 # Granular Task List
 
-*Last Updated:* 2026-08-25 09:06
+*Last Updated:* 2026-08-25 10:23
 
 ## Active List
 
@@ -46,6 +46,30 @@
 - [x] **D-3** `etc/hikari/hikari.conf` rewritten — every tunable documented with its default and the reasoning.
 - [x] **D-4** `hikari(1)`: **LAYOUT POLICY** section, **Palette** and **Animation** subsections, colourscheme defaults, and the no-auto-insert paragraph amended to point at the opt-in.
 - [x] **D-5** `BLUEPRINT.md` §16's "hikari adds no animation" amended — it is no longer true and would mislead.
+
+#### Follow-up review findings (2026-08-25 09:58) — all four verified valid and fixed
+
+- [x] **R-1** `hikari.conf` media comment described `mixer` while the commands were `pactl`. Corrected, and the porting advice reversed — `pactl` is the portable half, `backlight` the FreeBSD-specific one.
+- [x] **R-2** `L+n` bound twice. **Probed the parser rather than assuming:** the *first* binding wins and the second is dropped with no diagnostic, so `workspace-switch-to-sheet-next-inhabited` was dead. The user's binding kept; mine moved to `L+bracketright`/`L+bracketleft` (both directions, to keep the pair adjacent). Keysyms verified against an invalid-keysym control.
+- [x] **R-3** `hikari_animation_offset()` recomputed the position for *now* instead of reporting the last placement. **279px error at peak — 35% of an 800px journey.** Now records `drawn_x`/`drawn_y` at the three sites that move the node; the retarget origin reads it too, which also removes a forward jump on mid-flight retarget that the finding did not mention.
+- [x] **R-4** An unmap could strand a deferred re-tile — it is the one path that stops a view blocking a drain without passing through `hikari_view_commit_pending_operation()`. One `hikari_reflow_settle()` after the unlink.
+
+#### Footgun closed (2026-08-25 10:08) — duplicate configuration keys are no longer silent
+
+- [x] **F-1** Established libucl's actual behaviour by probe: a repeated key chains via `->next`, and `ucl_object_iterate_safe()` yields only the head **regardless of `expand_values`** — so no parser could ever have seen the discarded values.
+- [x] **F-2** Checked the false-positive risk before writing the check: array elements carry neither key nor chain. Both are tested regardless.
+- [x] **F-3** `include/hikari/config_key.h` — header-only `static inline`, no new object, no Makefile change.
+- [x] **F-4** Called at **all 31 key-iteration sites across five files**. Covering only bindings was rejected: partial coverage teaches "no warning means no duplicate", which is worse than uniform silence.
+- [x] **F-5** Warns rather than rejects — a config carrying a duplicate for months must not stop the desktop booting after an upgrade.
+- [x] **F-6** Coverage suite: 31 sites planted with duplicates, **31 reachable, 0 unreachable**, every context string correct.
+- [x] **F-7** Documented in `hikari(1)` (*Duplicate keys*, incl. the stderr/`HIKARI_LOG` caveat) and the `hikari.conf` header.
+- [x] **F-8** All three build configurations clean — release, `DEBUG=YES` (`-Werror`), `WITH_ALL=NO`.
+
+#### Correction to the footgun fix (2026-08-25 10:23) — my own comment was false
+
+- [x] **F-9** `config_key.h` claimed `ucl_object_tostring_forced()` returns NULL for objects/arrays, and gated rendering on that. **Untrue** — verified against libucl 0.9.4, it returns the literal strings `"object"` and `"array"`, so a duplicated nested block printed `in effect: object / ignored: object`. A real defect in a diagnostic meant to make silence legible, not just a stale comment.
+- [x] **F-10** Rendering now gated on `ucl_object_type()` via `config_key_is_renderable()` — scalars in, containers and `UCL_USERDATA` out. The warning line still fires for containers; the key identifies them.
+- [x] **F-11** Re-verified: containers omit values, scalars still render, 31/31 sites reachable, shipped config silent, all three build configurations clean.
 
 #### Verification done here
 
