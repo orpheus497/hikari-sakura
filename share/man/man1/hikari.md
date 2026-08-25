@@ -1192,6 +1192,34 @@ palette {
 Note that a comment runs to the end of its line, so palette entries must be
 written one per line if they carry trailing comments.
 
+Almost every colour reaches the screen through one of the semantic slots below,
+rather than by being referred to positionally. The exception is the top bar's
+battery block, which selects from the palette by charge level:
+
+| state | palette entry |
+|---|---|
+| plugged in or charging | *color6* |
+| 75-100% | *color4* |
+| 60-75% | *color5* |
+| 50-60% | *color11* |
+| 35-50% | *color3* |
+| 20-35% | *color2* |
+| 10-20% | *color9* |
+| 0-10% | *color1* |
+
+Those bands are not separately configurable: they follow the palette, so
+retheming the desktop retints the battery with it.
+
+"Plugged in" is read from *hw.acpi.acline*, which reports the AC line itself
+rather than being deduced from what the battery is doing -- the same sysctl the
+lock screen consults to choose its blanking timeout. On a machine that has no
+such sysctl, a desktop or a VM, it falls back to the ACPI charge flags and
+accepts only the states that positively mean external power, so a critically
+flat battery is never painted as though it were on mains.
+
+Note that **hikari-topbar** is spawned once at startup, so a palette change
+reaches the bar on the next start of the compositor rather than on a reload.
+
 Colorschemes
 ------------
 **hikari** uses color to indicate different states of views and their indicator

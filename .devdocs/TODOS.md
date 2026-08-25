@@ -1,6 +1,6 @@
 # Granular Task List
 
-*Last Updated:* 2026-08-25 10:23
+*Last Updated:* 2026-08-25 11:17
 
 ## Active List
 
@@ -70,6 +70,17 @@
 - [x] **F-9** `config_key.h` claimed `ucl_object_tostring_forced()` returns NULL for objects/arrays, and gated rendering on that. **Untrue** — verified against libucl 0.9.4, it returns the literal strings `"object"` and `"array"`, so a duplicated nested block printed `in effect: object / ignored: object`. A real defect in a diagnostic meant to make silence legible, not just a stale comment.
 - [x] **F-10** Rendering now gated on `ucl_object_type()` via `config_key_is_renderable()` — scalars in, containers and `UCL_USERDATA` out. The warning line still fires for containers; the key identifies them.
 - [x] **F-11** Re-verified: containers omit values, scalars still render, 31/31 sites reachable, shipped config silent, all three build configurations clean.
+
+#### Battery charge bands (2026-08-25 10:54)
+
+- [x] **B-1** Battery block was one fixed colour at every level; a flat battery looked like a full one. Banded per the user's ladder.
+- [x] **B-2** `battery_color_index()` returns a palette **index**, so the bands follow `ui { palette }` and need no config surface of their own.
+- [x] **B-3** "Plugged in" derived from the **raw ACPI flags**, not from `bat_state` — that label collapses CRITICAL-alone onto `"AC"`, which would have painted a critically flat battery in the mains colour. Only `s == 0` and `s & 2` set it; everything ambiguous falls through to the bands.
+- [x] **B-4** Boundaries tested at both ends of all seven ranges; external power asserted to win at every level 0-100; all 7 bands proven reachable.
+- [x] **B-5** Documented in `hikari.conf` and `hikari(1)`, including the correction to the earlier "the palette entries have no meaning on their own" claim.
+- [x] **B-7** `hw.acpi.acline` made authoritative for "plugged in", with the flag inference retained as fallback. Closes the gap where a plugged-in machine reporting an unrecognised ACPI flag combination was coloured as discharging. Precedent: `lock_config.c:77` already reads it for the same question.
+- [x] **B-8** Verified against the **real** `get_bat_info()` by mocking `sysctlbyname` at preprocessing time — 17 combinations, including mains+CRITICAL (now external, the gap closed) and acline-absent+CRITICAL (still not external, the original hazard still guarded). Live binary on mains emits `#9fa0a6`.
+- [ ] **B-6** **User test:** unplug and watch the battery block change colour through the bands; confirm it goes grey on reconnecting the charger. Needs a compositor restart to pick up a palette change.
 
 #### Verification done here
 

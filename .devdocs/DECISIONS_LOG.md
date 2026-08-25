@@ -1,3 +1,70 @@
+## [2026-08-25 11:17] Phase 91: hw.acpi.acline made authoritative for the battery's plugged-in colour
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
+
+**The finding was valid.** The battery bands inferred external power from `hw.acpi.battery.state` alone. That inference was deliberately conservative -- only `s == 0` and `s & 2` set it -- which correctly refused to read `CRITICAL` (0x04) alone as mains, but left a gap in the other direction: **a machine plugged in whose firmware reports any other flag combination lands in the `"AC"` branch, which sets nothing, so it was coloured as though discharging.** The grey exists to say "you are on mains, stop worrying", and that is exactly the case it was failing to cover.
+
+`hw.acpi.acline` reports the AC line itself rather than deducing it from what the battery is doing, so it settles the question outright. **There is in-tree precedent**: `hikari_lock_config_blank_timeout()` (`src/lock_config.c:77`) already reads the same sysctl to answer the same question for the lock screen's blanking timeout, so using it here makes two subsystems agree instead of reasoning separately.
+
+### The fallback is retained rather than replaced
+
+A machine with no ACPI power source at all -- a desktop, a VM -- has no such sysctl and the read fails. There the positive-only flag inference is still the best answer available, and it errs toward "on battery", which is the safe direction. The state **labels** are untouched in every path.
+
+**Does making acline authoritative reintroduce the CRITICAL hazard?** No, and the distinction is worth stating precisely. The hazard was painting a critically flat battery as mains *while it was actually on battery*, by trusting a lossy label. With acline authoritative that can only happen when acline itself reports mains -- in which case the machine **is** on mains and the battery is recovering, for which grey is the correct answer. The guard was against a bad inference, not against knowing the truth.
+
+### Verified against the real function, not a replica
+
+`get_bat_info()` calls `sysctlbyname()`, so the interesting states cannot be produced by unplugging anything. The test substitutes a mock at preprocessing time (`-Dsysctlbyname=...`, `-Dmain=...`) and includes `topbar.c` whole, so **the shipped function body is what runs** -- a replica of this logic could agree with itself and disagree with the code.
+
+**17 combinations, all passing**, including the two that matter most in opposite directions:
+
+| case | result |
+|---|---|
+| mains + `CRITICAL` alone | external -- **the gap this closes** |
+| acline absent + `CRITICAL` alone | NOT external -- **the original hazard, still guarded** |
+| acline 0 + `CHARGING` flag | NOT external -- the AC line overrides the battery flags |
+| every case | state label unchanged |
+
+**End-to-end on this machine as well:** with `hw.acpi.acline=1`, `battery.state=0`, `battery.life=100`, the real `hikari-topbar` binary emits `"color":"#9fa0a6"` -- `color6`, grey. And at 8% charge the same code yields `color6` on mains against `color1` (red) on battery.
+
+Release and `DEBUG=YES` (`-Werror`) both clean, 71 units, both binaries link; man page renders. `hikari(1)` amended -- it had described the mechanism as the charge flags, which is now only the fallback.
+
+## [2026-08-25 10:54] Phase 91: battery charge bands in the top bar
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
+
+The battery block drew in a single fixed colour (`pywal_colors[8]`, the muted base) at every level, so the one reading that matters urgently -- a nearly flat battery -- looked exactly like a full one. Now banded to the user's palette.
+
+### The ladder, as specified by the user
+
+| state | entry | | state | entry |
+|---|---|---|---|---|
+| plugged in / charging | `color6` grey | | 35-50% | `color3` yellow-orange |
+| 75-100% | `color4` purple | | 20-35% | `color2` orange |
+| 60-75% | `color5` pink-purple | | 10-20% | `color9` light red |
+| 50-60% | `color11` light yellow | | 0-10% | `color1` red |
+
+### Indices, not colours
+
+`battery_color_index()` returns a palette **index**, so the bands follow whatever `ui { palette }` the compositor passed -- retheme the desktop and the battery retints with it, with nothing to keep in step by hand. It also means the bands need no configuration surface of their own, and they still work on the pywal fallback path.
+
+This does narrow a claim made one phase earlier: the palette comment said its entries *"have no meaning on their own"*. That is now false for eight of them, and both `hikari.conf` and `hikari(1)` were amended rather than left to drift -- the FB-4 discipline, applied to a claim of my own from the same week.
+
+### The one real hazard, and why the label could not be used
+
+The obvious implementation keys "plugged in" off `bat_state`, which already holds `"Charging"` / `"AC"` / `"Full"`. **That would have been wrong, and wrong in the dangerous direction.** `get_bat_info()`'s final `else` catches every ACPI flag combination that is neither charging nor discharging and labels all of them `"AC"` -- and that includes `ACPI_BATT_STAT_CRITICAL` (0x04) on its own. Keying the plugged-in colour off that label would paint a **critically flat battery in the same grey as mains power**.
+
+So `external` is derived from the raw flags instead, and only the two states that *positively* mean external power set it (`s == 0`, full on mains; `s & 2`, charging). Everything else -- including the ambiguous `else`, and a failed sysctl -- falls through to the charge-level bands. The asymmetry is deliberate and is recorded in the code: **mistaking mains for battery costs a colour; mistaking a flat battery for mains hides the reading the block exists for.**
+
+### Verification
+
+* Band boundaries tested at **both ends of every range** (75/74, 60/59, 50/49, 35/34, 20/19, 10/9) against the function spliced verbatim from the source, plus 0% and 100%.
+* External power asserted to win at **every level from 0 to 100**, including a flat battery.
+* Every level 0-100 maps in range, and exactly **7 discharge bands** are reachable -- so no band is unreachable and none was collapsed by an off-by-one.
+* Release and `DEBUG=YES` (`-Werror`) both clean, 71 units, both binaries link. Shipped config still parses silently; man page renders.
+
+**Not verified:** the colours on a real panel, and the ACPI flag behaviour on this specific hardware. `hw.acpi.battery.state` is read live but the CRITICAL-alone case cannot be provoked on demand.
+
 ## [2026-08-25 10:23] Phase 91 follow-up: an FB-4-class error in the duplicate-key diagnostic, of my own making
 
 *(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*
