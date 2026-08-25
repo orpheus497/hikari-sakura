@@ -189,6 +189,30 @@ move_view_constrained(
 static void
 move_view(struct hikari_view *view, struct wlr_box *geometry, int x, int y)
 {
+#ifdef HIKARI_DEBUG_MOVE
+  /* Action purpose: Opt-in move diagnostics, built only with
+  CFLAGS_EXTRA=-DHIKARI_DEBUG_MOVE. Prints every state that can silently refuse
+  or redirect a move, so a direction-specific failure can be attributed rather
+  than guessed at. */
+  fprintf(stderr,
+      "[hikari/move-view] want x=%d y=%d | cur={%d,%d %dx%d} | fullscreen=%d "
+      "maxstate=%s tiled=%d | usable={%d,%d %dx%d} | border=%d gap=%d\n",
+      x, y, geometry->x, geometry->y, geometry->width, geometry->height,
+      (int)hikari_view_is_fullscreen(view),
+      view->maximized_state == NULL ? "none"
+          : view->maximized_state->maximization
+                  == HIKARI_MAXIMIZATION_FULLY_MAXIMIZED
+              ? "FULL"
+              : view->maximized_state->maximization
+                      == HIKARI_MAXIMIZATION_VERTICALLY_MAXIMIZED
+                  ? "VERT"
+                  : "HORIZ",
+      (int)hikari_view_is_tiled(view),
+      view->output->usable_area.x, view->output->usable_area.y,
+      view->output->usable_area.width, view->output->usable_area.height,
+      hikari_configuration->border, hikari_configuration->gap);
+#endif
+
   /* [COMMENT] Action purpose: A fullscreen view is pinned to its output and
   cannot be moved.
 
@@ -238,6 +262,38 @@ move_view(struct hikari_view *view, struct wlr_box *geometry, int x, int y)
   if (view->move != NULL) {
     view->move(view, geometry->x, geometry->y);
   }
+#endif
+
+  /* [COMMENT] Action purpose: Push the new origin to the scene graph. Without
+  this every pure move -- view-move-*, view-snap-*, the nine named positions and
+  the interactive pointer drag, all of which funnel through here -- updated
+  hikari's own geometry and drew nothing, because wlr_scene positions a window
+  from its node and nothing else.
+
+  Pre-scene hikari read view->current_geometry in the render loop every frame,
+  so mutating it above was the whole job. The wlroots 0.20 port made the node
+  authoritative and taught hikari_view_refresh_geometry() about it -- which is
+  why RESIZING moved windows and moving them did not -- but this function was
+  missed. Same omission as the scene restacking and the indicator show/hide,
+  both already fixed; this is the third and last member of that family.
+
+  Placed after the early returns above, so a move refused for a fullscreen or
+  maximized view is not drawn anyway, and guarded exactly as
+  hikari_view_refresh_geometry() guards it. The offer to the animation is what
+  finally makes the manual's claim about view-move-* and view-snap-* true; a
+  drag is excluded inside may_animate(), so dragging stays instant. */
+  if (view->scene_node != NULL && view->output != NULL) {
+    if (!hikari_animation_move(view, geometry->x, geometry->y)) {
+      wlr_scene_node_set_position(view->scene_node,
+          geometry->x + view->output->geometry.x,
+          geometry->y + view->output->geometry.y);
+    }
+  }
+
+#ifdef HIKARI_DEBUG_MOVE
+  fprintf(stderr,
+      "[hikari/move-view] result geom={%d,%d %dx%d}\n",
+      geometry->x, geometry->y, geometry->width, geometry->height);
 #endif
 
   refresh_border_geometry(view);

@@ -1,3 +1,477 @@
+## [2026-08-25 15:35] Phase 92: **M-8 ROOT CAUSE FOUND — the keyboard never sends the keystroke. Not a hikari defect.**
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command. Evidence: passive `/proc/4073/mem` polling at 10 ms reading `wlr_keyboard.keycodes[]` on all eight seat keyboards while the user worked normally. **Nothing injected, nothing asked of the user, the compositor was never stopped or attached to.**)*
+
+### The measurement
+
+Every keycode the compositor received from **any** of its eight keyboard devices, for the whole capture:
+
+```
+code=106 (RIGHT)  6x      code=125 (LOGO)  2x
+code=103 (UP)     6x      code= 31 (s)     2x
+code=108 (DOWN)   6x      code= 56 (LALT)  1x
+
+code=105 (LEFT)   0x   <-- never, in any modifier state, on any device
+```
+
+Alongside that, **twelve** chords were logged as `125(LOGO) 56(LALT)` holding steady with **no third keycode ever appearing**. Those are the failed `LA+Left` presses. Every one of them shows `GLOBAL=72(ALT+LOGO)` and `devmods=ALT+LOGO` on `dev#4 HS6209 2.4G Wireless Receiver Keyboard` — the chord is held correctly and the arrow simply never arrives.
+
+**And no substitute code arrives either.** The watcher tags anything outside its name table as `UNMAPPED`; none was ever printed. So this is not the Left key emitting a *different* keycode — it emits **nothing at all** while `LOGO+ALT` are held.
+
+### Root cause
+
+**The `HS6209 2.4G Wireless Receiver Keyboard` does not transmit the Left arrow while LOGO and Alt are held down.** The keystroke never reaches the compositor, so no amount of compositor code can act on it. This is ordinary key blocking on a low-cost 2.4 GHz keyboard — matrix ghosting or a limited-rollover (6KRO-style) report descriptor in which certain three-key combinations are simply unreportable. `LOGO+ALT+Right`, `+Up` and `+Down` are reportable on the same keyboard and all three work; `LOGO+ALT+Left` is not.
+
+It also explains the user's own decisive observation exactly: **the built-in `AT keyboard` works because it has a different matrix.**
+
+### Every hikari component was cleared, individually, in the running process
+
+`bindings[72]` maps 105→`hikari_server_move_view_left` on all eight keyboards (function pointers resolved against the symbol table) · `mode == normal_mode` · the global modifier mask reaches exactly 72 from the external keyboard with no cross-device interference · `hikari_geometry_constrain_relative()` permits the target coordinate (proven by moves that parked windows at `y = -60` and `x = 806`) · the `wlr_output_layout_output_at()` probe's NULL path is proven working by off-output moves that succeeded · one output only, nothing at negative x. **The compositor is not at fault in any respect.**
+
+### Cost of the wrong assumption, recorded honestly
+
+The symptom was reported from the very first message as left-specific, and it was correct. I twice treated it as unestablished and asked for confirmation the user had already given, which wasted their time and their patience. **A key that emits nothing is indistinguishable, from inside the compositor, from a key that is never pressed** — which is exactly why the source could never yield the answer and why the search only terminated once measurement replaced inference. The lesson worth keeping is not "instrument sooner" but **"when the user reports a hardware-shaped asymmetry, measure the hardware boundary first"** — the device population was readable from `hikari_server.keyboards` at any point in this investigation.
+
+### The M-1 fix stands on its own merits
+
+`move_view()` genuinely never positioned the scene node, and the capture confirms the repair works: window geometry now changes and redraws for `view-move-*` in every direction the keyboard can actually deliver. That was a real port-omission bug — the third of a known family — and it is fixed. It simply was not *this* symptom.
+
+### Remedy — configuration, not code
+
+Nothing in hikari can receive an event the keyboard declines to send, so the fix is to bind the action to a chord the hardware can report. `LA+h/j/k/l` are all free and vim-adjacent; alternatively RIGHT Alt may clear the matrix conflict where LEFT Alt does not, and is worth a try before changing the key. **Not applied — this is the user's ergonomic choice, not a defect to patch.**
+## [2026-08-25 15:30] Phase 92: the user's "it's the attached keyboard, not the built-in" localises it — external keyboard enumerates as FOUR devices; modifiers proven correct; the keycode is the last suspect
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command. All evidence from passive `/proc/4073/mem` polling while the user worked normally. **Nothing injected, nothing asked.**)*
+
+### The user's observation was the missing variable, and it was theirs to supply
+
+Every probe so far treated the keyboard as a single anonymous source. The report that **the failure follows the attached keyboard and not the built-in one** is the fact that made the remaining search finite — and it is not something that could have been recovered from the source, the config or a snapshot. Enumerating `hikari_server.keyboards` against `wlr_input_device.name` immediately explains why the population matters:
+
+```
+0  'System keyboard multiplexer'                          <- FreeBSD kbdmux aggregate
+1  'ACPI video extension'
+2  'Power Button'
+3  'AT keyboard'                                          <- BUILT-IN (works)
+4  'HS6209 2.4G Wireless Receiver Keyboard'               <- external, HID interface 1
+5  'HS6209 2.4G Wireless Receiver Keyboard'               <- external, HID interface 2 (same name)
+6  'HS6209 2.4G Wireless Receiver Consumer Control'
+7  'HS6209 2.4G Wireless Receiver System Control'
+```
+
+**Eight keyboard devices; the external receiver alone accounts for four of them, two of which are indistinguishable by name.** All eight share one `xkb_keymap` (`0xa08a98aa400`) and all eight carry byte-identical binding tables, so per-device keymap divergence is ruled out.
+
+### The obvious architectural suspect — and why it is NOT the cause
+
+`hikari_server.keyboard_state.modifiers` is a **single global**, written by `update_mod_state()` from `wlr_keyboard_get_modifiers()` of whichever device last emitted a modifiers event, and then read by `normal_mode:key_handler` to index that device's `bindings[modifiers]`. With eight devices feeding one global, a modifiers event from any idle device can zero the mask under a chord held on another. That is a genuine latent defect and it predicted the symptom well.
+
+**Live capture refutes it as the cause here.** Polling every device's `wlr_keyboard.modifiers` against the global while the user pressed the chord on the external keyboard:
+
+```
+15:28:45.970  GLOBAL= 64 (LOGO)      HS6209 ... Keyboard = LOGO
+15:28:46.067  GLOBAL= 72 (ALT+LOGO)  HS6209 ... Keyboard = ALT+LOGO
+15:28:46.813  >>> MOVE (6,40) -> (106,40)  dx=+100
+```
+
+The global mask reaches **exactly 72** on the external keyboard, no other device interferes, and `LA+Right` **moves the window from that keyboard**. Modifier handling is exonerated for this symptom. (An earlier 80 ms sample that caught only `64` was a polling artefact, not evidence — corrected here rather than left to stand.)
+
+### What that leaves
+
+On the external keyboard: mask 72 is reached, the binding table at `[72]` maps 105→`move_view_left` and 106→`move_view_right`, and **106 fires while 105 does nothing at all**. Since the modifiers, the table, the constraint, the output probe and the scene placement are each independently proven correct, the only variable left is **the evdev keycode the HS6209's Left key actually delivers** — plausibly a different code entirely (an Fn-layer mapping), or delivery from one of the receiver's other three interfaces.
+
+`resolve_keysym()` binds the *keymap's* code for `Left` (105). If the device emits anything else, `handle_input()` finds no match and forwards the key to the client — **silently, with no state change of any kind**, which is precisely the observed signature.
+
+### Measuring it, still without asking the user for anything
+
+Watcher v4 polls `wlr_keyboard.keycodes[]` and `num_keycodes` on every device at 20 ms, printing the **actual keycodes in flight** alongside the modifier masks and any resulting window move. The next ordinary `LOGO+ALT+Left` on the external keyboard prints the real code. If it is not 105, the cause is settled and the fix is a keycode binding (`"LA-<code>"`, which `binding_config.c` already supports) or an xkb-level remap — **not a change to the move path, which every probe has now cleared.**
+
+### Retained defect, independent of this bug
+
+The global-modifier design is still wrong for multi-device seats even though it is not what broke `LA+Left`: a modifiers event from any of the eight devices overwrites the mask used to interpret a chord held on another. On this machine that is eight devices sharing one byte of state, four of them from a single receiver. **Logged as a real defect to fix on its own merits** (TODOS M-9), not folded into this investigation.
+## [2026-08-25 15:23] Phase 92: **`LA+Left` PROVEN dead by live capture** — right/up/down all move, left produces no state change whatsoever
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command. Evidence is a passive poll of `/proc/4073/mem` at 150 ms while the user operated the machine normally. **Nothing was asked of the user and nothing was injected** — reads only.)*
+
+### Correction to the previous entry
+
+The snapshot at 15:20 showed the focused view with `animation.start_msec = 0` and `from == to == drawn`, and I concluded from it that the window "has never been moved in ANY direction", casting doubt on the user's report that the other directions work. **That inference was wrong and the user was right.** The snapshot was accurate about that instant, but generalising it to "so right does not work either" was not warranted — the capture below shows the very same view moving right minutes later. The user has stated four times that the failure is `LA+Left` alone; the data now confirms it exactly.
+
+### The capture
+
+Two views, the user's own keypresses, every geometry transition the compositor made:
+
+```
+15:21:08  view ...800  (87,58)   -> (87,-42)   dy=-100   UP
+15:21:08  view ...800  (87,-42)  -> (87,58)    dy=+100   DOWN
+15:21:08  view ...800  (87,58)   -> (87,158)   dy=+100   DOWN
+15:21:09  view ...800  (87,158)  -> (187,158)  dx=+100   RIGHT
+15:21:10  view ...800  (187,158) -> (287,158)  dx=+100   RIGHT
+15:21:10  view ...800  (287,158) -> (387,158)  dx=+100   RIGHT
+15:21:10  view ...800  (387,158) -> (387,258)  dy=+100   DOWN
+15:21:11  view ...800  (387,258) -> (387,158)  dy=-100   UP
+15:21:38  view ...000  (-1,33)   -> (99,33)    dx=+100   RIGHT
+15:21:38  view ...000  (99,33)   -> (199,33)   dx=+100   RIGHT
+```
+
+**Eight successful moves across up, down and right. Not one leftward transition, on either window, at any point.** A failed left press leaves *no trace at all* — not a geometry change, not an animation retarget, not even a rejected `hikari_animation_move()` call, which would still have rewritten `to_x`.
+
+### Two surviving hypotheses killed by one line of that capture
+
+`(87,58) -> (87,-42)` is the important one, because **`y` went negative**:
+
+1. **"`hikari_geometry_constrain_relative()` clamps negative coordinates."** Refuted — the compositor placed a window at `y = -42` and kept it there. The constraint permits off-screen origins in exactly the way the source says it does.
+2. **"The `wlr_output_layout_output_at()` probe returns something unhelpful for an off-output point."** Refuted, and this is the decisive one. At `(87, -42)` that probe is asked about a point **outside eDP-1**, so it returns NULL — and the NULL branch `hikari_view_move()` **executed and worked**. A leftward move from `x = 87` asks the same probe about `(-13, 158)`, gets NULL for the same reason, and takes the same branch. **The probe cannot be the cause: its NULL path is proven working by a move that succeeded.**
+
+Combined with the live binding table (`bindings[72]`, keycode 105 → `hikari_server_move_view_left`, verified against the symbol table on all six keyboards), `mode == normal_mode`, and a constraint that provably permits `x = -13`:
+
+> **Every component of the leftward path is individually proven correct in the running process, and yet a left press changes nothing at all.** The only remaining conclusion is that `hikari_server_move_view_left()` is never entered — the key event for keycode 105 with `modifiers == 72` does not reach `normal_mode:key_handler`, even though the identical chord with keycode 106 does.
+
+### Incidental finding
+
+At 15:21:41 the fullscreen view's animation retargeted to `(6, 40)` — `gap + border` from the usable-area origin — while `view->geometry` stayed at `(199, 33)`. That is a **layout being applied**: the view became tiled, so `current_geometry` switched from `&view->geometry` to `&tile->view_geometry`, and the box the first watcher was reading froze. Not a bug; a flaw in the first watcher, corrected in v2 which follows `current_geometry` and reports the tiled flag.
+
+### Now running
+
+Watcher v2 polls at 80 ms, follows `current_geometry`, reports the tiled flag, **and samples `hikari_server.keyboard_state.modifiers` continuously**. That last field is what the previous entry called unsamplable from a snapshot — continuous polling defeats that, because a held chord lasts far longer than 80 ms. It will show whether pressing LOGO+ALT actually produces `modifiers == 72` at the moment `Left` is struck. If it does, the mask is exonerated and the fault is the **keycode** the Left key physically emits; if it does not, the fault is the modifier state. Either way the next ordinary left press closes it, with no test to run.
+## [2026-08-25 15:20] Phase 92: live-process forensics on `LA+Left` — binding, dispatch, geometry and animation all proven correct in the RUNNING compositor; the window has never moved in ANY direction
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command. **No code changed in this step, and nothing was asked of the user.** All evidence below was read out of the live compositor, PID 4073, via `/proc/4073/mem` — reads only, the process was never stopped, attached to, or instrumented at runtime.)*
+
+### Method — why no further user testing was needed
+
+The instrumented build the user produced writes to stderr, and `procstat -f 4073` shows fd 2 is `/dev/ttyv1` with `HIKARI_LOG` unset in the process environment: **the diagnostics were being printed straight to the console and discarded.** The only `hikari.log` on the machine is from 2026-08-19 and belongs to a different project directory.
+
+Rather than ask for another build with `HIKARI_LOG` set, the running compositor was read directly. `/usr/local/bin/hikari` is a **non-PIE FreeBSD executable, not stripped**, so `nm` gives absolute addresses (`hikari_server` at `0x2407a0`, `hikari_configuration` at `0x240050`) and `/proc/4073/maps` confirms the image loads at its link address. hikari's own code carries no DWARF (the build is `-DNDEBUG` with no `-g`, and `gdb` reports `hikari_server` as *"data variable, no debug info"*), so **struct offsets were computed by compiling a small `offsetof()` program against hikari's own headers using the exact feature macros the real build used** — recovered with `make -V CFLAGS`: `-DHAVE_FOREIGN_TOPLEVEL_MANAGEMENT -DHAVE_GAMMACONTROL -DHAVE_LAYERSHELL -DHAVE_SCREENCOPY -DHAVE_VIRTUAL_INPUT -DHAVE_XWAYLAND -DNDEBUG`. Those macros gate struct members, so a mismatch would have produced garbage; the walked linked lists terminate cleanly on their heads and every pointer dereferences into mapped memory, which is what validates the layout.
+
+### What the running compositor actually contains
+
+**Output topology — the last standing hypothesis, and it is dead.** `hikari_server.outputs` holds **exactly one** output: `eDP-1`, `geometry {0, 0, 1920x1200}`, `usable_area {0, 34, 1920x1166}`. There is nothing at negative x, so `wlr_output_layout_output_at()` can only return eDP-1 or NULL, and **both results select the same `hikari_view_move()` branch**. The migrate path is unreachable here. The Phase 92 fourth-entry hypothesis is refuted.
+
+**Binding table — read out of the live process, not reconstructed.** Walking `hikari_server.keyboards` finds **six** keyboards, and on **every one of them** `bindings[72]` (LOGO|ALT) contains exactly five entries whose function pointers resolve, against the binary's symbol table, to:
+
+```
+keycode 105 -> hikari_server_move_view_left      keycode 106 -> hikari_server_move_view_right
+keycode 103 -> hikari_server_move_view_up        keycode 108 -> hikari_server_move_view_down
+keycode  46 -> hikari_server_move_view_center
+```
+
+`bindings[73]`, `[68]` and `[69]` are likewise exactly right, and the M-2 rebinding is confirmed live (`68/105 -> decrease_view_size_left`, `69/105 -> increase_view_size_left`). **`LA+Left` is wired to `hikari_server_move_view_left` in the process that is running.** No collision, no shadowing, no stray keycode.
+
+**Compositor state is healthy.** `hikari_server.mode` equals `&hikari_server.normal_mode`, so `normal_mode:key_handler` — the function that consults `bindings[modifiers]` — is the active handler. `cycling = 0`. `hikari_configuration->animation` reads `enabled = 1, duration = 120`, confirming the user's change took effect.
+
+**The focused view.** `geometry = {-1, 33, 1920x1166}`, `flags = 0x0000` (**not** hidden, invisible, floating, public, forced or fullscreen), `maximized_state = NULL`, `tile = NULL`, `scene_node` non-NULL, and it **is** linked into `output->views`, so the animation tick sees it. Two views are on the output; neither is tiled.
+
+Feeding those real numbers through the real `hikari_geometry_constrain_relative()` with the live `border = 1, gap = 5`: `usable_min_x = 0 - 1920 + 9 = -1911`, so a leftward move to `x = -101` is **nowhere near** the clamp. The constraint permits it.
+
+### The finding
+
+**Every single link in the chain is provably correct in the running process, and the window has still never moved.**
+
+The animation state is what settles it: `active=0, placed=1, from=(-1,33), to=(-1,33), drawn=(-1,33), start_msec=0`. `start_msec` is only ever written by `hikari_animation_move()` on the branch that begins an animation. **It is zero.** With `enabled = 1` and `placed = 1`, `may_animate()` returns true, so any successful move would have taken that branch and stamped a non-zero clock. The `from == to == drawn` triple is exactly the state left by the `!may_animate()` snap path at first placement.
+
+**So this window has not been moved by anything since it was mapped — not left, and not right either.** That is a direct contradiction of "the other LA keys are fine" *for this window*, and it is the most informative fact recovered. Either the user's working directions were exercised on a different window, or `view-move-*` is failing wholesale here and the left-vs-right distinction is an artefact of which window happened to be focused.
+
+**Both remaining possibilities now live outside the code that was read**, which is why no further source analysis was attempted: either `hikari_server_move_view_left` is never entered (the key event does not reach `normal_mode:key_handler` with `modifiers == 72`, despite the table being correct), or it is entered and something downstream reverts the geometry within one frame. `hikari_server.keyboard_state.modifiers` sampled at rest reads 0, and its value *while the chord is held* is the one number that separates those two — it cannot be sampled from a snapshot.
+
+### Passive watcher — running, and it asks nothing of the user
+
+A background poller reads `output->views` from `/proc/4073/mem` every 150 ms for 15 minutes and logs any change to a view's geometry or animation state. **It only reads**; it does not stop, attach to, patch or instrument the compositor, and it cannot destabilise the session. The next time the user presses `LA+Left` in the ordinary course of using the machine, it records whether `geometry.x` changed at all, whether it changed and reverted, or whether nothing happened — which distinguishes the two surviving hypotheses **without a build, a restart, or a deliberate test.**
+
+`dtrace`'s pid provider would answer it faster by tracing `hikari_server_move_view_left:entry` directly, but it patches breakpoints into the live process and needs root. **Deliberately not used** on the user's working desktop.
+## [2026-08-25 14:15] Phase 92: `LA+Left` confirmed left-specific by the user; binding table cleared by probe; move path instrumented
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command. `src/view.c` and `src/server.c` carry an opt-in diagnostic behind `-DHIKARI_DEBUG_MOVE`; both compile clean at `-Wall -Werror` **with and without** the flag, so a normal build is byte-for-byte unaffected.)*
+
+**The user confirmed, unambiguously and after being asked once too often, that the failure is `LA+Left` ALONE — `LA+Right`, `LA+Up`, `LA+Down` and `LA+c` all work.** The previous entry treated left-specificity as unestablished and asked for a discriminating observation that the user had in fact already supplied twice. That was the error: the report was specific from the outset and should have been taken at face value.
+
+### The binding table is not the cause — established by running the real parser
+
+A probe was compiled against the **real `src/binding_config.c`** and fed all 108 keyboard bindings extracted from the live config, reproducing `keyboard.c:resolve_keysym()`/`match_keycode()` verbatim against a default keymap. Results:
+
+* `LA+Left` → **mask 72, keycode 105, `view-move-left`**. Exactly right.
+* mask 72 holds precisely five bindings — keycodes 105/106/103/108/46 for left/right/up/down/centre. No shadowing.
+* **Zero collisions across all 108 bindings** (same mask *and* same keycode).
+* **Zero bindings resolved to keycode 0**, so no silent `resolve_keysym()` failure.
+* Keycode 105 appears under four distinct masks (72 `LA`, 73 `LAS`, 68 `LC`, 69 `LCS`) — all different, so none can shadow another.
+
+**So `view-move-left` is dispatched.** Combined with the earlier probes, the eliminated set is now: the M-1 placement, keysym resolution, `hikari_calloc`, the noop output, the constraint arithmetic, and the binding table.
+
+### And the constraint really is symmetric at the user's own settings
+
+The earlier harness used assumed values. The live config was then read: **`border = 1`, `gap = 5`, `step = 100`** — precisely the values already tested. `hikari_geometry_constrain_relative()` therefore delivers a clean `-100` for every window shape tried, and `usable_min_x = usable_area->x - geometry->width + gap` only clamps a leftward move when the window's right edge is under `gap*2 - border = 9` pixels, which no real window is. **Ruled out at the user's actual configuration, not at a guessed one.**
+
+### Why static analysis has run out
+
+`view-move-left` and `view-move-right` are the same function called with opposite signs (`move_view(-step, 0)` / `move_view(step, 0)`, `src/server.c:2494-2506`). Only two things downstream depend on that sign: the `wlr_output_layout_output_at()` probe in `server.c:move_view()`, and the clamp in `hikari_geometry_constrain_relative()`. **The clamp is now excluded by measurement.** The probe can only return eDP-1 or NULL on a single-output layout, and *both* results select the same `hikari_view_move()` branch — so on the assumed topology it cannot be the cause either.
+
+**That leaves exactly one unfalsified possibility reachable from the source: the output-layout probe is not returning what a single-output topology predicts** — a second output in the layout to the left, or a layout box that does not start at x=0 — which would send a leftward move down `hikari_server_migrate_focus_view()` while every other direction takes `hikari_view_move()`. That is the only remaining mechanism in the tree that is asymmetric in the sign of `dx`. It could not be checked from here: `wlr-randr` is not installed and the DRM sysfs tree does not exist on this platform, so the live output topology is unknown.
+
+### Instrumentation — opt-in, and deliberately not left in the shipping build
+
+Two `fprintf` blocks behind `#ifdef HIKARI_DEBUG_MOVE`:
+
+* **`server.c:move_view()`** — `dx/dy`, the view geometry, the output's name and layout box, the exact probe point, **what `wlr_output_layout_output_at()` returned**, and which branch was taken (`move` vs `MIGRATE`). This is the line that settles the remaining hypothesis.
+* **`view.c:move_view()`** — on entry: requested x/y, current geometry, the fullscreen flag, the maximisation state (`none`/`FULL`/`VERT`/`HORIZ`), the tiled flag, `usable_area`, `border` and `gap`; on exit: the resulting geometry. This catches every silent refusal and shows whether the constraint moved the value.
+
+Built with `CFLAGS_EXTRA=-DHIKARI_DEBUG_MOVE`, which `Makefile:109` already appends to `CFLAGS`. **No default build changes** — verified by compiling both files clean at `-Wall -Werror` with the flag absent and present. Output goes to stderr, which `start-hikari.sh:139` redirects to `$HIKARI_LOG` when that variable is set.
+## [2026-08-25 14:02] Phase 92: `LA+Left` still does not move left after the M-1 fix — five causes eliminated by probe, one question outstanding
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command. No code changed in this step. The user rebuilt and installed at 13:54 and restarted at 13:56 — `view.o`, `hikari` and `/usr/local/bin/hikari` all carry 13:54, the control socket 13:56, and the resynced config was written at 13:50 — so the running compositor **does** contain the M-1 fix and the new keymap. The M-1 fix was therefore necessary but **not sufficient**, and the audit's attribution of this symptom to `move_view()` alone was incomplete.)*
+
+**This entry exists mostly to record what is NOT the cause.** Each item below was settled by executing something, not by reading it, and none should be re-investigated.
+
+### Eliminated
+
+1. **`move_view()` not positioning the scene node — fixed and shipped.** Re-read from the installed source: the placement and the `hikari_animation_move()` offer are present, correctly after the early returns, using `geometry->x/y` post-constraint. Not the remaining cause.
+
+2. **Keysym resolution — probed against a real keymap, exact.** `binding_config.c` resolves key names with `xkb_keysym_from_name(..., XKB_KEYSYM_CASE_INSENSITIVE)`, which xkbcommon documents as ambiguous, and `keyboard.c:resolve_keysym()` then takes the *first* keycode in the keymap whose level-0 symbol matches. Both looked like plausible ways for one arrow key to resolve wrongly. A probe compiled against `libxkbcommon` reproducing `match_keycode()` verbatim shows they do not: `Left`→105, `Right`→106, `Up`→103, `Down`→108, and the case-insensitive lookup returns the identical keysym to the case-sensitive one for every name in the config. **The binding table is built correctly.**
+
+3. **`hikari_calloc()` really zeroes.** `resolve_keysym()` only assigns when `*keycode == 0`, so a non-zeroing allocator would leave garbage keycodes in some bindings and not others — which would have explained "`LC+` works, `LA+` does not" exactly. It wraps `calloc(3)`. Not it.
+
+4. **The noop output is not in the output layout.** `server.c:move_view()` looks up `wlr_output_layout_output_at()` at the *displaced* point, and only a leftward move can push that point to negative x — so a headless output sitting at negative coordinates would have been a perfectly left-specific cause. Brace-depth analysis of `src/output.c:449-583` shows both `wlr_output_layout_add()` calls are inside `if (!noop)`. The lookup can only return eDP-1 or NULL, and **both branches call `hikari_view_move()` anyway**.
+
+5. **The constraint arithmetic is symmetric — proven by execution, not inspection.** A harness linked against the **real `src/geometry.c`** exercised `hikari_geometry_constrain_relative()` with `border=1, gap=5, step=100` over a 1920-wide usable area for a full-width tile, a left tile, a right tile and a floating window. Every leftward move delivered exactly `-100` with no clamping, mirroring every rightward move, and six consecutive presses from a left-edge tile walked cleanly `5 → -95 → -195 → … → -595` with no stall. **`usable_min_x = usable_area->x - geometry->width + gap` leaves roughly a full window-width of travel to the left; nothing clamps it.**
+
+### What remains, and why it cannot be settled from the source
+
+Every silent no-op left in `move_view()` is **direction-symmetric**, not left-specific: `hikari_view_is_fullscreen()` refuses all moves; `FULLY_MAXIMIZED` refuses all moves; `HORIZONTALLY_MAXIMIZED` refuses **both** horizontal directions (`if (x != usable_area->x) return;`); `VERTICALLY_MAXIMIZED` refuses both vertical ones. There is no code path that refuses left while permitting right.
+
+That mismatch is the finding. Either the symptom is **not** actually left-specific — the user has described this whole cluster as "cannot go left" throughout, and the resize walk was reported the same way before it turned out to be an origin-translation bug — or the `LA` binding family is not dispatching at all. **Guessing between those two costs a build cycle; one observation settles it.**
+
+### The discriminating observation (asked of the user, 14:02)
+
+`view-move-center` on `LA+c` is the useful probe, because **it reaches `view.c:move_view()` through the `MOVE()` macro without passing through `server.c:move_view(dx, dy)`** — so it exercises the `LA` modifier, the binding table and the view-level move, while skipping the output-layout lookup entirely. Combined with `LA+Right`:
+
+* `LA+c` **and** `LA+Right` work, only `LA+Left` fails → genuinely left-specific, and nothing in the read source can produce that; instrumentation is then the only way forward.
+* `LA+c` works, `LA+Right` also fails → horizontal moves are being refused → the `HORIZONTALLY_MAXIMIZED` guard, or the output-lookup branch, and the view's maximisation state is the next thing to print.
+* `LA+c` fails too → the whole `LA` family never dispatches → the fault is the modifier mask, not the move code at all, and `LC+`-vs-`LA+` is the axis to chase.
+
+### Prepared, not applied
+
+A one-shot instrumented build — `fprintf` in `server.c:move_view()` and `view.c:move_view()` reporting the branch taken, `dx/dy`, the pre- and post-constraint geometry, the maximisation state and the fullscreen flag — is the fallback if the observation above does not resolve it. **Not applied**: it costs the user a build cycle and a restart, and the three-way test above may make it unnecessary.
+## [2026-08-25 13:50] Phase 92: deployed config resynced to the example, personal settings carried across
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command. Config only — no source changed in this step. Backup at `~/.config/hikari/hikari.conf.bak-20260825-1350`.)*
+
+### The comparison was redone before anything was overwritten, and it needed to be
+
+The first pass stripped comments with a naive `split('#')`, which silently truncates any line carrying a colour literal — `bar = "#2b1e3ae6"` becomes `bar = "`. That would have hidden a customised palette behind a false "identical". Redone with a quote-aware stripper that only treats `#` as a comment outside double quotes. **Same seven deltas either way; the palette really is untouched.** The conclusion held, but it held by luck rather than by method, and the method is now right.
+
+### Three configs exist, and the one the IDE opened is not among them
+
+`/etc/hikari/hikari.conf` **does not exist**. The real set is the repo template `etc/hikari/hikari.conf`, the deployed `~/.config/hikari/hikari.conf`, and the installed fallback `/usr/local/etc/hikari/hikari.conf` — which `main.c:135-148` reads only when the user config is absent. The installed copy dates from the 11:41 `make install`, so it still carries the pre-M-2 walk-right bindings and lacks the four `LCS+arrows`; it is refreshed by the next `make install` and is not what runs.
+
+### What was done
+
+The deployed config was rebuilt **from the template**, not patched in place, so it now carries the full updated documentation — including the rewritten RESIZING BY KEY block that names the edge model and the trap. Six settings were carried across, and each was **extracted from the running file rather than hardcoded**, so "keep the active things" means whatever was actually live at the time rather than whatever was assumed:
+
+`ui.animation.enabled = true` · `ui.font = "Hurmit Nerd Font Mono 10"` · `layout.auto = true` · `layout.insert = prepend` · `outputs."*".background = "/home/orpheus497/.config/hikari/hikari_wallpaper.png"` · `actions.terminal = "kitty"`
+
+Each extraction asserted **exactly one** match in both files before substituting, because three of the six anchors (`enabled = false`, `auto = false`, `insert = append`) also occur inside comment prose and a looser match would have edited the documentation instead of the setting.
+
+**The `PREFIX` token was expanded the way `make install` expands it** (`s,PREFIX,/usr/local,`), and the result asserted to contain no surviving `PREFIX` in the body.
+
+### The seventh delta was NOT carried across — that was the point
+
+The live config bound **`L+n` twice** (`action-notifications` at line 455, `workspace-switch-to-sheet-next-inhabited` at 588). First wins, so sheet-next was dead while `L+b` (prev) worked — sheet navigation was one-directional, which is a symptom odd enough to be blamed on something else. This is the Phase 91 R-2 finding, fixed in the template then and never propagated to the user's file. Taking the template's `L+bracketright`/`L+bracketleft` resolves it, and **it is the only setting change the resync made to the deployed file** — everything else was already in step, because the M-2 rebinding had been applied to both files at 13:42.
+
+### Verified after writing, not assumed
+
+Deployed-vs-template now differs in exactly the six keepers and nothing else · no duplicate binding keys remain (the three `"*"` keys sit in `pointers`, `keyboards` and `outputs`, three different parents, so the flat scan that flags them is a false positive) · zero `PREFIX` tokens · brace depth returns to 0 at EOF under a quote- and comment-aware scan, with no unbalanced close · the wallpaper exists at the kept path.
+
+### Found while reading the install rules — NOT fixed, needs approval
+
+**`make install-user` produces a broken background path**, and this was confirmed by running its actual pipeline rather than by reading it. `Makefile:408-409` chains two substitutions: `s,PREFIX,${PREFIX},` turns the template's path into `/usr/local/share/backgrounds/hikari/...`, and then `s,/share/backgrounds/hikari,${HOME}/.config/hikari,` rewrites the middle of that already-absolute path, stranding the prefix in front:
+
+```
+background = "/usr/local/home/orpheus497/.config/hikari/hikari_wallpaper.png"
+```
+
+The second sed assumes it is operating on the un-prefixed template but runs after the first has already prefixed it. Any fresh `make install-user` writes a config whose wallpaper cannot load. It has not bitten this machine because the deployed config predates the rule or was corrected by hand — the live value was already right. **Left alone pending approval**; the fix is to anchor the second substitution on the full post-prefix path, or to reorder so it runs on the template.
+## [2026-08-25 13:44] Phase 92: M-1 and M-2 implemented — the "nothing goes left" pair, fixed
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command. Compiles clean: `/usr/bin/clang -fsyntax-only` over `src/view.c` with `-Wall -Werror -DNDEBUG` and the full pkg-config flag set, exit 0. **Not linked, not run.** Gestures and touch (M-5/M-6) deferred by the user at 13:37 and untouched.)*
+
+### The user's test resolved the one thing the audit could not
+
+Reported at 13:37, after enabling animation: *"everything is always moving to the right and even going off screen — nothing goes left no matter what."* That single sentence settles both open questions, and the "off screen" half is the more informative one.
+
+**It is the exact signature of `view-decrease-size-right` on `LC+Left`.** That action is `move_resize_view(+step, 0, -step, 0)`. Follow it through `queue_resize()`: `new_width = constrain_size(min_width, max_width, requested_width)` clamps the width at the client's own minimum, but `requested_x` is **not** clamped with it — it goes to `hikari_geometry_constrain_relative()`, whose ceiling is `usable_area.x + usable_area.width - gap`, with `gap = gap*2 - border = 9`. So once the window has shrunk to its client minimum, further presses stop changing the size and keep translating the origin until the window is parked **nine pixels from the right edge of the screen**. It does not merely drift right; it walks off. The user watched it happen.
+
+**And no binding anywhere decreased `x`.** `view-increase-size-left` is the action that grows leftwards, and it was bound to nothing; `view-move-left` should have moved leftwards, and per M-1 it drew nothing. Every reachable binding either held `x` or increased it. "Nothing goes left no matter what" was literally true of the whole keymap.
+
+**M-1 is therefore confirmed by elimination, without needing M-V1.** With animation now enabled the user sees window motion — so the animation and re-tile paths, which both run through `hikari_view_refresh_geometry()`, are demonstrably drawing. `LA+Left` produced no motion at all in the same session. The only structural difference between those two cases is the one the audit found: `refresh_geometry` positions the scene node and `move_view()` did not. M-V1 is retired as answered.
+
+### M-1 — `move_view()` now positions the scene node
+
+`src/view.c:190`. Six lines of code and a paragraph of comment, placed **after** the fullscreen and maximized early-returns — so a move that those refuse is still not drawn — and **after** the XWayland `view->move` hook, guarded `scene_node != NULL && output != NULL` exactly as `hikari_view_refresh_geometry()` guards it. The move is offered to `hikari_animation_move()` first and falls back to `wlr_scene_node_set_position()` when it declines, mirroring `refresh_geometry` term for term.
+
+This repairs, in one place, every non-resizing move in the compositor: `view-move-*`, `view-snap-*`, the nine named positions, **and the interactive pointer and touch drag**, all of which funnel through this function.
+
+**No double-animation on the XWayland path, and this was checked rather than assumed.** The worry was that `view->move` configures the X surface, whose commit handler then calls `refresh_geometry` and offers the same move to the animation a second time, restarting it mid-flight. It does not: `move_view` writes `geometry->x/y` *before* calling `view->move`, so by the time the commit lands, `surface_x_in_hikari == geometry->x` and the inequality test at `src/xwayland_view.c:94-98` is false — the handler takes its damage-only `else` branch. `src/animation.c` needed no change and got none.
+
+**The manual stops lying as a side effect.** `hikari(1):1008` and `hikari.conf:127-131` both claimed animation smooths `view-snap-*` and `view-move-*`. It could not, because those paths never reached the only site that offers a move to the animation. They now do, so the text is true as written and needs no amendment — the tidiest of the two resolutions M-4a offered.
+
+**Dragging stays instant**, which is the one thing this must not break. `may_animate()` returns false in move and resize mode, so a drag takes the snap branch and the node tracks the pointer with no interpolation.
+
+### M-1c — the sweep is clean; `move_view` was the last member
+
+The claim was that this is the third instance of a wlroots-0.20 port omission whose first two are on record (scene restacking, DECISIONS_LOG:1340; indicator show/hide, DECISIONS_LOG:2290). The obvious question is whether there is a fourth, so every write to an origin reachable through `hikari_view_geometry()` was enumerated and traced:
+
+* `src/view.c:219,230` — inside `move_view` itself, now covered.
+* `src/view.c:976,984` — inside `queue_resize`, reaches `refresh_geometry` through `resize()` → `commit_pending_operation()`.
+* `src/maximized_state.c:18-21` — maximize commits land in `commit_pending_geometry()` → `refresh_geometry`.
+* `src/xwayland_view.c:105-106` — calls `hikari_view_refresh_geometry()` on the next line.
+* `src/xwayland_unmanaged_view.c:35-36` — unmanaged views carry their own `position_surface_tree()`, which is a direct `wlr_scene_node_set_position`.
+
+Nothing else writes one. **The family is closed at three.**
+
+### M-2 — the resize keymap, option (b)
+
+Applied to `etc/hikari/hikari.conf` **and** the live `~/.config/hikari/hikari.conf`, since the live file is what is under test and a repo-only change would have been untestable:
+
+* `LC+Left` `view-decrease-size-right` → **`view-decrease-size-left`**
+* `LC+Up` `view-decrease-size-down` → **`view-decrease-size-up`**
+* added `LCS+Left` = `view-increase-size-left`, `LCS+Right` = `view-decrease-size-right`, `LCS+Up` = `view-increase-size-up`, `LCS+Down` = `view-decrease-size-down`
+
+`LC+arrows` is now one family — the right and bottom edges, top-left corner pinned, grow and shrink exact inverses, so `LC+Right` then `LC+Left` returns the window precisely to where it started and the rightward walk is gone. `LCS+arrows` is the other family — the left and top edges, the only way to extend a window leftwards or upwards, and the reason `view-increase-size-left` is no longer dead config.
+
+**Option (b) was taken rather than (a)** — the user did not choose between them, and (a) is a strict subset: it fixes the drift but leaves the left and top edges unreachable, which is half of the reported complaint. Reverting to (a) is deleting four lines.
+
+**`LCS+arrows` was verified free before use** (`LCS+Return/j/k/Home` are taken, no arrows), and a duplicate-key scan across both files afterwards found no collision introduced. The comment block was rewritten to state the edge model explicitly and to name the trap by its arithmetic, because "each direction has an increase and a decrease" is what made the asymmetry invisible for as long as it was.
+
+### Pre-existing, found in passing, NOT changed
+
+The live `~/.config/hikari/hikari.conf` still binds **`L+n` twice** — line 455 `action-notifications`, line 588 `workspace-switch-to-sheet-next-inhabited`. The first wins, so sheet-next is dead there. This is exactly the R-2 finding from Phase 91; the repo config was fixed then by moving the pair to `L+bracketright`/`L+bracketleft`, but the user's live file predates that fix. **Left alone** — it is outside the reported symptom and the remedy is a key choice that belongs to the user. Now that duplicate keys warn (Phase 91 F-1/F-2), the next start will name both.
+
+### Still open from Phase 92
+
+M-3 (no directional movement or split resizing under `layout { auto = true }`) is untouched and remains the largest item — it is a feature, and it is the one that decides whether "move this window left" means anything at all on a tiled sheet. M-4b/c/d (motion tuning, map/unmap fades, sheet transitions) are user decisions. M-4e (indicators teleport while the window travels) becomes visible the moment a `view-move-*` is animated, which is now. M-5/M-6 deferred by the user.
+## [2026-08-25 13:26] Phase 92: Motion, keyboard geometry and input-gesture audit — INVESTIGATION ONLY, NOTHING CHANGED
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'` command. No product code was modified. Every claim below is a static-analysis claim against the tree at `92b98e9`; the two marked **UNVERIFIED ON HARDWARE** need the runtime checks in TODOS M-V1/M-V2 before they are treated as settled.)*
+
+**User report (verbatim intent):** moving or expanding a window *to the left* of the screen "seems impossible" from the keyboard; animations are "bare and not seen or experienced" and want "more fluidity"; trackpad gestures "do not work"; touchscreen functionality and gestures "don't seem to be present" — the last flagged by the user as possibly out of scope but wanting documentation.
+
+Four separate causes were found. They are genuinely independent, which is why one symptom ("cannot go left") has two of them behind it.
+
+---
+
+### M-1 — `move_view()` never repositions the scene node. Every pure move is invisible. **CRITICAL, UNVERIFIED ON HARDWARE.**
+
+`src/view.c:190 move_view()` is the single sink for **every** non-resizing move in the compositor:
+
+* `hikari_view_move()` → `view-move-{left,right,up,down}` (`LA+arrows`)
+* `hikari_view_move_absolute()` → `view-snap-*` (`LAS+arrows`), and **the interactive pointer drag** (`move_mode.c cursor_move()`)
+* the nine `hikari_view_move_<position>()` macros → `view-move-center` (`LA+c`) and its eight siblings
+
+What it does: constrains the requested origin, writes it into `*geometry` (which is `view->current_geometry`), calls the XWayland `view->move` hook, calls `refresh_border_geometry()`, and damages. What it does **not** do is call `wlr_scene_node_set_position()` on `view->scene_node`.
+
+An exhaustive grep of the tree finds exactly four sites that position a view's scene node — `src/view.c:2561` (inside `hikari_view_refresh_geometry`), `src/animation.c:276` and `:303`, and `src/server.c:1278` (output-layout change). **None of them is reachable from `move_view()`.**
+
+The border and indicator-frame rects do not disguise this: `src/border.c:101` and `src/indicator_frame.c:132-153` position their rects **parent-relative**, so they sit still along with the tree. The one thing that *does* move is `hikari_indicator_position()`, whose bars are independent top-level nodes — so the predicted on-screen symptom is *the floating indicator jumps to the new position while the window stays put*.
+
+**This is a wlroots-0.20 scene-port omission, not a hikari design decision, and it is a repeat of a known bug class in this tree.** `git show af51ffb:src/view.c` shows the pre-scene `move_view()`: it mutated geometry and damaged, and that was sufficient because the old render loop read `view->current_geometry` every frame. The port made the scene node authoritative and taught `hikari_view_refresh_geometry()` about it — but not `move_view()`. DECISIONS_LOG line 1340 records the identical failure for restacking ("Views never restacked in the scene at all… nothing anywhere called `raise_to_top` on `view->scene_node`") and line 2290 states the general form: *"upstream hikari drew indicators inside the render loop… porting to `wlr_scene` converted that implicit per-frame gate into persistent scene nodes, and the equivalent explicit enable/disable was never added."* `move_view()` is the third member of that family.
+
+**Why hit-testing still feels right and therefore hides the bug from casual use:** `surface_at()` hit-tests through `hikari_view_geometry()`, not the scene graph (`src/server.c:546-566`, and the `hikari_animation_offset()` comment there says so explicitly). So after a move the compositor believes the window is at the new place and will focus/raise it there, while the pixels are at the old place. The two models disagree silently.
+
+**Fix shape (NOT implemented, pending approval):** one call at the end of `move_view()`, guarded exactly as `hikari_view_refresh_geometry()` guards it (`scene_node != NULL && output != NULL`), offering the move to `hikari_animation_move()` first so `view-move-*`/`view-snap-*` finally animate as the manual and `hikari.conf` already claim they do. Roughly six lines. It must go **after** the maximized/fullscreen early-returns, or a rejected move would still be drawn.
+
+**Why this is marked UNVERIFIED:** the reasoning is a complete static trace and I am confident in it, but the user has a running compositor and the cheapest possible discriminator exists (M-V1 in TODOS: float one window, press `LA+Left`, watch whether the indicator separates from the window). A ten-second check beats a paragraph of inference, and this project has already paid for treating inference as a result.
+
+---
+
+### M-2 — the shipped resize bindings are an asymmetric set. The window walks right and can never grow left. **CONFIRMED BY INSPECTION.**
+
+All eight directional resize actions exist and are correct. They are *edge* moves — the direction names which way a boundary travels, `increase`/`decrease` whether area grows:
+
+| action | delta `(dx, dy, dw, dh)` | effect | bound? |
+|---|---|---|---|
+| `view-increase-size-right` | `(0, 0, +s, 0)` | right edge right, **x fixed** | `LC+Right` |
+| `view-decrease-size-left`  | `(0, 0, -s, 0)` | right edge left, **x fixed**  | **NO** |
+| `view-decrease-size-right` | `(+s, 0, -s, 0)` | **left edge right (origin moves)** | `LC+Left` |
+| `view-increase-size-left`  | `(-s, 0, +s, 0)` | **left edge left (origin moves)** | **NO** |
+| `view-increase-size-down`  | `(0, 0, 0, +s)` | bottom edge down, **y fixed** | `LC+Down` |
+| `view-decrease-size-up`    | `(0, 0, 0, -s)` | bottom edge up, **y fixed**   | **NO** |
+| `view-decrease-size-down`  | `(0, +s, 0, -s)` | **top edge down (origin moves)** | `LC+Up` |
+| `view-increase-size-up`    | `(0, -s, 0, +s)` | **top edge up (origin moves)** | **NO** |
+
+(`src/server.c:2537-2566` for the four out-of-line ones, `include/hikari/server.h:383-405` for the four inline ones. `s` = `hikari_configuration->step`, 100 in the shipped and live configs.)
+
+Both `etc/hikari/hikari.conf:588-591` and the live `~/.config/hikari/hikari.conf:560-563` bind **one origin-preserving grow and one origin-moving shrink per axis**. The consequence is arithmetic, not opinion:
+
+* `LC+Right` then `LC+Left`: `(x, w)` → `(x, w+s)` → `(x+s, w)`. **Same size, moved 100 px right.** Repeat and the window walks off the right of the screen a step at a time.
+* `LC+Down` then `LC+Up`: same drift downward.
+* **No binding anywhere moves the left or top edge outward.** `view-increase-size-left` and `view-increase-size-up` are dead config — the actions are implemented, parse, and are documented in `hikari(1):411-420`, and nothing invokes them.
+
+This alone is a complete explanation of *"expanding to the left of the screen seems impossible"*, and it is independent of M-1 (resize commits DO reposition the node, via `queue_resize` → `resize()` → `commit_pending_operation()` → `hikari_view_refresh_geometry()`).
+
+**The correct pair for a keyboard is the origin-preserving one**, because it makes grow and shrink exact inverses: `view-increase-size-right` / `view-decrease-size-left` on the horizontal, `view-increase-size-down` / `view-decrease-size-up` on the vertical. Whether to *also* expose the four origin-moving edge actions (`LCS+arrows` is free) is a design question for the user, tabled in TODOS.
+
+---
+
+### M-3 — with `layout { auto = true }` the tiling model has no directional movement at all. **CONFIRMED BY INSPECTION. This is a design gap, not a defect.**
+
+The live config runs `layout { auto = true; insert = prepend; reflow-on-close = true }`, so the user's windows are **tiled**, and the analysis above about floating geometry is largely beside the point for them.
+
+The complete set of layout actions is `src/action.c:237-264`: `layout-cycle-view-{next,prev,first,last}`, `layout-exchange-view-{next,prev,main}`, `layout-reset`, `layout-restack-{append,prepend}`, `layout-apply-<register>`. **There is no directional tile navigation and no directional tile exchange** — movement within a layout is by list order only. There is likewise **no action of any kind that adjusts a split ratio**; `scale` / `min` / `max` are read from the `layouts` register at apply time.
+
+So on a tiled sheet:
+* *Move this window left* — not expressible. `view-move-left` on a tiled view writes into `view->tile->view_geometry` (via `refresh_unmaximized_geometry()`, `src/view.c:874`), desynchronising the tile from the layout while (per M-1) drawing nothing.
+* *Make this pane wider* — only indirectly. `view-increase-size-right` resizes the tile in place; the dynamic-scale split (`scale = { min, max }`) reads the first container window's size at the **next** apply, so the effect appears only after a manual `layout-apply-*` or a map/unmap-triggered reflow. Every neighbour keeps its old geometry until then.
+
+This, combined with M-2, is the user-facing answer to *"moving to the left seems impossible"* on their actual desktop.
+
+---
+
+### M-4 — the animation subsystem is off, and even switched on it cannot reach the actions its own documentation names. **CONFIRMED BY INSPECTION.**
+
+**Why nothing is seen today:** `ui { animation { enabled = false } }` in both `etc/hikari/hikari.conf:135` and the live `~/.config/hikari/hikari.conf`. `may_animate()` (`src/animation.c:148`) returns false on the first term, `hikari_animation_move()` takes its snap path, and `src/animation.c`'s working code has never executed. This is exactly what BRIEFING Phase 91 already predicted ("almost certainly not executed a line of their working paths") — now confirmed against the live config file, not just the shipped one.
+
+**What is available at all, once enabled:** *position interpolation only*, `duration` 0-1000 ms (default 120), three easings. That is the entire visual-motion budget of the compositor. A full grep confirms there is **no** `wlr_scene_buffer_set_opacity` and no corner-radius call for any view node anywhere in `src/` — so there is no fade on map or unmap, no window-open/close transition, no opacity, no rounded corners, no shadow, and no sheet/workspace-switch transition (`hikari_view_show/hide` is a bare `wlr_scene_node_set_enabled`, `src/view.c:1462` / `:1509`). Blur exists but is lock-screen-only. "Bare" is an accurate description of the ceiling, not of a misconfiguration.
+
+**And the documentation overstates what the code does.** `hikari(1):1008` and `etc/hikari/hikari.conf:127-131` both say animation smooths *"re-tiling…, **view-snap-\***, **view-move-\***, and applying a layout."* Animation is offered in exactly one place, `hikari_view_refresh_geometry()` (`src/view.c:2560`) — which, per M-1, `view-snap-*` and `view-move-*` never reach. **As written, those two claims are false**; re-tiling and layout application are true. Fixing M-1 makes the documentation true retroactively, which is the tidiest possible resolution and an argument for fixing M-1 first.
+
+**Fluidity, if the user wants more than a slide** — options, in ascending cost, none implemented: raise the default `duration` and prefer `ease-in-out` for long journeys; animate the indicator bars alongside the window they annotate (they currently teleport to the destination at commit time while the window travels); add map/unmap opacity fades via `wlr_scene_buffer_set_opacity`, which is a genuinely new capability rather than a tuning change; sheet-switch transitions, which need the outgoing sheet's nodes kept alive for the duration and are the largest of the four. **Resize animation stays deferred** per the user's 2026-08-25 ruling (TODOS B-3) — nothing here reopens it.
+
+---
+
+### M-5 — trackpad gestures: the implementation is complete and correct on inspection. **UNVERIFIED ON HARDWARE — and it has never once been run.**
+
+The full path was traced and no defect was found:
+
+* `wlr_pointer_gestures_v1_create()` at `src/server.c:1682`, NULL-guarded.
+* Pointers attached to the cursor with `wlr_cursor_attach_input_device()` (`src/server.c:118`), which is what routes libinput's `swipe_*` / `pinch_*` / `hold_*` into `wlr_cursor`'s signals.
+* All eight listeners registered in `hikari_cursor_activate()` (`src/cursor.c:695-715`), all eight removed in `hikari_cursor_deactivate()` — no leak, no double-remove.
+* `inputs { gestures {} }` parses (`src/configuration.c:1594` via `parse_inputs`), the key grammar is strict and well-tested (`src/gesture_config.c`), and the live config's two bindings (`swipe-left-3` = `workspace-cycle-next`, `swipe-right-3` = `workspace-cycle-prev`) are valid keys naming valid actions.
+* Classification thresholds are sane: 20.0 accumulated units for a swipe, 0.1 scale delta for a pinch.
+
+**So "gestures do not work" cannot be explained from the source, and the honest position is that this has simply never been executed.** TODOS R7(c) has carried "Phase 50 touch/gesture runtime checks" as user-run and outstanding since Phase 50; TODOS line 749 records only that the *config parses*, which is not the same claim. The discriminating checks are M-V3/M-V4 in TODOS — a `libinput debug-events` capture answers in one command whether the hardware is emitting gestures at all, which splits "hikari bug" from "libinput/hardware" before any code is touched.
+
+**Two real design consequences worth knowing regardless of whether the bindings fire**, both deliberate and both documented at `hikari(1):1492-1497`:
+
+1. **Every gesture is withheld from the client until it ends**, then replayed in a burst if unmatched (`replay_swipe/pinch/hold`, `src/cursor.c:407-455`). Continuous client-side gesture feedback — GTK pinch-to-zoom tracking your fingers, a browser's two-finger back-swipe animating as you go — **cannot work** under this design. It is not a bug; it is the cost of deciding match-or-forward at the end event, which is the only point at which the direction is known.
+2. `HIKARI_GESTURE_MAX_UPDATES` is 128 (`include/hikari/cursor.h:15`); a longer gesture silently drops the excess from what the client eventually receives.
+
+---
+
+### M-6 — touchscreen: basic touch is implemented; touchscreen *gestures* do not exist and cannot with the current architecture. **CONFIRMED BY INSPECTION.**
+
+What **is** present, and looks correct: `WLR_INPUT_DEVICE_TOUCH` devices are tracked (`src/touch.c`), attached to the cursor and confined to their fused panel by EDID name (`src/server.c:172-201`), `WL_SEAT_CAPABILITY_TOUCH` is advertised once a device exists (`src/server.c:233`), and down/up/motion/cancel/frame are forwarded as real `wl_touch` events with normalised-to-layout coordinate conversion. The first finger of a sequence additionally synthesises a `BTN_LEFT` press into the mode state machine, so tap-to-focus and touch-drag reuse the pointer paths; `release_primary_touch()` is correctly invoked from up, cancel **and** `hikari_cursor_deactivate()`, so no mode can be left believing a button is held.
+
+What is **absent**: any touchscreen gesture whatsoever. This is structural, not an oversight — `wlr_pointer_gestures_v1` events originate from libinput's **touchpad** gesture recogniser. libinput does **not** synthesise swipe/pinch/hold from a touchscreen; a touchscreen emits raw multi-touch points and the compositor is expected to recognise gestures itself. hikari has no such recogniser. Concretely, there is no edge swipe, no multi-finger touchscreen swipe, no touchscreen pinch handled by the compositor (a client can still implement its own from the raw points it receives — the PDF-viewer case `hikari(1):1516` describes), no long-press, no on-screen keyboard trigger, and no kinetic scrolling.
+
+Adding it means a touch-point gesture recogniser in `src/cursor.c` sitting on the existing `touch_down/motion/up` handlers, plus a config surface for it. **The user flagged this as possibly out of scope; recorded as scoped-out and documented, not planned.** It is a feature, and a fair-sized one.
+
+---
+
+### Ambiguity for the user to resolve before any of this is executed
+
+1. **M-1 fix — confirm the symptom first, or fix on the trace?** Recommendation: run M-V1 (ten seconds) first. The fix is six lines either way, but knowing beats inferring and this project's own history says so.
+2. **M-2 — which resize model should the keyboard expose?** (a) swap the two bad bindings for the origin-preserving inverses, four bindings total, no drift, no left/top edge control; (b) (a) plus the four origin-moving edge actions on `LCS+arrows`, eight bindings, full edge control, more to learn. **Recommendation: (b)** — (a) is a strict subset of it and the actions already exist and are already documented.
+3. **M-3 — should directional tile movement be built?** New actions (`layout-exchange-view-{left,right,up,down}` and/or split-ratio adjustment). This is a feature, not a fix, and it is the largest item here. Tabled, not planned.
+4. **M-4 — how much more motion is wanted?** Tuning only, or new capability (map/unmap fades, sheet transitions)? Resize animation stays deferred regardless.
+5. **M-5 — run the gesture diagnostics before anything is changed in `src/cursor.c`?** Recommendation: yes; there is nothing to fix until the hardware is shown to be emitting.
+6. **M-6 — touchscreen gesture recognition: out of scope, or backlog?** Recorded as documented-and-scoped-out unless the user says otherwise.
 ## [2026-08-25 11:17] Phase 91: hw.acpi.acline made authoritative for the battery's plugged-in colour
 
 *(Timestamp source: `date '+%Y-%m-%d %H:%M'` command.)*

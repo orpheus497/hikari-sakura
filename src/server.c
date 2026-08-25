@@ -2469,6 +2469,23 @@ move_view(int dx, int dy)
 
   hikari_server_set_cycling();
 
+#ifdef HIKARI_DEBUG_MOVE
+  /* Action purpose: Opt-in move diagnostics, built only with
+  CFLAGS_EXTRA=-DHIKARI_DEBUG_MOVE. The lookup below is the one place in a
+  keyboard move where the SIGN of dx changes what happens, so it is printed
+  with the point it was asked about and the branch it selected. */
+  fprintf(stderr,
+      "[hikari/move-server] dx=%d dy=%d | geom={%d,%d %dx%d} | out=%s{%d,%d "
+      "%dx%d} | probe=(%.0f,%.0f) -> %s | branch=%s\n",
+      dx, dy, geometry->x, geometry->y, geometry->width, geometry->height,
+      view_output->wlr_output->name, view_output->geometry.x,
+      view_output->geometry.y, view_output->geometry.width,
+      view_output->geometry.height, lx, ly,
+      wlr_output != NULL ? wlr_output->name : "NULL(off-layout)",
+      (wlr_output == NULL || wlr_output->data == view_output) ? "move"
+                                                             : "MIGRATE");
+#endif
+
   if (wlr_output == NULL || wlr_output->data == view_output) {
     hikari_view_move(focus_view, dx, dy);
   } else {
