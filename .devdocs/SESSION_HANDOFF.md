@@ -2,6 +2,34 @@
 
 *Note: Most recent entries are listed at the top.*
 
+## Session Date: 2026-08-27 07:52 -- Phase 93: documentation and branding cohesion
+
+**Timestamp:** 2026-08-27 07:52 *(source: `date '+%Y-%m-%d %H:%M'`)*
+
+**Current Status:** Documentation phase, complete. **No compositor source was touched, so there is nothing here to build or run.** The user asked for branding and user-facing documentation to be made cohesive, comprehensive and correct; the audit found the gap was structural rather than cosmetic.
+
+**The finding:** `sofi` and `sakura` both document their relationship to this project; this project documented neither. `sofi`'s README calls itself "the shell for hikari-sakura" and its `sheets` mode cites `include/hikari/ipc.h` by name — while in this tree `sofi` was four unexplained command strings in the default config and `sakura`, which the compositor is half named after, appeared nowhere. The control socket those clients depend on was documented **only in its own header**.
+
+**Changed:**
+
+- `README.md` — rewritten. Companion-projects section (`sofi`, `sakura`) framed as recommended, not required, per the user's ruling; the top bar documented as a component with its eleven blocks, their sources and the **Nerd Font requirement**; a control-socket section pointing at `hikari(1)`; **build flags corrected from opt-in to opt-out** (`WITH_ALL = YES` is the Makefile default and the README said the opposite); `WITH_FOREIGN_TOPLEVEL_MANAGEMENT`, `make install-user`, `HIKARI_LOG` and `autostart` documented for the first time; FILES and Environment tables added.
+- `share/man/man1/hikari.md` + regenerated `hikari.1` — NAME, title and attribution fixed (it credited *antaz*, the README credits *raichoo*; the README is right); new **TOP BAR**, **CONTROL SOCKET**, **FILES**, **ENVIRONMENT**, **EXIT STATUS**, **SEE ALSO**; the dangling `see HIKARI_LOG in **start-hikari**` cross-reference — to a page that does not exist — now resolves.
+- `etc/hikari/hikari.conf` — the four `sofi` actions explained, `install-user` and `hikari(1)` pointed at from the header.
+- `Makefile` — **four real defects**, all found by running the targets: `dist` listed `CoC.md` and `CHANGELOG.md` which have never existed, so `make dist` **could not build a tarball at all**; `@darcs revert` and the `_darcs` guard in `distclean` were pre-git leftovers, the latter making `distclean` a silent no-op; the roff rule had **no prerequisite on its markdown source**, so editing the manual never rebuilt the page; `clean-doc`'s `_darcs` guard made `make clean` leave a stale page behind every time; and `dist` depended on the *file*, so `make dist VERSION=1.0.0` shipped a page stamped `CURRENT`. `doc` is now phony and unconditional, with one shared `PANDOC_MAN` definition.
+
+**One conclusion was reversed mid-session and it is worth carrying forward: `share/man/man1/hikari.1` is `.gitignore`'d and untracked, not committed.** The dependency was initially left off to avoid forcing pandoc on `make install` — reasoning that assumed the generated page ships in the repository. It does not (`git ls-files share/man/man1/` returns the markdown alone), so a checkout has no page, `make install` needs pandoc regardless, and the dependency costs nothing. **`make` itself never needs pandoc; `make install` from a git checkout always does; installing from a `make dist` tarball does not.** `README.md` says exactly this now — its previous claim that a precompiled page is checked in was false.
+
+**Verified:** `make -n` on `doc`/`dist`/`distclean`; `make doc` regenerated with pandoc 3.10.2 and the result **rendered through `man(1)`** to confirm the new `tbl` tables lay out; config brace balance 30/30; every README anchor and relative link resolved.
+
+**Incidental:** `share/man/man1/hikari.1` was **root-owned** from an earlier `sudo make` and pandoc could not write it. Unlinked and regenerated as the user; it is now `orpheus497:wheel`. **The root-owned `*.o` files and the three binaries in the repository root are still there** and will block a non-sudo `make` — `sudo make clean` clears them.
+
+**Next steps:**
+
+1. Nothing is blocked. Phase 92's `src/view.c` work is still **unbuilt and unrun** and remains the open item — see the entry below.
+2. If `CHANGELOG.md` is wanted, it now has to be created deliberately rather than assumed by the `dist` target.
+3. `hikari.1` is regenerated at `VERSION=CURRENT`; a release should run `make doc VERSION=<v>` (or just `make dist VERSION=<v>`, which now does it).
+
+
 ## Session Date: 2026-08-25 09:06 -- Phase 91 runs on hardware; opt-in paths still unexercised
 
 **Timestamp:** 2026-08-25 09:06 *(source: `date '+%Y-%m-%d %H:%M'`)*

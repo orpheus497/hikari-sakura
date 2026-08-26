@@ -1,10 +1,15 @@
 # Hikari Project Briefing
 
-*Last Updated:* 2026-08-25 15:35
+*Last Updated:* 2026-08-27 07:52
 
 ## Current Status
 
-- **Phase:** Phase 92 (**M-1 + M-2 IMPLEMENTED — `src/view.c` compiles clean at `-Wall -Werror`. NOT linked, NOT run. The build is the user's.**)
+- **Phase:** Phase 93 (**COMPLETE — documentation and branding cohesion. No compositor source touched; nothing to build or run.**)
+- **Carried forward:** Phase 92 (**M-1 + M-2 IMPLEMENTED — `src/view.c` compiles clean at `-Wall -Werror`. NOT linked, NOT run. The build is the user's.**) is still the open engineering item; Phase 93 did not touch it.
+
+### Phase 93 in one paragraph
+
+The user asked for branding and user-facing documentation to be cohesive, comprehensive and correct. **The gap turned out to be structural rather than cosmetic: `sofi` and `sakura` each document their relationship to this project, and this project documented neither.** `sofi`'s README calls itself "the shell for hikari-sakura" and its `sheets` mode cites `include/hikari/ipc.h` by name; in this tree `sofi` was four unexplained command strings in the default config, and `sakura` — the source of the second half of the compositor's name — appeared nowhere at all. **The control socket those clients depend on was documented only in its own header.** `README.md` was rewritten and `hikari(1)` gained six sections it never had (TOP BAR, CONTROL SOCKET, FILES, ENVIRONMENT, EXIT STATUS, SEE ALSO). Along the way the build documentation was found to be **inverted** — `WITH_ALL = YES` is the Makefile default, so every optional feature ships on, while the README described three of them as disabled by default — and **four real Makefile defects surfaced by running the targets**, the largest being that `make dist` listed two files that have never existed in this tree and therefore could not produce a tarball at all. Full analysis in `DECISIONS_LOG.md` Phase 93.
 
 **The user's 13:37 test settled the audit's one open question and did it with a single detail.** Reported, after enabling animation: *"everything is always moving to the right and even going off screen — nothing goes left no matter what."* **"Off screen" is the signature of `view-decrease-size-right` on `LC+Left`** — `queue_resize()` clamps the width at the client's minimum but does **not** clamp `requested_x` with it, so once the window can shrink no further each press keeps translating the origin until `hikari_geometry_constrain_relative()` parks it **nine pixels from the right edge**. It does not drift; it walks off. And **no reachable binding decreased `x` at all**: `view-increase-size-left` was bound to nothing, and `view-move-left` drew nothing. "Nothing goes left no matter what" was literally true of the entire keymap.
 

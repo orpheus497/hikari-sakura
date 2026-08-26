@@ -1,3 +1,64 @@
+## [2026-08-27 07:52] Phase 93: **Documentation and branding cohesion — the ecosystem was documented in one direction only**
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'`. User directive: make branding, user-facing documentation and everything around it cohesive, comprehensive and correct. Scope is documentation and the build rules that generate or ship it; no compositor source was touched.)*
+
+### The finding that shaped the phase
+
+**`sofi` and `sakura` link here; nothing here linked back.** `sofi`'s README opens by calling itself "the shell for hikari-sakura" and its `source/modes/sheets.c` cites `hikari-sakura include/hikari/ipc.h` **by name**. `sakura` is where the second half of this project's name comes from. In this repository, `sofi` appeared as four bare command strings in `etc/hikari/hikari.conf` with no explanation of what the word meant, and `sakura` appeared nowhere at all outside the compositor's own title. A reader of `README.md` or `hikari(1)` had no way to learn that either project exists.
+
+**The control socket was the sharpest case of the same problem.** `src/ipc.c` is a deliberate, bounded public interface — it exists precisely because no Wayland protocol expresses a sheet, its header says so at length, and `sofi -show sheets` is a shipping client of it. It was documented **only in `include/hikari/ipc.h`**, which is to say only to people already reading the source. Nothing user-facing mentioned the socket, its path, its three commands or its normal-mode gate.
+
+**The build documentation was inverted.** `Makefile:10` is `WITH_ALL = YES` unconditionally, so XWayland, screencopy, gammacontrol, layer-shell, virtual input and foreign-toplevel management are **all on by default**. `README.md` described three of them as "disabled by default" and presented `make WITH_ALL=YES` as the way to opt *in*. The `:tu` machinery in the Makefile's own header comment exists to make `WITH_X=NO` work from the command line, and that — the only reason it was written — was undocumented. `WITH_FOREIGN_TOPLEVEL_MANAGEMENT` was documented nowhere despite being in `WITH_ALL`.
+
+### Decisions
+
+1. **`sofi` and `sakura` are documented as recommended companions, not as requirements** (user's ruling). The compositor genuinely runs without either, and any layer-shell client or display manager substitutes. What is stated plainly instead is the consequence of the defaults: the shipped configuration binds `L+Space`, `L+w`, `L+e` and `L+n` to `sofi`, so **without it those four bindings do nothing** — install it or rebind them.
+
+2. **The control socket protocol lives in `hikari(1)`, with a pointer from `README.md`** (user's ruling). Reference material belongs in the reference page, and one copy cannot drift from another. The new **CONTROL SOCKET** section documents the path and mode, the client and request-size bounds, all three verbs with their exact response grammar, **all seven error strings**, and the `ECONNREFUSED`-means-stale distinction. It restates the header's own warning that the socket is not a scripting interface and must not grow into one.
+
+3. **The `can_act()` gate is documented as a security property, not an implementation note.** It is what stops an external process reading per-sheet view counts, switching sheets or moving windows **on a locked screen** — the Phase 88 title-leak reasoning and the Phase 89/90/91 modal hazard, reaching a fourth site. A user deciding whether to expose the socket needs that stated.
+
+4. **The build flags are re-documented as opt-*out*,** with a table giving each flag's real default, and `WITH_EXT_IMAGE_CAPTURE`'s deliberate exclusion from `WITH_ALL` kept as the one opt-in. The command-line-wins behaviour is shown with worked examples, including `make WITH_ALL=NO WITH_XWAYLAND=YES`.
+
+5. **The top bar is documented as a component rather than a footnote.** Its eleven blocks are tabulated against their actual sources (`kern.cp_time`, `hw.acpi.battery.*`, `getifaddrs(3)`, `nvidia-smi`, `playerctl`, `pactl`, `backlight(8)`), together with the fact that an unreadable source omits its block entirely. **The Nerd Font requirement is now stated**: the blocks are labelled with private-use-area glyphs, so a user without one gets a bar of boxes and no way to know why. The two-process rationale, the palette-reaches-it-at-startup-not-on-reload asymmetry, and the pywal fallback are recorded with it.
+
+### Build-rule defects found while verifying the documentation
+
+These were found by running the targets rather than by reading them, and are fixed:
+
+* **`make dist` could not produce a tarball at all.** The file list named `CoC.md` and `CHANGELOG.md`, neither of which has ever been in this tree, and `tar` fails the whole archive on a missing member. Removed; `test.mk`, `compile_flags.txt`, `.clang-format` and the README's screenshot — all of which exist and all of which were missing — added.
+
+* **`@darcs revert` ran before the tarball.** An upstream leftover from before this project moved to git. Reverting the working tree during a build is not a dist target's business under any VCS. Removed. The same dead `_darcs` guard made `distclean` **silently do nothing**; `version.h` is regenerated on every build by the `FORCE` rule, so it is now simply removed.
+
+* **Editing `share/man/man1/hikari.md` never rebuilt `hikari.1`.** The roff rule had **no prerequisite on its own source**, so the installed page could drift arbitrarily far from the markdown it claims to be generated from. Fixed by adding the dependency, and `doc` is additionally made **phony and unconditional** for a forced rebuild, with both rules sharing one `PANDOC_MAN` definition so they can never disagree on the title.
+
+  **This reverses a conclusion reached earlier in the same session, and the reversal is the useful part.** The dependency was first left off on the reasoning that the generated page is committed and is a prerequisite of `install`, so a checkout giving the markdown the newer timestamp would make `make install` shell out to pandoc and fail on a machine without it. **`hikari.1` is not committed.** It is in `.gitignore` and `git ls-files share/man/man1/` returns the markdown alone — so a checkout has no page at all, the rule fires from scratch, and **pandoc is required for `make install` from the repository either way**. There was no cost to weigh. In an unpacked tarball both files exist with tar-preserved timestamps and `dist` regenerates the page before archiving, so the `.1` is always the newer and installing from a tarball still needs no pandoc. **The premise was assumed from the file being present in a working tree that had been built in; one `git ls-files` would have settled it, and did.**
+
+* **`make clean` left a stale manual page behind every time.** `clean-doc` guarded both its lines on `test -e _darcs`, matching nothing in a git checkout, so it was a **silent no-op** — the same dead guard as in `distclean`, and the same one that hid `rm version.h` in `clean`. Since `hikari.1` is generated and ignored, removing it is exactly what `clean` should do; both guards are gone.
+
+* **`make dist VERSION=1.0.0` shipped a manual page stamped `CURRENT`.** The tarball depended on the *file* `share/man/man1/hikari.1`, which already existed and therefore satisfied the prerequisite without regenerating. Now depends on phony `doc`, so the page in the archive carries the version the archive is named for. This is why `dist` needs pandoc and `install` deliberately does not.
+
+### Corrections to existing user-facing text
+
+* **Attribution disagreed with itself.** `hikari(1)` credited the original to *antaz*; `README.md` credited *raichoo* and named antaz's repository as where it was carried. The README is right and the man page now matches it.
+* `hikari(1)`'s NAME was `Hikari Sakura - FreeBSD Wayland Compositor` while its pandoc title was `hikari - Wayland Compositor`. A naming rule is now stated once, in both documents: **Hikari Sakura** is the desktop environment, `hikari` is the binary, the config file, the config directory and the manual page.
+* `hikari(1):193` pointed readers to "`HIKARI_LOG` in **start-hikari**" — **a cross-reference to a manual page that does not exist**. Now points at the new **ENVIRONMENT** section, which documents the variable properly, including why the redirect is an `exec` and not a pipe (a pipeline reports `tee`'s status, so a `SIGSEGV` would surface as a clean exit 0 — the opposite of what a diagnostic build needs).
+* `README.md` read "Hikari Sakura does provide a built-in status bar" in a list of limitations, where every neighbouring entry is a negation. Reworded.
+* **`~/.config/hikari/autostart` was in `hikari(1)` and not in `README.md`**, despite being the only place to start `sofi`'s notification and tray daemons. Now documented in both, with that example.
+* `make install-user` / `uninstall-user` were undocumented. They are the friendliest entry point in the build (they pre-substitute the wallpaper path and refuse to clobber an existing config) and the README now says so, including the **run it without `sudo`** warning, since the target writes to `$HOME` rather than `DESTDIR`.
+
+### New reference material
+
+`hikari(1)` gained **TOP BAR**, **CONTROL SOCKET**, **FILES**, **ENVIRONMENT**, **EXIT STATUS** and **SEE ALSO** — it previously ended at OUTPUTS with none of them. **EXIT STATUS was written from `main.c` rather than from assumption**, and the distinction matters: the failure is "no readable configuration file could be *resolved*" from `-c`, user, then compiled-in default — not a parse error. The root check is also recorded precisely, because it is easy to get wrong: **only uid 0 counts as privileged**; gid 0 (`wheel`) is an ordinary primary group for a normal FreeBSD user and is not rejected.
+
+`etc/hikari/hikari.conf` gained a block above its four `sofi` actions explaining what each surface is, that `sheets` is the one that speaks the control socket, and how to point them at something else — plus the two daemons that need `autostart` because they have no binding.
+
+### Verification
+
+`make -n` on `doc`, `dist` and `distclean` at an explicit VERSION; `make doc` regenerated `hikari.1` with pandoc 3.10.2 and it was **rendered through `man(1)`** — the new tables reach the page through `tbl` and lay out correctly. `hikari.conf` re-checked for brace balance (30/30, depth 0; the edits are comments only). Every internal anchor and relative link in `README.md` resolved programmatically. No compositor source was modified, so nothing here needs a build to be trusted.
+
+**Note on `share/man/man1/hikari.1`:** it was **root-owned** from an earlier `sudo make`, so pandoc could not write it. Unlinked and regenerated as the user (the directory is user-owned), and it is now `orpheus497:wheel` like the rest of the tree. Other root-owned build artefacts from that session remain — the `*.o` files and the three binaries in the repository root.
+
 ## [2026-08-25 15:35] Phase 92: **M-8 ROOT CAUSE FOUND — the keyboard never sends the keystroke. Not a hikari defect.**
 
 *(Timestamp source: `date '+%Y-%m-%d %H:%M'` command. Evidence: passive `/proc/4073/mem` polling at 10 ms reading `wlr_keyboard.keycodes[]` on all eight seat keyboards while the user worked normally. **Nothing injected, nothing asked of the user, the compositor was never stopped or attached to.**)*
