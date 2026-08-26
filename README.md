@@ -30,10 +30,13 @@ and each group can have an arbitrary name. Views from one group can be spread
 among all available sheets. Some operations act on entire groups rather than
 individual views.
 
-Beyond window management, Hikari Sakura draws its own **top bar** and its own
-**screen locker** — both in-process, both themed from the same sixteen-colour
-palette as everything else. See [The top bar](#the-top-bar) and the *Lock
-screen* section of hikari(1).
+Beyond window management, Hikari Sakura provides its own **top bar** and its own
+**screen locker**, both themed from the same sixteen-colour palette as
+everything else. The screen locker is drawn entirely in-process. The top bar is
+too — the compositor renders it in its own scene graph — but its *content* comes
+from `hikari-topbar`, a separate unprivileged process, so that blocking sensor
+reads cannot stall the Wayland event loop. See [The top bar](#the-top-bar) and
+the *Lock screen* section of hikari(1).
 
 ### Naming
 
@@ -142,8 +145,11 @@ tree without installing, copy it into place by hand:
 
 ```sh
 sudo install -m 644 etc/pam.d/hikari-unlocker.FreeBSD \
-    /usr/local/etc/pam.d/hikari-unlocker
+    ${ETC_PREFIX}/etc/pam.d/hikari-unlocker
 ```
+
+Substitute the same `ETC_PREFIX` you build with — `/usr/local` if you never set
+it — so the policy lands where `hikari-unlocker` expects it.
 
 ### Setting up the keyboard layout
 
@@ -502,11 +508,22 @@ configuration in place.
 
 ### Optional features
 
-**Every optional feature is enabled by default.** The `WITH_ALL` switch defaults
-to `YES`, which turns on XWayland, screencopy, gamma control, layer-shell,
-virtual input and foreign-toplevel management. A plain `make` gives you all of
-them, and the flags below exist to turn things **off** or to opt into the one
-feature `WITH_ALL` deliberately excludes.
+**The `WITH_ALL` switch defaults to `YES`,** which turns on XWayland,
+screencopy, gamma control, layer-shell, virtual input and foreign-toplevel
+management. A plain `make` gives you all six, so most of the flags below exist
+to turn things **off**.
+
+`WITH_ALL` does **not** cover everything. Two switches stay off unless you name
+them explicitly, and both are deliberate:
+
+* `WITH_EXT_IMAGE_CAPTURE` — excluded because advertising the protocol makes
+  screen sharing worse on hybrid-GPU hardware; see
+  [below](#ext-image-copy-capture-opt-in-not-recommended-yet).
+* `WITH_SUID` — not a compositor feature but an installation mode: it installs
+  the `hikari` binary **setuid root** (`4555` instead of `555`) rather than
+  letting it acquire what it needs through `seatd`. Requesting root privileges
+  for the compositor is a decision to make on purpose, so it is never implied by
+  `WITH_ALL`.
 
 Any `WITH_*` variable given on the command line wins over `WITH_ALL`, so
 features can be disabled individually:

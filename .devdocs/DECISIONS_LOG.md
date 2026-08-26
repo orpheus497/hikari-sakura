@@ -53,6 +53,18 @@ These were found by running the targets rather than by reading them, and are fix
 
 `etc/hikari/hikari.conf` gained a block above its four `sofi` actions explaining what each surface is, that `sheets` is the one that speaks the control socket, and how to point them at something else — plus the two daemons that need `autostart` because they have no binding.
 
+### Review follow-up (same session)
+
+Four review findings against the Phase 93 work; all four verified against the tree and fixed.
+
+* **`make -j dist` had a genuine race.** `dist: distclean hikari-${VERSION}.tar.gz` lists two prerequisites that touch the same files in opposite directions — `distclean` removes `version.h` and, via `clean-doc`, `hikari.1`, while the archive's own prerequisites (`version.h doc`) regenerate exactly those two and then tar them. Prerequisites are unordered, so under `-j` the removal can land after the regeneration and the archive fails on a missing member. **This is the same failure the `CoC.md`/`CHANGELOG.md` entries used to cause, only intermittent** — which is worse, because it looks like a flaky build rather than a broken target. Fixed with `.ORDER: distclean hikari-${VERSION}.tar.gz`, which preserves both existing prerequisite sets and constrains only the sequencing; `.ORDER` was confirmed supported by this bmake with a throwaway makefile before use, and `make -n -j4 dist` now shows the removal ahead of the regeneration and the tar.
+
+* **"Every optional feature is enabled by default" was overbroad, and "the one feature `WITH_ALL` deliberately excludes" undercounted.** `WITH_ALL` sets six switches; **two** are left off — `WITH_EXT_IMAGE_CAPTURE` and `WITH_SUID`. The second matters more than the first: `WITH_SUID` installs the compositor **setuid root** (`4555` instead of `555`), so a reader who took "every optional feature is on by default" at face value would have the privilege model of their own install backwards. Both are now listed explicitly as opt-in, with the setuid implication stated rather than left to the flag table.
+
+* **The manual PAM command contradicted the paragraph above it.** The prose says `make install` places the policy at `${ETC_PREFIX}/etc/pam.d/hikari-unlocker`; the copy-by-hand command underneath hard-coded `/usr/local`. For anyone building with a non-default `ETC_PREFIX` the two disagree, and following the command puts the policy somewhere the rest of the install does not expect. Now parameterised, with the default spelled out.
+
+* **The overview called the top bar "in-process", which the page's own top-bar section contradicts.** Rendering *is* in-process — the compositor draws the bar in its scene graph — but the telemetry comes from the separate unprivileged `hikari-topbar`, which is the whole reason that binary exists (`Makefile:292-295`, `src/topbar.c`). The summary now separates the two and keeps "in-process" only for the screen locker, where it is unqualified.
+
 ### Verification
 
 `make -n` on `doc`, `dist` and `distclean` at an explicit VERSION; `make doc` regenerated `hikari.1` with pandoc 3.10.2 and it was **rendered through `man(1)`** — the new tables reach the page through `tbl` and lay out correctly. `hikari.conf` re-checked for brace balance (30/30, depth 0; the edits are comments only). Every internal anchor and relative link in `README.md` resolved programmatically. No compositor source was modified, so nothing here needs a build to be trusted.

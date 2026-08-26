@@ -388,6 +388,17 @@ distclean: clean-doc
 	@echo "cleaning version.h"
 	@rm -f version.h
 
+# [COMMENT] Action purpose: `.ORDER` is what makes `dist` correct under `-j`.
+# Prerequisites of a target are unordered, so `make -j dist` may run distclean
+# concurrently with the archive -- and the two touch the same files in opposite
+# directions: distclean removes version.h and (via clean-doc) hikari.1, while
+# the tarball's own prerequisites regenerate exactly those two and then tar
+# them. Racing them loses the archive to a missing member, which is the same
+# class of failure the CoC.md/CHANGELOG.md entries used to cause, only
+# intermittent. Sequential make happens to get this right today; .ORDER makes
+# it true regardless of -j.
+.ORDER: distclean hikari-${VERSION}.tar.gz
+
 dist: distclean hikari-${VERSION}.tar.gz
 
 install: hikari hikari-unlocker hikari-topbar share/man/man1/hikari.1
