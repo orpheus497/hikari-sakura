@@ -1,6 +1,6 @@
 NAME
 ====
-**Hikari Sakura** - FreeBSD Wayland Compositor
+**hikari** - the Hikari Sakura Wayland compositor for FreeBSD
 
 SYNTAX
 ======
@@ -9,11 +9,42 @@ SYNTAX
 DESCRIPTION
 ===========
 
-**Hikari Sakura** is a FreeBSD-focused revamp and modernization of the original Hikari (originally by antaz, since abandoned upstream). It is explicitly designed as a comprehensive, focused Wayland desktop environment for FreeBSD.
+**Hikari Sakura** is a FreeBSD-focused revamp and modernization of the original
+Hikari -- created by *raichoo* and later carried at
+<https://github.com/antaz/hikari>, which has since been abandoned upstream. It
+is explicitly designed as a comprehensive Wayland desktop environment for
+FreeBSD rather than as a compositor alone.
+
+**Hikari Sakura** is the name of the desktop environment; **hikari** is the
+compositor binary, the configuration file and this manual page, and is what
+this page refers to throughout.
 
 It is a stacking Wayland compositor with additional tiling capabilities,
 it is heavily inspired by the Calm Window manager (cwm(1)). Its core concepts
 are views, workspaces, sheets and groups.
+
+Besides managing windows, **hikari** draws its own top bar and its own screen
+locker in-process; both are themed from the same *palette* as everything else.
+See **TOP BAR** and the *Lock screen* section below.
+
+The desktop environment is completed by two sibling projects, each installed
+and configured independently:
+
+* **sofi** -- the shell. One binary providing the application menu, task strip,
+  sheet switcher, notification daemon and history, system tray host and message
+  toasts, each as a *zwlr\_layer\_shell\_v1* surface. The default configuration
+  binds four keys to it, and its sheet switcher is a client of the control
+  socket described under **CONTROL SOCKET**.
+  <https://github.com/orpheus497/sofi>
+
+* **sakura** -- the display manager, and the source of the second half of the
+  desktop's name. A FreeBSD-only TUI login manager that runs on a virtual
+  terminal and talks to OpenPAM directly. It launches this compositor through
+  the installed *hikari.desktop* session entry.
+  <https://github.com/orpheus497/sakura>
+
+Neither is required: **hikari** runs on its own, and any layer-shell client or
+display manager works in their place.
 
 The following options are available:
 
@@ -191,7 +222,7 @@ configuration warning: "L+n" is set 2 times in bindings.keyboard -- hikari uses 
 This applies to every section, not only bindings. If something configured
 appears to have no effect, check the startup output first. Note that warnings go
 to standard error, which a session started from a display manager may discard --
-see `HIKARI_LOG` in **start-hikari** to capture it.
+see **HIKARI\_LOG** under **ENVIRONMENT** for how to capture it.
 
 Environment Variables
 ---------------------
@@ -1577,3 +1608,304 @@ is given during startup **hikari** will automatically configure the output.
   }
 }
 ```
+
+TOP BAR
+=======
+
+**hikari** draws a bar across the top of every output in its own scene graph.
+The bar's *content* comes from **hikari-topbar**, a separate unprivileged
+binary the compositor spawns at startup and reads a swaybar-protocol JSON
+stream from over a pipe.
+
+The helper is a separate process deliberately. Its sensors are sampled with
+blocking **popen**(3) calls several times a second, and running those inside the
+compositor would stall the Wayland event loop on every tick. A slow or wedged
+sensor therefore costs the bar its freshness and nothing else. The stream is
+display-only; the bar handles no click events.
+
+The bar's height is derived from *ui.font*, so it scales with the configured
+font rather than a fixed pixel count, and the usable area of each output shrinks
+by that height. Its colours come from *ui.palette*, which the compositor passes
+to the helper on its command line -- so a palette change reaches the bar on the
+next compositor start rather than on a configuration reload.
+
+Blocks
+------
+Sampling runs on two cadences: the battery every 200ms, since it is cheap and
+fast-changing, and everything else once a second.
+
+| Block | Source | Shown when |
+| ----- | ------ | ---------- |
+| CPU usage | *kern.cp\_time* | always |
+| RAM usage | *hw.physmem*, *vm.stats.vm.\** | always |
+| CPU temperature | *dev.cpu.0.temperature*, falling back to *hw.acpi.thermal.tz0.temperature* | a sensor is readable |
+| GPU usage, VRAM and temperature | **nvidia-smi** | an NVIDIA GPU is detected at startup |
+| *$HOME* partition usage | **getfsstat**(2) / **statfs**(2) | always |
+| Media / now playing | **playerctl** | always; reads *Idle* with nothing playing |
+| Network | **getifaddrs**(3) | always; *WIFI*, *ETHERNET* or *DISCONNECTED* |
+| Backlight | **backlight**(8) | the tool reports a level |
+| Volume | **pactl** | a default sink is readable |
+| Battery | *hw.acpi.battery.\**, *hw.acpi.acline* | a battery is present |
+| Clock and date | **strftime**(3) | always |
+
+A block whose source cannot be read is omitted entirely rather than drawn empty,
+so a desktop with no battery and integrated graphics simply has a shorter bar.
+
+The battery block picks its colour from the charge level rather than from a
+*colorscheme* slot, referring to specific *palette* entries directly. Those
+bands are not separately configurable -- they follow whatever is in the palette,
+so retheming the desktop retints the battery with it. See the annotated default
+configuration for the exact mapping.
+
+Runtime dependencies
+--------------------
+None of these are required to build or start **hikari**; each affects only the
+block that uses it.
+
+* A **Nerd Font**, installed and selected through *ui.font*. The blocks are
+  labelled with private-use-area glyphs, so without one the bar renders boxes.
+
+* **playerctl** for the media block, **pactl** (PulseAudio or PipeWire-pulse)
+  for the volume block, **backlight**(8) -- part of the FreeBSD base system --
+  for the backlight block, and **nvidia-smi** for the GPU blocks. The NVIDIA
+  probe runs once at startup; on integrated-only machines the GPU blocks never
+  appear at all.
+
+How over-long blocks are handled is configured in the *bar* subsection of *ui*,
+described under **UI CONFIGURATION**. Those keys are read by the compositor
+rather than by the helper, so unlike the palette they do take effect on a
+configuration reload.
+
+Palette fallback
+----------------
+Started by hand with no palette argument, **hikari-topbar** falls back to reading
+*~/.cache/wal/colors* (pywal), and to white if that is absent too. A malformed
+argument is rejected outright rather than half-applied, so a typo yields the
+pywal fallback rather than a half-themed bar. The compositor always passes its
+own palette, so this path is only reached when the helper is run standalone.
+
+CONTROL SOCKET
+==============
+
+**hikari**'s sheet model -- ten sheets per workspace, permanently bound to their
+output -- is not expressible in any standards-track Wayland protocol.
+*wlr-foreign-toplevel-management* has no notion of a workspace, and
+*ext-workspace-v1*'s *assign* moves a workspace to an output group rather than a
+window to a workspace. An external sheet switcher therefore has nothing to read
+and nothing to call.
+
+The control socket is that missing surface, and is deliberately kept as small as
+it can be. It is not a general scripting interface and will not grow into one:
+anything expressible as a Wayland protocol belongs in a Wayland protocol.
+
+**sofi -show sheets** is its reference client.
+
+The socket lives at *$XDG\_RUNTIME\_DIR/hikari.sock* with mode **0600**, and is
+unlinked when the compositor exits. It is served from the compositor's own event
+loop, so handlers run on the main thread. At most **8** clients may be connected
+at once, and a request longer than **512** bytes is refused rather than
+buffered.
+
+The protocol is one request per connection: send a single line, read the
+response, and the compositor closes the connection.
+
+Requests
+--------
+
+* **state**
+
+  Report the displayed sheet, its output, and how many views each of the ten
+  sheets holds. The counts are what let a switcher dim empty sheets. Sheet
+  **0** is reported on the same footing as the rest even though its views stay
+  visible underneath whichever sheet is displayed; the caller is given the
+  number and decides how to present that asymmetry.
+
+  The response is four lines:
+
+```
+sheet <0-9>
+output <name>
+counts <c0> <c1> <c2> <c3> <c4> <c5> <c6> <c7> <c8> <c9>
+END
+```
+
+* **sheet** *\<0-9\>*
+
+  Switch the current workspace to the given sheet. Responds *ok*.
+
+* **pin** *\<0-9\>*
+
+  Move the focused view to the given sheet. This is the operation no Wayland
+  protocol expresses, which is why it exists here. Responds *ok*.
+
+Errors
+------
+Every failure is a single line beginning with *error*.
+
+* **error compositor busy**
+
+  The compositor is not in normal mode. This gate sits in front of the whole
+  command table rather than in each handler, so it applies to **state** as
+  well: the per-sheet view counts would otherwise report how many windows are
+  open to anything that can reach the socket while the screen is locked. Since
+  the lock screen is a mode, one test closes both the modal-abort hole and the
+  locked-screen leak.
+
+* **error unknown command**
+
+  The verb is not one of the three above.
+
+* **error sheet number must be 0-9**
+
+  The argument was absent, out of range, or not exactly one decimal number.
+
+* **error no active workspace**
+
+  There is no workspace to act on, which happens transiently during output
+  teardown.
+
+* **error no focused view**
+
+  **pin** was issued with nothing focused.
+
+* **error view busy**
+
+  **pin** was issued against a view with a resize still in flight. Queuing a
+  second operation over one still awaiting the client's acknowledgement would
+  lose the first and leave the view dirty, so the request is refused instead.
+
+* **error response too long**
+
+  The response did not fit its buffer. Not reachable with the current command
+  set.
+
+A connection refused with **ECONNREFUSED** means the socket file is stale --
+left by a compositor that did not exit cleanly -- rather than that the
+compositor is busy.
+
+Failure to create the socket at startup is warned about and is not fatal:
+losing it costs an external sheet switcher, not the session.
+
+Example
+-------
+
+```
+$ printf 'state\n' | nc -U "$XDG_RUNTIME_DIR/hikari.sock"
+sheet 1
+output eDP-1
+counts 0 3 1 0 0 0 0 0 0 2
+END
+
+$ printf 'sheet 3\n' | nc -U "$XDG_RUNTIME_DIR/hikari.sock"
+ok
+```
+
+FILES
+=====
+
+* *$XDG\_CONFIG\_HOME/hikari/hikari.conf*
+
+  User configuration. When **XDG\_CONFIG\_HOME** is unset this is
+  *~/.config/hikari/hikari.conf*.
+
+* *${ETC\_PREFIX}/etc/hikari/hikari.conf*
+
+  System-wide default configuration, used when no user configuration is
+  readable. **ETC\_PREFIX** is fixed at compile time and defaults to
+  */usr/local*.
+
+* *~/.config/hikari/autostart*
+
+  Executed at startup if it is a regular file that is both readable and
+  executable. Overridden for one run by **-a**.
+
+* *${ETC\_PREFIX}/etc/pam.d/hikari-unlocker*
+
+  PAM policy consulted by **hikari-unlocker** when checking credentials to
+  unlock the screen.
+
+* *${PREFIX}/share/wayland-sessions/hikari.desktop*
+
+  Session entry read by display managers.
+
+* *${PREFIX}/share/backgrounds/hikari/hikari\_wallpaper.png*
+
+  Default wallpaper, which the default configuration's *outputs.background*
+  points at.
+
+* *$XDG\_RUNTIME\_DIR/hikari.sock*
+
+  Control socket, mode **0600**. See **CONTROL SOCKET**.
+
+ENVIRONMENT
+===========
+
+* **XDG\_RUNTIME\_DIR**
+
+  Directory for the Wayland socket and the control socket. Must be an existing
+  directory owned by the invoking user with mode **0700**. **start-hikari**
+  creates one at */tmp/hikari-runtime-$UID* when the system provides none, and
+  validates it either way.
+
+* **XDG\_CONFIG\_HOME**
+
+  Root of the configuration directory. Falls back to *$HOME/.config*.
+
+* **TERMINAL**
+
+  Terminal emulator spawned by the default configuration's *terminal* action.
+
+* **HIKARI\_LOG**
+
+  When set to a writable file path, **start-hikari** redirects its own
+  descriptors there before **exec**, capturing everything **hikari** and wlroots
+  write to standard error -- including the duplicate-key configuration warnings
+  described under **CONFIGURATION**, which a session started from a display
+  manager would otherwise discard. The redirect is a real **exec** rather than a
+  pipe, so the compositor's exit status and signal disposition are preserved.
+  Output no longer echoes to the terminal while logging.
+
+* **XKB\_DEFAULT\_LAYOUT**, **XKB\_DEFAULT\_MODEL**, **XKB\_DEFAULT\_OPTIONS**,
+  **XKB\_DEFAULT\_RULES**
+
+  Fallback keyboard configuration for keyboards with no entry in the *keyboards*
+  section. Read once at startup; see **INPUTS**.
+
+* **XDG\_CURRENT\_DESKTOP**
+
+  Set by **start-hikari** to *Hikari Sakura:wlroots*. Both entries matter: the
+  first is this desktop's own identity and matches *hikari.desktop*'s
+  *DesktopNames*, and the second is what **xdg-desktop-portal-wlr** lists in its
+  portal file's *UseIn=* field. Without the generic name no portal backend
+  matches at all, and screen sharing finds no provider even though the
+  compositor advertises the capture protocols.
+
+* **DBUS\_SESSION\_BUS\_ADDRESS**
+
+  When unset, **start-hikari** wraps the compositor in **dbus-run-session**.
+
+Any environment variable may additionally be referenced from string values in
+the configuration file; see *Environment Variables* under **CONFIGURATION**.
+
+EXIT STATUS
+===========
+
+**hikari** exits **0** after the **quit** action, and on **-h** or **-v**.
+
+It exits non-zero when no readable configuration file could be resolved -- from
+**-c**, from the user configuration, or from the compiled-in default, in that
+order -- reporting *could not load configuration*; when an unrecognised option
+was given, in which case the usage message is printed; and when it is started as
+root or with inconsistent privileges, which is refused outright. Note that only
+uid 0 counts as privileged: gid 0 (*wheel*) is an ordinary primary group for a
+normal user and is not rejected.
+
+SEE ALSO
+========
+
+**sofi**(1), cwm(1), libucl(3), libinput(1), xkeyboard-config(7), strftime(3),
+backlight(8), mixer(8), devd(8), acpi(4)
+
+* Hikari Sakura -- <https://github.com/orpheus497/hikari-sakura>
+* sofi, the shell -- <https://github.com/orpheus497/sofi>
+* sakura, the display manager -- <https://github.com/orpheus497/sakura>

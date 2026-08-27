@@ -301,13 +301,17 @@ hikari-unlocker: hikari_unlocker.c
 hikari-topbar: src/topbar.c
 	${CC} ${LDFLAGS} ${TOPBAR_CFLAGS} -o hikari-topbar src/topbar.c
 
+# [COMMENT] Action purpose: hikari.1 is generated and .gitignore'd, so removing
+# it is exactly what `clean` should do. The `_darcs` test this replaces was a
+# leftover from before the project moved to git and matched nothing, which made
+# clean-doc a silent no-op -- leaving a stale manual page behind every clean.
 clean-doc:
-	@test -e _darcs && echo "cleaning manpage" ||:
-	@test -e _darcs && rm share/man/man1/hikari.1 2> /dev/null ||:
+	@echo "cleaning manpage"
+	@rm -f share/man/man1/hikari.1
 
 clean: clean-doc
 	@echo "cleaning headers"
-	@test -e _darcs && rm version.h 2> /dev/null ||:
+	@rm -f version.h
 	@rm ${PROTOCOL_HEADERS} 2> /dev/null ||:
 	@echo "cleaning object files"
 	@rm ${OBJS} 2> /dev/null ||:
@@ -316,14 +320,44 @@ clean: clean-doc
 	@rm hikari-unlocker 2> /dev/null ||:
 	@rm hikari-topbar 2> /dev/null ||:
 
-share/man/man1/hikari.1:
-	pandoc -M title:"HIKARI(1) ${VERSION} | hikari - Wayland Compositor" -s \
-		--to man -o share/man/man1/hikari.1 share/man/man1/hikari.md
+# [COMMENT] Action purpose: One definition, used by both rules below, so the
+# roff page and the `doc` target can never be generated with different titles.
+PANDOC_MAN = pandoc -M title:"HIKARI(1) ${VERSION} | Hikari Sakura" -s \
+	--to man -o share/man/man1/hikari.1 share/man/man1/hikari.md
 
-doc: share/man/man1/hikari.1
+# [COMMENT] Action purpose: The prerequisite on the markdown source is the point
+# of this rule. Without it -- as was the case previously -- editing
+# share/man/man1/hikari.md never rebuilt the roff page, so the installed manual
+# could drift arbitrarily far from the source it claims to be generated from.
+#
+# It costs nothing to add, because hikari.1 is a generated artefact that is
+# .gitignore'd and NOT committed: a git checkout has no hikari.1 at all, so this
+# rule fires from scratch and pandoc is required for `make install` from the
+# repository either way. In an unpacked distribution tarball both files are
+# present with tar-preserved timestamps, and `dist` regenerates the page before
+# archiving it, so the .1 is always the newer of the two and pandoc is not
+# needed to install from a tarball.
+share/man/man1/hikari.1: share/man/man1/hikari.md
+	${PANDOC_MAN}
 
-hikari-${VERSION}.tar.gz: version.h share/man/man1/hikari.1
-	@darcs revert
+.PHONY: doc
+doc:
+	${PANDOC_MAN}
+
+# [COMMENT] Action purpose: Every path listed here must exist, because tar
+# fails the whole archive on a missing member. `CoC.md` and `CHANGELOG.md` were
+# listed but have never been in this tree, so `make dist` could not produce a
+# tarball at all; the `darcs revert` that preceded it was an upstream leftover
+# from before this project moved to git, and reverting the working tree during
+# a build is not something a dist target should do regardless of the VCS.
+# The prerequisite is `doc`, not share/man/man1/hikari.1: the committed roff
+# page carries whatever VERSION it was last generated with in its .TH line, and
+# the file already existing would satisfy a file prerequisite without
+# regenerating it -- shipping a 1.0.0 tarball whose manual page says CURRENT.
+# `doc` is phony and always regenerates, so the page in the archive matches the
+# VERSION the archive is named for. This is why `dist` needs pandoc while
+# `install` deliberately does not.
+hikari-${VERSION}.tar.gz: version.h doc
 	@tar -s "#^#hikari-${VERSION}/#" -czf hikari-${VERSION}.tar.gz \
 		version.h \
 		main.c \
@@ -332,21 +366,38 @@ hikari-${VERSION}.tar.gz: version.h share/man/man1/hikari.1
 		src/*.c \
 		protocol/*.xml \
 		Makefile \
+		test.mk \
+		compile_flags.txt \
+		.clang-format \
 		LICENSE \
 		README.md \
-		CoC.md \
 		start-hikari.sh \
-		CHANGELOG.md \
 		share/man/man1/hikari.md \
 		share/man/man1/hikari.1 \
+		share/hikari_sakura_alpha.png \
 		share/backgrounds/hikari/hikari_wallpaper.png \
 		share/wayland-sessions/hikari.desktop \
 		etc/hikari/hikari.conf \
 		etc/pam.d/hikari-unlocker.*
 
+# [COMMENT] Action purpose: version.h is regenerated on every build by the
+# FORCE rule above, so removing it here is always safe. It used to be guarded on
+# a `_darcs` directory that no checkout of this repository has, which meant
+# `distclean` silently did nothing at all.
 distclean: clean-doc
-	@test -e _darcs && echo "cleaning version.h" ||:
-	@test -e _darcs && rm version.h ||:
+	@echo "cleaning version.h"
+	@rm -f version.h
+
+# [COMMENT] Action purpose: `.ORDER` is what makes `dist` correct under `-j`.
+# Prerequisites of a target are unordered, so `make -j dist` may run distclean
+# concurrently with the archive -- and the two touch the same files in opposite
+# directions: distclean removes version.h and (via clean-doc) hikari.1, while
+# the tarball's own prerequisites regenerate exactly those two and then tar
+# them. Racing them loses the archive to a missing member, which is the same
+# class of failure the CoC.md/CHANGELOG.md entries used to cause, only
+# intermittent. Sequential make happens to get this right today; .ORDER makes
+# it true regardless of -j.
+.ORDER: distclean hikari-${VERSION}.tar.gz
 
 dist: distclean hikari-${VERSION}.tar.gz
 
