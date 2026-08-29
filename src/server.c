@@ -2223,6 +2223,18 @@ hikari_server_enter_normal_mode(void *arg)
     hikari_view_refresh_spill_clip(dragged_view);
   }
 
+  /* [COMMENT] Action purpose: Release the re-tiles that were held for the
+  duration of the drag. arm() declines to schedule anything while move mode is
+  current, so a cross-screen drag accumulates one queued request per sheet and
+  none of them are acted on until here -- which is what stops the destination
+  layout from snatching the window out from under the pointer mid-drag.
+
+  After hikari_normal_mode_enter(), necessarily: that is what makes
+  hikari_server_in_move_mode() false, and arming before it would be declined by
+  the very guard this is releasing. Costs nothing when there is no drag, since
+  hikari_reflow_settle() returns immediately on an empty queue. */
+  hikari_reflow_settle();
+
   hikari_server_cursor_focus();
 }
 

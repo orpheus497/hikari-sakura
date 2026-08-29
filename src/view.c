@@ -286,6 +286,54 @@ move_view_constrained(
       geometry, &view->output->usable_area, x, y);
 }
 
+/* [COMMENT] Function purpose: Keep a queued geometry operation's ORIGIN in step
+with a move that lands while that operation is still in flight.
+
+A pending operation records where the view was when it was queued, and commits
+that position when the client finally acks. `queue_reset()` is the case that
+matters: migrating a tiled view queues a RESET whose geometry is the position at
+the instant of the crossing, and because the tile size differs from the floating
+size it takes the asynchronous branch -- a real client round-trip. The drag keeps
+running throughout, since move_view() has no dirty test, and then the commit
+overwrote every one of those moves with the crossing position. That position is
+`anchored_x - output->geometry.x`, which is NEGATIVE on the destination, so the
+window snapped back onto the screen it had just left, on every crossing.
+hikari_view_commit_pending_operation() cannot fix it either: it refreshes width
+and height from the client's real geometry and never touches x or y.
+
+Narrower than "is the view dirty", deliberately. Only RESET and RESIZE carry an
+origin that is the USER'S. TILE and the three maximize types are placed by the
+layout or by the usable area, and FULLSCREEN and UNMAXIMIZE restore a box the
+compositor owns -- writing a drag position into any of them would have the drag
+fighting the tiler. Every case is enumerated rather than collapsed into a
+`default:`, so a new operation type is a compiler error here instead of a silent
+omission. */
+static void
+track_pending_origin(struct hikari_view *view, struct wlr_box *geometry)
+{
+  if (!hikari_view_is_dirty(view)) {
+    return;
+  }
+
+  struct hikari_operation *op = &view->pending_operation;
+
+  switch (op->type) {
+    case HIKARI_OPERATION_TYPE_RESET:
+    case HIKARI_OPERATION_TYPE_RESIZE:
+      op->geometry.x = geometry->x;
+      op->geometry.y = geometry->y;
+      break;
+
+    case HIKARI_OPERATION_TYPE_TILE:
+    case HIKARI_OPERATION_TYPE_UNMAXIMIZE:
+    case HIKARI_OPERATION_TYPE_FULL_MAXIMIZE:
+    case HIKARI_OPERATION_TYPE_VERTICAL_MAXIMIZE:
+    case HIKARI_OPERATION_TYPE_HORIZONTAL_MAXIMIZE:
+    case HIKARI_OPERATION_TYPE_FULLSCREEN:
+      break;
+  }
+}
+
 static void
 move_view(struct hikari_view *view, struct wlr_box *geometry, int x, int y)
 {
@@ -357,6 +405,12 @@ move_view(struct hikari_view *view, struct wlr_box *geometry, int x, int y)
   } else {
     move_view_constrained(view, geometry, x, y);
   }
+
+  /* [COMMENT] Action purpose: After the constrain, so the tracked origin is the
+  position the view actually took rather than the one that was asked for, and
+  before the scene placement below, so the operation and the node cannot
+  disagree about where this move ended up. */
+  track_pending_origin(view, geometry);
 
 #ifdef HAVE_XWAYLAND
   if (view->move != NULL) {

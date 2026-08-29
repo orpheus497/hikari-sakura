@@ -50,7 +50,7 @@ cursor_move(uint32_t time_msec)
   double lx = hikari_server.cursor.wlr_cursor->x;
   double ly = hikari_server.cursor.wlr_cursor->y;
 
-  struct wlr_output *wlr_output =
+  struct wlr_output *cursor_output =
       wlr_output_layout_output_at(hikari_server.output_layout, lx, ly);
 
   /* [COMMENT] Action purpose: The pointer is over no output at all. Screens of
@@ -58,15 +58,24 @@ cursor_move(uint32_t time_msec)
   -- a 1920x1200 panel beside a 1920x1080 one puts rows 1080-1200 at x >= 1920
   on no display -- and the cursor is free to enter them. Returning here holds the
   window at its last valid position rather than moving it somewhere unpaintable;
-  the drag resumes the moment the pointer is over a screen again. */
-  if (wlr_output == NULL) {
+  the drag resumes the moment the pointer is over a screen again.
+
+  This is the CURSOR guard and it stays the cursor guard. The window-origin
+  lookup below has its own answer for its own failure, and the two must not be
+  confused -- see the fallback there. */
+  if (cursor_output == NULL) {
     return;
   }
 
-  struct hikari_output *output = wlr_output->data;
   struct hikari_view *focus_view = hikari_server.workspace->focus_view;
 
-  assert(focus_view != NULL);
+  /* [COMMENT] Action purpose: Guarded rather than asserted. This was an
+  assert(), which NDEBUG erases -- leaving a null dereference three lines below
+  a guard doing exactly this job properly for the output. Nothing to move is not
+  an error worth aborting a session over. */
+  if (focus_view == NULL) {
+    return;
+  }
 
   struct hikari_output *view_output = focus_view->output;
   struct hikari_move_mode *move_mode = &hikari_server.move_mode;
@@ -83,6 +92,41 @@ cursor_move(uint32_t time_msec)
   location, so anchoring them here is correct rather than merely convenient. */
   double anchored_x = lx - move_mode->anchor_x;
   double anchored_y = ly - move_mode->anchor_y;
+
+  /* [COMMENT] Action purpose: Choose the output from the WINDOW's origin, not
+  from the cursor.
+
+  The placement below is anchor-relative and the branch test was not, so the two
+  disagreed for exactly the width of the grab offset: with the window held 400 px
+  from its left edge, every pointer position between the seam and seam+400 put
+  the window under one output's ownership while it was drawn on the other. Every
+  crossing back and forth in that band re-ran a full migrate -- animation cancel
+  and re-init, three list relinks, a scene raise, a client configure round trip,
+  a foreign-toplevel announce, a workspace swap and two full-sheet reflows --
+  once per motion event.
+
+  Asking about the origin makes the crossing happen when the WINDOW crosses,
+  which is both what the user sees and what the keyboard path has always done:
+  move_view() in src/server.c probes the window's top-left corner, never a
+  pointer. This makes the two paths agree rather than inventing a rule for one
+  of them.
+
+  The fallback is not optional. wlroots confines a cursor to the output layout,
+  so the lookup above fails only in the dead band between mismatched screen
+  heights; a window ORIGIN has no such confinement and leaves the layout the
+  moment the window is dragged against the top or left edge of the leftmost
+  screen. Letting that reach the guard above would freeze the drag at two edges
+  of every screen. The cursor's output is always valid and is the only sane
+  answer available, and hikari_view_migrate() constrains the origin afterwards
+  regardless. */
+  struct wlr_output *wlr_output = wlr_output_layout_output_at(
+      hikari_server.output_layout, anchored_x, anchored_y);
+
+  if (wlr_output == NULL) {
+    wlr_output = cursor_output;
+  }
+
+  struct hikari_output *output = wlr_output->data;
 
   if (output == view_output) {
     hikari_view_move_absolute(focus_view,

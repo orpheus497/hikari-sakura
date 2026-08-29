@@ -109,6 +109,26 @@ drain(void *data)
   stale pointer. */
   idle_source = NULL;
 
+  /* [COMMENT] Action purpose: The same hold arm() applies, enforced again here
+  because arm() cannot cover this case. arm() stops a NEW source being created
+  during a drag; a source armed just BEFORE move mode was entered is already
+  queued in the event loop and still dispatches. Both happen in one iteration
+  whenever a client commit arms through hikari_reflow_settle() and a button
+  press enters move mode before the idles run -- and the re-tile would then land
+  mid-drag, which is exactly what the hold exists to prevent.
+
+  Returns with the queue INTACT and deliberately does not re-arm: re-arming from
+  inside an idle handler is the busy loop warned about below, and `idle_source`
+  is already NULL, so no source is left armed either. The release path is the
+  same one arm() relies on -- hikari_server_enter_normal_mode() calls
+  hikari_reflow_settle() once the drag ends, and hikari_reflow_settle() also
+  runs at the tail of every hikari_view_commit_pending_operation(), so a queue
+  left here by an exit that never reaches normal mode is drained by the next
+  geometry commit rather than stranded. */
+  if (hikari_server_in_move_mode()) {
+    return;
+  }
+
   struct hikari_sheet *sheet, *sheet_temp;
 
   wl_list_for_each_safe (
@@ -150,6 +170,41 @@ static void
 arm(void)
 {
   if (idle_source != NULL || hikari_server.event_loop == NULL) {
+    return;
+  }
+
+  /* [COMMENT] Action purpose: Hold every re-tile for the duration of a pointer
+  drag, and let it out when the drag ends.
+
+  Migrating a window schedules a reflow on both sheets. Those requests used to
+  drain at the tail of the very commit that settled the migrate -- mid-drag --
+  and hikari_sheet_apply_split() re-tiles EVERY tileable view on the sheet,
+  including the one still under the pointer. The window was snapped into a
+  layout slot while the user was holding it.
+
+  This is a change of TIMING only, and it takes nothing away: the destination
+  still folds the window in per `layout { on-insert }` and the source still
+  closes its hole per `reflow-on-close`. It simply happens once, when the button
+  comes up, instead of racing the drag.
+
+  Expressed as a QUESTION about the current mode rather than as a hold/release
+  latch, and that is the whole point. Move mode is not guaranteed to exit
+  through normal mode -- a lock or an output teardown can leave it directly -- and
+  a latch stranded by one of those paths would kill automatic tiling for the
+  rest of the session with no symptom pointing anywhere near here. There is no
+  flag to leak, and nothing needs to remember to clear one.
+
+  Scoped to move mode alone. Resize mode is also an interactive drag and
+  may_animate() and may_spill() both treat the two together, but the arrival
+  re-tile is reachable only through the migrate path, which is reachable only
+  from move mode. Widening this would change re-tiling during an interactive
+  resize, which is a behaviour nobody has reported or ruled on.
+
+  Nothing is lost on the paths that never reach normal mode either:
+  hikari_reflow_settle() runs at the tail of every
+  hikari_view_commit_pending_operation(), so a queue stranded by an unusual mode
+  exit is drained by the next geometry commit rather than left forever. */
+  if (hikari_server_in_move_mode()) {
     return;
   }
 
