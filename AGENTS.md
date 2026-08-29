@@ -27,7 +27,11 @@ Maintain the following files to manage state and continuity:
 
 ## CODE DOCUMENTATION STANDARDS
 
-Documentation is only necessary where the code is not self-explanatory, all files must meet this standard; DO NOT retroactively add commenting unless explicitly requested by the user. Use the following exact prefixes directly above the relevant code blocks, using the native comment syntax of the language (e.g., `//`, `#`, or `##`), to ensure immediate legibility. For shell scripts, place the comment directly beneath the shebang:
+* Documentation is only necessary where the code is not self-explanatory, all files must meet this standard.
+
+* DO NOT retroactively add commenting unless explicitly requested by the user. 
+
+Use the following exact prefixes directly above the relevant code blocks, using the native comment syntax of the language (e.g., `//`, `#`, or `##`), to ensure immediate legibility. For shell scripts, place the comment directly beneath the shebang:
 
 * `Script function and purpose:` [What this script does] - Top of every script/source.
 * `Function purpose:` [Why this function exists and how it is used] - Before standalone functions.
@@ -72,7 +76,9 @@ Read `.devdocs/` → Update `BRIEFING.md` → Ask Permission → Execute Step �
 
 ## COMMAND LAWS
 
-* When inside an IDE ALWAYS use the IDE Native Tooling over Shell or Terminal Commands, do not use shell or terminal commands unless inside a CLI or directly permitted by the user.
+* When inside an IDE you must ALWAYS use the IDE Native Tooling over Shell or Terminal Commands. 
+
+* Only use shell or terminal commands for specific tasks previously permitted from a plan request or othewise directly permitted by the user.
 
 * All Date/Time inputs in `.devdocs/` must be sequential, displaying most recent entries at the top of the document, and sourced by using the following command:
 

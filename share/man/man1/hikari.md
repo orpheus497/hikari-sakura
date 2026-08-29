@@ -1662,6 +1662,16 @@ enter that band. A drag holds the view at its last position while it is there an
 resumes when the pointer is over an output again, rather than moving the view
 somewhere that cannot be painted.
 
+**view-move-\*** treats the band differently, and this is the one case where the
+two ways of moving a view part company. A corner that lands there has landed on
+no output, so there is no output to hand the view to and the move is performed on
+the output the view is already on. The practical consequence is that a view low
+enough on the taller screen to be beside the band cannot be moved onto the
+shorter screen with the keyboard: every move in that direction stops it at the
+edge of its own screen instead. Move it up first, or drag it. The position
+constraint keeps the corner on the view's own output throughout, so a view is
+never left with its corner in the band.
+
 Output position can be given explicitly using the *position* attribute. If none
 is given during startup **hikari** will automatically configure the output.
 
