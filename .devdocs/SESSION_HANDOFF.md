@@ -2,6 +2,28 @@
 
 *Note: Most recent entries are listed at the top.*
 
+## Session Date: 2026-08-29 12:07 -- Phase 96 follow-up: crash hypothesis fixed, tuneables deployed, two review findings
+
+**Timestamp:** 2026-08-29 12:07 *(source: `date '+%Y-%m-%d %H:%M'`)*
+
+**User reported:** (1) tuneables missing from the deployed config, (2) **dragging a floating window larger than the destination screen freezes and crashes the compositor**, (3) uncertainty that the claimed work is present.
+
+**(2) -- root cause NOT confirmed, one strong size-dependent mechanism found in this session's own code and fixed.** `refresh_spill_clip()` is reached from `refresh_border_geometry()`, which runs on **every pointer motion event of a drag**, and it called `wlr_scene_subsurface_tree_set_clip()` unconditionally -- a subsurface-tree walk per motion event, plus four border-rect writes, each damaging a region the size of the window. **The size dependence fits the report exactly:** a window larger than its output damages a correspondingly larger region on every event. Fixed by caching the applied crop on the view (`spill_clip` / `spill_clipped`) and touching the scene only when it actually changes. **The border crop still runs unconditionally when clipping is active**, because `hikari_border_refresh_geometry()` restores all four rects immediately beforehand and skipping would leave them uncropped. `spill_clipped` is explicitly cleared in `hikari_view_init()` -- views come from non-zeroing `hikari_malloc`. **This was not reproduced; it is a mechanism that fits, not a confirmed diagnosis.** Bisect for the user if it recurs: `ui { spill = always }` disables the crop entirely, `layout { auto = false }` disables the migrate-path reflow.
+
+**Ruled out by reading, recorded so they are not re-investigated:** `may_spill()`'s `hikari_view_is_focus_view()` cannot NULL-deref -- `hikari_view_configure()` assigns `view->sheet` **before** `view->output`, and `refresh_spill_clip()` returns early on a NULL output; `raise_view()` links through `view->sheet->workspace`, not `hikari_server.workspace`, so the migrate window between the two is not a linkage inconsistency; and a floating view never reaches the crop under the default `spill = drag`, so the crop is not on the reported path at all -- only its per-event cost is.
+
+**(1)/(3) -- the deployed config had neither new tuneable, which is why they looked absent.** `~/.config/hikari/hikari.conf` now carries `ui { spill = drag }` with the three values documented; backup at `hikari.conf.bak-20260829-1204`. Presence of all six T-items plus R-4 re-audited against the tree. **Note for the user: under the default `drag`, a floating window is exempt by Q11's own ruling** -- observing the crop needs a *tiled* window or `spill = never`.
+
+**Review finding -- `hikari_view_evacuate()` left floating views unplaced. VALID, fixed.** It ends `if (tiled || maximized) queue_reset()`, so a **floating** view had its output and sheet reassigned while its scene node kept the layout position it held on the output being destroyed. Now placed directly at the destination output, with the crop refreshed. Placed directly rather than through `hikari_animation_move()` because `hikari_animation_init()` has just cleared `placed`.
+
+**Review finding -- ```conf fence at `hikari.md:1043`. SKIPPED.** Every one of the ~25 config examples in that file uses an untyped fence, and pandoc's man writer ignores the info string, so typing only this one adds inconsistency and changes nothing in the rendered page. Worth doing for all of them or none.
+
+**Verified:** 70 translation units at `-Wall -Werror`, full link, `hikari -v`. Both configs parsed by hikari's own `hikari_configuration_load()` -- deployed `spill=1 auto=1 insert=1`, shipped `spill=1 auto=1 insert=0`.
+
+**Still open:** the crash is unconfirmed. If it recurs, capture `HIKARI_LOG` and run the two-step bisect above.
+
+---
+
 ## Session Date: 2026-08-29 11:49 -- Phase 96 IMPLEMENTED: all six items, compiled and linked, NOT run
 
 **Timestamp:** 2026-08-29 11:49 *(source: `date '+%Y-%m-%d %H:%M'`)*

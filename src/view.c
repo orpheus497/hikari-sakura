@@ -220,6 +220,14 @@ refresh_spill_clip(struct hikari_view *view)
   }
 
   if (may_spill(view)) {
+    /* [COMMENT] Action purpose: Nothing to lift, and -- this is the point of
+    the flag -- no tree walk to perform. A view that may spill is the common
+    case and is reached on every motion event of every drag. */
+    if (!view->spill_clipped) {
+      return;
+    }
+
+    view->spill_clipped = false;
     wlr_scene_subsurface_tree_set_clip(view->scene_node, NULL);
     hikari_border_clip(&view->border, NULL);
     return;
@@ -232,8 +240,22 @@ refresh_spill_clip(struct hikari_view *view)
     .width = view->output->geometry.width,
     .height = view->output->geometry.height };
 
-  wlr_scene_subsurface_tree_set_clip(view->scene_node, &clip);
+  /* [COMMENT] Action purpose: The border rects are re-cropped unconditionally,
+  unlike the surface tree below. The usual caller is refresh_border_geometry(),
+  which has just restored all four to their full extent, so skipping this on an
+  unchanged crop would leave them uncropped. They are four rectangles and the
+  scene compares before damaging; the surface tree is the expensive half. */
   hikari_border_clip(&view->border, &clip);
+
+  if (view->spill_clipped &&
+      memcmp(&view->spill_clip, &clip, sizeof(struct wlr_box)) == 0) {
+    return;
+  }
+
+  view->spill_clip = clip;
+  view->spill_clipped = true;
+
+  wlr_scene_subsurface_tree_set_clip(view->scene_node, &clip);
 }
 
 static void
@@ -708,6 +730,14 @@ hikari_view_init(
 #endif
   view->flags = 0;
   hikari_animation_init(&view->animation);
+
+  /* [COMMENT] Action purpose: Explicitly cleared, because views come from
+  hikari_malloc, which does not zero. An indeterminate `spill_clipped` would
+  make the first crop decision read a garbage cached box -- either skipping a
+  crop that is needed, or lifting one that was never applied. */
+  view->spill_clipped = false;
+  memset(&view->spill_clip, 0, sizeof(struct wlr_box));
+
   hikari_view_set_hidden(view);
   memset(&view->border, 0, sizeof(struct hikari_border));
   view->border.state = HIKARI_BORDER_INACTIVE;
@@ -2325,6 +2355,26 @@ hikari_view_evacuate(struct hikari_view *view, struct hikari_sheet *sheet)
 
   if (hikari_view_is_tiled(view) || hikari_view_is_maximized(view)) {
     queue_reset(view, false);
+  } else if (view->scene_node != NULL) {
+    /* [COMMENT] Action purpose: Place a FLOATING view on the output it has just
+    been moved to. The branch above is the only thing that repositions anything
+    here, and it covers tiled and maximized views alone -- so a floating view
+    had its output and sheet reassigned while its scene node kept the layout
+    position it held on the output that is being destroyed, leaving it drawn at
+    coordinates belonging to a display that no longer exists.
+
+    Placed directly rather than through hikari_animation_move(), because
+    hikari_animation_init() above has just cleared `placed`: the animation would
+    decline the move and hand it straight back, and an evacuation is a teardown
+    rather than a motion the user should watch. The clip is refreshed with it,
+    since the destination output's dimensions are what it is derived from. */
+    struct wlr_box *geometry = hikari_view_geometry(view);
+
+    wlr_scene_node_set_position(view->scene_node,
+        geometry->x + view->output->geometry.x,
+        geometry->y + view->output->geometry.y);
+
+    refresh_spill_clip(view);
   }
 }
 
