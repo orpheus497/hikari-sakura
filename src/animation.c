@@ -204,10 +204,32 @@ hikari_animation_move(struct hikari_view *view, int x, int y)
   animation->start_msec = at_msec;
   animation->active = true;
 
-  // [COMMENT] Action purpose: hikari renders on damage; without this an
-  // animation started while the screen is otherwise idle would never receive
-  // the frame that advances it.
-  hikari_output_schedule_frame(view->output);
+  /* [COMMENT] Action purpose: hikari renders on damage; without this an
+  animation started while the screen is otherwise idle would never receive the
+  frame that advances it.
+
+  Requested for the whole TRAVEL -- the union of the departure box and the
+  arrival box -- rather than for the view's current position, and through
+  hikari_output_add_damage() rather than hikari_output_schedule_frame(), so that
+  a window whose journey reaches a neighbouring screen wakes that screen too.
+  Scheduling this output alone left the far half of a spanning window stale for
+  the whole flight. Same defect as the one fixed in hikari_output_add_damage()
+  itself; this is the caller that could not use it before, because it had no box
+  to hand it. */
+  struct wlr_box *geometry = hikari_view_geometry(view);
+
+  int min_x = animation->from_x < x ? animation->from_x : x;
+  int min_y = animation->from_y < y ? animation->from_y : y;
+  int max_x = (animation->from_x > x ? animation->from_x : x) + geometry->width;
+  int max_y =
+      (animation->from_y > y ? animation->from_y : y) + geometry->height;
+
+  struct wlr_box travel = { .x = min_x,
+    .y = min_y,
+    .width = max_x - min_x,
+    .height = max_y - min_y };
+
+  hikari_output_add_damage(view->output, &travel);
 
   return true;
 }
@@ -281,6 +303,22 @@ hikari_animation_tick(struct hikari_output *output, uint32_t at_msec)
     // it, so hit testing this frame reads exactly what this frame drew.
     animation->drawn_x = current_x;
     animation->drawn_y = current_y;
+
+    /* [COMMENT] Action purpose: Wake any OTHER screen this frame's position
+    reaches. frame_handler() reschedules only the output it is running on, and
+    hikari_animation_tick() walks only that output's views -- so a window
+    travelling across a seam advanced on its own screen every frame and left its
+    far half frozen on the neighbour. Requesting damage for the box just drawn
+    fans the frame out; the neighbour's own tick walks its own views, does not
+    find this one and does not reschedule, so this cannot become a loop. */
+    struct wlr_box *geometry = hikari_view_geometry(view);
+
+    struct wlr_box drawn = { .x = current_x,
+      .y = current_y,
+      .width = geometry->width,
+      .height = geometry->height };
+
+    hikari_output_add_damage(output, &drawn);
   }
 
   return running;

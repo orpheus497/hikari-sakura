@@ -2,6 +2,64 @@
 
 *Note: Most recent entries are listed at the top.*
 
+## Session Date: 2026-08-29 16:46 -- Phase 96 Cycle 2 on hardware; documentation moved with the behaviour
+
+**Timestamp:** 2026-08-29 16:46 *(source: `date '+%Y-%m-%d %H:%M'`)*
+
+**User, verbatim:** *"everything seems to be working so far after reinstall and reboot"*, followed by a request to update the documentation and the trackers.
+
+**Recorded as a PROVISIONAL pass, per the Phase 91 precedent.** It is a strong no-regression result over a real session -- the compositor starts, stays up, and the reported symptom is gone -- and that closes the cycle's largest risk, because `track_pending_origin()` sits on the funnel every move in `src/view.c` converges on and the damage fan-out is reached by every damage path in the tree. **It is not a claim that V-1 through V-6 were each run, and the trackers do not say it is.**
+
+**V-3 and V-4 were then confirmed separately by the user at 16:49** -- the only check that exercises T-13, and the one where T-10's round-trip window is widest -- so both halves of the reported defect have direct evidence rather than inference. **V-6 also passed at 16:49, discharging R-3;** M-V2 was to be re-run after Phase 96 and this cycle rewrote `move_mode.c` again. **The 12:07 crash report** (dragging a floating window larger than the destination screen) was addressed by a mechanism that fit rather than a confirmed diagnosis, and nothing in this cycle bears on it.
+
+**Documentation moved with the behaviour, and only where the behaviour made it false.** Ruled by the same reasoning as R-4: a documentation half is not deferrable to Phase 102 when prose becomes false the moment behaviour changes. **This was not a Phase 102 pass and did not attempt one** -- D-2/P-9's full rewrite of `OUTPUTS` for multiple displays remains Phase 102's, untouched and unclaimed.
+
+**Three edits to `share/man/man1/hikari.md`, each tied to something this cycle changed.** (1) **LAYOUT POLICY, `auto`** -- the deferral paragraph enumerated exactly when a re-tile request is held or dropped, and **T-11 added a fourth case**, so the enumeration was incomplete rather than merely thin; it now records the drag hold, why it exists, and that **insert** and **reflow-on-close** still govern the outcome. (2) **`view-move-[up|down|left|right]`** -- said only that it moves the view *step* pixels; **that a keyboard move can move a view to another output at all was undocumented, and had been true far longer than this cycle.** (3) **A new OUTPUTS subsection, "Moving views between outputs"** -- states T-12's rule (**the top left corner decides, for pointer and keyboard alike, so the two agree**), why the pointer is not the test, what happens on arrival for floating and tiled views, and **T-7a's dead band** between mismatched screen heights.
+
+**Not documented, deliberately.** T-10, T-13 and T-15a are bug fixes with no user-facing surface -- a window that no longer snaps back and a seam that no longer tears are the absence of defects, not features. **T-13's fan-out is invisible by design**: it changes when a frame is scheduled, never what is drawn.
+
+**Verified:** `pandoc -s -t man` converts cleanly and **both new passages were rendered through `nroff -man` and read back**, not merely converted -- the Phase 93 standard, set when a conversion succeeding was found to say nothing about whether the result lays out. Only `share/man/man1/hikari.md` is tracked; `hikari.1` is generated and `.gitignore`'d at `:6`, **confirmed with `git ls-files` and `git check-ignore` rather than assumed** -- the same check that reversed a wrong conclusion in Phase 93.
+
+**Files modified this session:** `share/man/man1/hikari.md` and the five `.devdocs/` trackers. **No compositor source was touched at 16:46**; the code changes are those of the 15:44 entry.
+
+**Next session:** **Phase 97 as programmed** -- tiling manipulation (M-3) and send-to-screen (P-5). All six verifications passed and R-3 is discharged, so Phase 96 is closed in both cycles. Re-test the 12:07 crash opportunistically; nothing in this cycle bears on it. After that, **Phase 97 as programmed**: tiling manipulation (M-3) and send-to-screen (P-5), the latter building on `hikari_server_migrate_focus_view()`, which Cycle 2 touched. **Nothing is tagged or versioned, and Q10's ordering holds -- documentation phase, then release.**
+
+---
+
+
+## Session Date: 2026-08-29 15:44 -- Phase 96 Cycle 2: the cross-screen move, fixed at four causes
+
+**Timestamp:** 2026-08-29 15:44 *(source: `date '+%Y-%m-%d %H:%M'`)*
+
+**User reported:** *"trying to move windows to the other display -- instead of the windows being moveable, when trying to move them across they constantly snap back to the display they are on, and also cause visual choppy tearing."*
+
+**The symptom had changed rather than persisted, and that was the finding.** Cycle 1 fixed a **whip** -- a window flung to the far edge of the external monitor and eased back over 120 ms. This was a **rewind** -- the window tracks the pointer and is then yanked backwards. **T-1 did not cause it; T-1 uncovered it**, because the rewind happens inside a client round-trip, which is exactly the interval the 120 ms whip used to occupy.
+
+**R-5 -- the trackers recorded cycle 1 as unstarted and it was delivered.** `BRIEFING.md`, `PLANS.md` -22 and `TODOS.md` all said *"0 of 6 code items started"* while commit `586be1e` had landed T-1, T-4, T-5, T-6, T-7a and R-4. **Third instance of the shape recorded as R-4 and as FB-4's ~60-phase survival.** Caught by the 08:57 rule -- *a recorded finding is not a verified one* -- and every citation in this cycle was read in the tree before it was written down. Corrected at 15:22.
+
+**T-10, the rewind (CRITICAL).** `queue_reset()` stamps `op->geometry` with the position at the instant of crossing. A tiled window's tile size differs from its floating size, so the reset takes the asynchronous branch -- a real client configure -- and **under `layout { auto = true }` that is the only path the user has.** The drag keeps running throughout, because `move_view()` has no dirty test unlike every resize path. On the ack, `commit_reset()` writes the stale origin over the live one; `hikari_view_commit_pending_operation()` refreshes only width and height. **And the rewind target is the origin screen by construction:** `lx - output->geometry.x` with `lx` already anchor-adjusted gives a negative destination-local x. Fixed by `track_pending_origin()`, guarded on operation TYPE -- only `RESET` and `RESIZE` carry an origin that is the user's.
+
+**T-13, the tearing (CRITICAL, on no prior tracker).** `hikari_output_add_damage()` took a `struct wlr_box *region`, checked it for NULL and **never read it**, and every view damage path hands it `view->output`. A window straddling the seam scheduled frames on one screen and went stale on the other for whole frames. **Not the 60.026/60.000 Hz beat** -- that is T-3, is irreducible, and bounds the halves to one frame apart; this had no bound. **Not scanout tearing either**, re-verified rather than carried forward. Fixed by fanning out to every intersecting output, with the origin output still scheduled unconditionally so a degenerate region cannot lose damage it used to get.
+
+**T-12 and T-11, the thrash.** The branch was chosen from the cursor while the window was placed at cursor-minus-anchor, so for the width of the grab offset the window was owned by one output and drawn on the other, and jitter re-fired a full migrate per motion event. And the arrival reflow drained at the tail of T-10's own commit, re-tiling the whole destination sheet including the window under the pointer.
+
+**Two hazards were found while shaping the fixes and ruled inside their parent questions rather than tabled as new ones.** **H-1:** a window ORIGIN leaves the layout far more readily than a cursor does -- wlroots confines a cursor, nothing confines an origin -- so a naive Q13 would have frozen the drag at the top and left edges of every screen. Falls back to the cursor's output. **H-2:** the obvious Q12 implementation is a hold/release latch, and move mode is not guaranteed to exit through normal mode, so a latch stranded by a lock or an output teardown would have killed automatic tiling for the session with no symptom pointing anywhere near it. Expressed as a query on the current mode instead -- no flag to leak.
+
+**T-13f went beyond its scoped item, deliberately and with the reason recorded.** The tracker scoped it to `hikari_animation_move()`. Fixing only that leaves the defect half-closed, because `frame_handler()` reschedules one output and `hikari_animation_tick()` walks one output's views -- a window travelling across a seam advanced on its own screen and froze on the neighbour. The tick now requests damage for the box it drew.
+
+**Files modified:** `src/view.c` (T-10), `include/hikari/output.h` (T-13e), `src/animation.c` (T-13f), `src/move_mode.c` (T-12, T-15a), `src/reflow.c` (T-11), `src/server.c` (T-11). Plus the five `.devdocs/` trackers.
+
+**Verified:** **71 translation units compile at `-Wall -Werror` with `/usr/bin/clang`, the full binary links, `hikari -v` runs.** The whole tree was rebuilt rather than the six edited units, because `include/hikari/output.h` is included very widely and a mistake there is not local. **Nothing installed, nothing run against hardware, no `sudo`, no `git`, nothing tagged or versioned.**
+
+**Observed, not fixed, not in scope:** `hikari_normal_mode_enter()` calls the outgoing mode's `cancel()`, and move mode's ends with `hikari_view_center_cursor()` -- **the pointer is warped to the window's centre at the end of every drag.** Pre-existing, untouched, possibly deliberate. Recorded because it is a visible motion at exactly the moment T-14a asks the user to confirm that only one settling motion remains, and it must not be mistaken for one of the three this cycle removes.
+
+**Next session:** the user builds in tree, installs and runs **V-1 through V-6** (`TODOS.md` Phase 96 Cycle 2). **V-3 is the T-13 test and nothing else exercises it** -- span both screens, hold still, move only the cursor, and both halves must repaint together. **V-4 is the T-10 test that matters**, because Firefox's round-trip is the longest. **V-6 discharges R-3.** After that, Phase 97 as programmed: tiling manipulation (M-3) and send-to-screen (P-5), the latter building on `hikari_server_migrate_focus_view()`, which this cycle touched.
+
+**Still open and unchanged:** the 12:07 crash report -- dragging a floating window larger than the destination screen -- was addressed by a mechanism that fit rather than a confirmed diagnosis. **Nothing in this cycle bears on it, and it should be re-tested with the rest.** Bisect handles are unchanged: `ui { spill = always }` disables the crop, `layout { auto = false }` disables the migrate-path reflow.
+
+---
+
+
 ## Session Date: 2026-08-29 12:07 -- Phase 96 follow-up: crash hypothesis fixed, tuneables deployed, two review findings
 
 **Timestamp:** 2026-08-29 12:07 *(source: `date '+%Y-%m-%d %H:%M'`)*

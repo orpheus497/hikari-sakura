@@ -459,7 +459,9 @@ View actions
 
 * **view-move-[up|down|left|right]**
 
-  Moves the focused view **step** pixels into the given direction.
+  Moves the focused view **step** pixels into the given direction. A move that
+  carries the view's top left corner onto another output moves the view to that
+  output -- see **OUTPUTS**.
 
 * **view-move-[center[|-left|-right]|[bottom|top]-[left|middle|right]]**
 
@@ -961,6 +963,16 @@ asking for it.
   is quiet. Requests for a sheet that is not currently displayed are dropped and
   re-offered when it is displayed again, and requests made while the screen is
   locked are dropped outright.
+
+  Requests are also held for as long as a view is being dragged with the
+  pointer, and released when the button is let go. Dragging a view onto another
+  output changes which sheet it belongs to, and acting on that immediately would
+  re-tile the destination -- and the view still under the pointer with it --
+  while the drag was still in progress. Holding the request means a view dragged
+  between outputs is folded into the destination layout once, where it was
+  dropped. Nothing is lost by the delay: the destination still incorporates the
+  view according to **insert**, and the sheet it left still closes the gap
+  according to **reflow-on-close**.
 
 * **insert**
 
@@ -1621,6 +1633,34 @@ outputs {
   }
 }
 ```
+
+Moving views between outputs
+----------------------------
+
+Every output carries its own workspace, and each workspace displays its own
+sheet. A view therefore belongs to exactly one output at a time, and moving it to
+another output also moves it to the sheet that output is currently displaying.
+
+Which output a view belongs to is decided by its **top left corner**. This is the
+rule for both ways of moving a view, so that they agree. **view-move-\*** moves
+the corner by **step** pixels and hands the view over when the corner lands on
+another output. A pointer drag hands it over when the corner crosses, not when
+the pointer does -- the view is held wherever it was taken hold of, so the
+pointer is usually some distance inside it, and handing over on the pointer would
+move a view to an output it was not yet on.
+
+What happens on arrival depends on the view. A **floating** view keeps the
+position it was dropped at and is never folded into a layout. A **tiled** view
+joins the destination sheet's layout according to **insert**, and the sheet it
+left closes the gap according to **reflow-on-close**; with pointer drags both
+happen once, when the button is released. See **LAYOUT POLICY**.
+
+Two outputs of different heights placed side by side leave a band of the layout
+that belongs to no output at all -- a 1920x1200 panel beside a 1920x1080 one
+leaves everything below 1080 on the right-hand side unclaimed. The pointer can
+enter that band. A drag holds the view at its last position while it is there and
+resumes when the pointer is over an output again, rather than moving the view
+somewhere that cannot be painted.
 
 Output position can be given explicitly using the *position* attribute. If none
 is given during startup **hikari** will automatically configure the output.
