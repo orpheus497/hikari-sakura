@@ -1296,6 +1296,13 @@ output_layout_change_handler(struct wl_listener *listener, void *data)
         wlr_scene_node_set_position(view->scene_node,
             geometry->x + output->geometry.x,
             geometry->y + output->geometry.y);
+
+        /* Action purpose: The spill clip is a box derived from the output's
+        width and height, cached on the view until something asks for it again.
+        The reflow below re-derives it for tiled views, but only while tiling is
+        on -- a floating view, or any view with automatic layout off, would keep
+        the clip cut for the size the output no longer has. */
+        hikari_view_refresh_spill_clip(view);
       }
     }
 
