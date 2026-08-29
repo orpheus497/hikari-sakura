@@ -109,6 +109,26 @@ drain(void *data)
   stale pointer. */
   idle_source = NULL;
 
+  /* [COMMENT] Action purpose: The same hold arm() applies, enforced again here
+  because arm() cannot cover this case. arm() stops a NEW source being created
+  during a drag; a source armed just BEFORE move mode was entered is already
+  queued in the event loop and still dispatches. Both happen in one iteration
+  whenever a client commit arms through hikari_reflow_settle() and a button
+  press enters move mode before the idles run -- and the re-tile would then land
+  mid-drag, which is exactly what the hold exists to prevent.
+
+  Returns with the queue INTACT and deliberately does not re-arm: re-arming from
+  inside an idle handler is the busy loop warned about below, and `idle_source`
+  is already NULL, so no source is left armed either. The release path is the
+  same one arm() relies on -- hikari_server_enter_normal_mode() calls
+  hikari_reflow_settle() once the drag ends, and hikari_reflow_settle() also
+  runs at the tail of every hikari_view_commit_pending_operation(), so a queue
+  left here by an exit that never reaches normal mode is drained by the next
+  geometry commit rather than stranded. */
+  if (hikari_server_in_move_mode()) {
+    return;
+  }
+
   struct hikari_sheet *sheet, *sheet_temp;
 
   wl_list_for_each_safe (
