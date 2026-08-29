@@ -208,6 +208,8 @@ Key points:
 * **Handbook Verification:** FreeBSD Handbook Ch.6 §6.1-6.4 cross-referenced — all requirements verified correct.
 * **Test Specifications:** Added build compilation (TC-BUILD-01), pkg-config dependencies (TC-PKG-01), and manual protocols for Evdev, Shared Memory, and PAM.
 
+* **Phase 95 P-1 Coordinate Space & Output Geometry:** `arrange_layers()` anchors `full_area` at the output's layout origin (`src/layer_shell.c`) -- layer surfaces were positioned inside the layout rectangle of whichever output sat at `{0,0}`, breaking every layer-shell client since the wlroots-0.20 scene port. `usable_area` is translated back to output-local before the store, keeping the field output-local for all ~26 consumers. `output_geometry()` promoted to the public `hikari_output_update_geometry()` and made the single entry point; `output_layout_change_handler()` (`src/server.c`) now re-derives geometry, re-arranges layers via the new `hikari_layer_shell_arrange()`, and schedules a reflow, so a position change, a mode change and a hotplug all recompute. `focus()` resolves the layer's own workspace and assigns `hikari_server.workspace` -- layer shell was the one focus path that never did. Noop output `geometry`/`usable_area` initialised; wallpaper re-decoded only on a dimension change; `cursor_move()` compares against `focus_layer` as well as `focus_view` (`src/normal_mode.c`). **The wlroots-0.20 scene-port omission family is closed at four.** 71 translation units compile at `-Wall -Werror` and link; not yet run on hardware.
+
 ## 8. Test Specifications & Verification Framework
 
 | Test Case ID | Test Target | Description | Expected Outcome | Status |

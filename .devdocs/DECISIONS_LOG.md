@@ -1,3 +1,344 @@
+## [2026-08-29 10:21] Phase 95 P-1 IMPLEMENTED: the layer-shell coordinate space, the layout-change re-derivation, and everything sharing their code
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'`. The first entry in this phase that changes product code. **Nothing was installed, no `sudo` was run, no `git` command was run, nothing was tagged or versioned.** The in-tree build remains the USER'S.)*
+
+### Rulings taken from the user before any code was written
+
+1. **L-1b = option (A).** One conversion at the boundary of `arrange_layers()`; `output->usable_area` stays output-local. Option (B) -- translating in and out around each `wlr_scene_layer_surface_v1_configure()` call -- is **not taken**.
+2. **N-2 is part of P-1**, not a separate item. It was found while verifying L-2c and is in the caller of the function L-2c changes.
+3. **M-8j is CLOSED by the user:** *"the issue was the specific keyboard in use, it's working now."* No configuration change was made and none is needed. **M-8 is closed entirely** -- M-8h had already established that the `HS6209` never emitted keycode 105 under `LOGO+ALT`, and the remedy was always the user's hardware choice.
+
+### Why (A), stated as it was argued
+
+`arrange_layers()` handed wlroots two boxes anchored at `{0,0}` while the four layer trees hang off a scene root whose space is the output layout, so every layer surface landed inside the layout rectangle of whichever output sat at the origin. Anchoring `full_area` at `output->geometry.x/y` is the whole of the reported fix. The difficulty was never that line: `usable_area` is seeded from `full_area`, wlroots mutates it in place and requires the pair to share one space, and the same variable is then stored to `output->usable_area`, which **every reader in the tree treats as output-local** and adds the output origin to itself.
+
+Three consumers were checked rather than assumed, and all three point the same way:
+
+* `src/view.c:287-289` adds `view->output->geometry.x/y` on the way to the scene.
+* `hikari_cursor_center()` (`src/cursor.c:786-793`) computes `output->geometry.x + geometry->x + geometry->width / 2` -- and it is on the monitor-switch path, so it runs on every `workspace-cycle-next`/`-prev`.
+* `hikari_bar_reserve()` (`src/bar.c:1200-1212`) only advances `y` and shrinks `height`, so it is **translation-invariant** and gives the same answer on a layout-global box as on an output-local one. That is what makes (A) safe: the two writers of `output->usable_area` -- `hikari_output_update_geometry()` and `arrange_layers()` -- still agree on the baseline.
+
+(A) keeps the layout-global lifetime inside one function and preserves the invariant that the stored field is always output-local. (B) would have spread the same conversion across an inner loop, which is where an offset error is actually made, and would have required changing the geometry read-back below it.
+
+### What landed
+
+| Item | File | Change |
+|---|---|---|
+| L-1a | `src/layer_shell.c` | `full_area` anchored at `output->geometry.x/y` |
+| L-1b | `src/layer_shell.c` | `usable_area.x/y -= output->geometry.x/y` immediately before `output->usable_area = usable_area` |
+| L-2c-i/ii/iii | `src/layer_shell.c` | `focus()` resolves `layer->output->workspace`; clears `focus_layer` on the workspace that actually holds it, which is not necessarily the one gaining it; ends by assigning `hikari_server.workspace`. The keyboard work stays gated on `keyboard_interactive`; the workspace assignment does not, which is the half that was broken for bars and toasts |
+| Finding 5 | `src/layer_shell.c` | `hikari_layer_init()` falls back to the noop output when `hikari_server.workspace` is NULL, which `hikari_output_fini()` makes it during teardown |
+| X-1a | `src/output.c`, `include/hikari/output.h` | `output_geometry()` becomes the public `hikari_output_update_geometry()` |
+| X-1b/c | `src/server.c`, `src/layer_shell.c`, `include/hikari/layer_shell.h` | `output_layout_change_handler()` now calls `hikari_output_update_geometry()`, then `hikari_layer_shell_arrange()`, then `hikari_reflow_schedule()`. Ordering is deliberate: update-geometry seeds `usable_area` from the full box and reserves the bar; the arrange pass re-derives from the same baseline and shrinks by exclusive zones. Reversed, the bar's rows are handed back to views |
+| X-2a | `src/output.c` | `output->geometry` and `output->usable_area` zeroed in `hikari_output_init()` before the `if (!noop)` branch. `hikari_malloc()` is a bare `malloc(3)` and these were written only inside that branch |
+| X-3a | `src/server.c` | The wallpaper is reloaded only when the output's width or height changed. A move leaves the decoded image valid and `hikari_output_update_geometry()` has already repositioned its scene node. **Solved by not re-decoding rather than by caching**, which is smaller and has no invalidation to get wrong |
+| N-2 | `src/normal_mode.c` | `cursor_move()` compares the hovered node against `focus_layer` as well as `focus_view` |
+
+### L-1d -- the sweep, and its result: there is no fifth omission
+
+Every scene-node positioning call in `src/` was enumerated and classified.
+
+* **Add the output origin to an output-local box** (scene-root-parented, correct): `animation.c:276,303`; `bar.c:1554`; `indicator_bar.c:110`; `lock_clock.c:229`; `lock_indicator.c:228`; `lock_mode.c:907`; `output.c:166,192,325`; `server.c:1296`; `view.c:287,2617`.
+* **Parent-relative by construction** (children of the view's own tree, and documented as such): `border.c:101-112`; `indicator_frame.c:132-149`.
+* **Already layout-global at source, and this is the one that looks like a defect and is not:** `xwayland_unmanaged_view.c:359` positions a tree parented to `hikari_server.layers.views` at `surface->x, surface->y` with no origin added. Those are X11 root coordinates, and hikari feeds XWayland **layout-global** coordinates -- `wlr_xwayland_surface_configure(surface, output->geometry.x + x, output->geometry.y + y, ...)` at `src/xwayland_view.c:34-35`, `:51-52`, `:66-67`. X11 root space **is** the output layout space, so the value is already in the right space by a different route.
+
+**The wlroots-0.20 scene-port family is closed at four:** scene restacking (`DECISIONS_LOG:1340`), indicator show/hide (`:2290`), `move_view()` (Phase 92 M-1), and `arrange_layers()` (this entry).
+
+### L-1c and L-1e -- verified, and neither needed an edit
+
+* **L-1c.** `layer->geometry.x/y = nx - output->geometry.x/y` reads `wlr_scene_node_coords()`, which is layout-global, and subtracts the origin to store output-local. It was written for the fixed behaviour and computed `-1920` for a surface on `DP-3` until now. Correct with no change. Note also that `hikari_output_add_damage()` (`include/hikari/output.h:98`) ignores its region entirely and only schedules a frame, so the box's space never mattered to damage.
+* **L-1e.** `popup_unconstrain()` builds `{ .x = -layer->geometry.x, .y = -layer->geometry.y, width/height = output->geometry.width/height }` -- a surface-local box whose origin is the negative of the layer's output-local position. It becomes correct the moment `layer->geometry` does.
+
+### N-2, recorded in full because it was on no tracker
+
+`cursor_move()` (`src/normal_mode.c`) took `focus_node` from `hikari_server.workspace->focus_view` alone. A layer node is never equal to a view, so hovering **any** layer surface re-entered `hikari_node_focus()` on every pointer motion event -- and for a keyboard-interactive layer that is a `wlr_seat_keyboard_clear_focus()` plus `wlr_seat_keyboard_notify_enter()` per event, today, before this phase. It was invisible because `focus()` did nothing at all for non-interactive layers. Once L-2c gives `focus()` real work, that becomes a per-motion workspace assignment. The fix is the comparison the function should always have had; the assignment is idempotent either way, which was the standard L-2c was written to.
+
+Non-interactive layers still re-focus on every motion, because `focus_layer` is deliberately **not** set for them: `destroy_handler` (`src/layer_shell.c:753`) clears the seat's keyboard focus when the destroyed layer is the workspace's `focus_layer`, and recording a bar there would steal keyboard focus from a view when the bar goes away. The residual cost is one pointer store per motion event.
+
+### One thing checked against the `sofi` tree, because it constrains this fix
+
+`sofi`'s R54 rules that placement follows the compositor's **focused** output, with a carve-out for keyboard and gesture focus changes where a menu should open on the focused screen rather than the one holding the mouse. **That carve-out does not arise in this tree, and the check cost nothing:** `CYCLE_WORKSPACE` (`src/server.c:2140-2158`) calls `hikari_view_center_cursor()` or `hikari_workspace_center_cursor()`, and both **warp the pointer to the target output** (`src/workspace.c:1031-1035` -> `src/cursor.c:786-793`). Pointer and focus agree after a cycle, so L-2c had no conflict to resolve. Recorded so nobody re-derives it.
+
+### Verification -- what was actually run
+
+* All **71 translation units** compiled with `/usr/bin/clang` at `-Wall -Werror`, using the Makefile's own flag set (`make -V CFLAGS`), objects written to a scratch directory. **The tree's own artifacts were not touched.**
+* Full **link** of `hikari` from those objects with `make -V LIBS`/`-V LDFLAGS`; the resulting binary runs `hikari -v`.
+* One apparent failure in `src/bar.c` was an artifact of shell word-splitting on `-DHIKARI_TOPBAR_PATH='"..."'` when passing CFLAGS through a variable, **not a code defect** -- it compiles clean when the define is quoted correctly.
+
+### Not done, and stated so it is not assumed
+
+**Nothing here has been run on hardware.** The compositor has not been rebuilt in tree, installed or restarted. **L-2c-iv is now testable for the first time** and is the user's: hover a `sofi` bar or toast on `DP-3` with no click, then read `printf 'state\n' | nc -U $XDG_RUNTIME_DIR/hikari.sock` -- it must report `output DP-3`. **P-2 (`X-4a`) was not touched**, and it is one line.
+
+---
+## [2026-08-29 08:57] Phase 95 CORRECTION AND RE-VERIFICATION: **four claims in the 08:28 entry were false. Every claim below was re-checked in the tree before it was written.**
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'`. The 08:28 entry is left standing rather than edited, so a concurrent session reading it can see exactly what changed. **Nothing was built, installed, tagged or run.** Written at the user's explicit instruction; note that the 08:28 entry proposed the `sofi` session own these files for Phase 94 — that proposal is superseded by the instruction, and the `sofi` session should read this entry before writing.)*
+
+### Retractions — four claims from the 08:28 entry, each false
+
+1. **"There is no default-keymap reference anywhere." FALSE.** `etc/hikari/hikari.conf:507-701` **is** one, and a good one: grouped and commented by task — session control, launching, laptop media keys, view cycling and lifecycle, view state toggles, modal operations, sheet switching and pinning, layout registers, and a prose block explaining layout manipulation. The proposed `DEFAULT BINDINGS` work would have rebuilt something that already exists in better form. **Item D-1 is struck, not rescoped.**
+
+2. **"`hikari_output_next`/`hikari_output_prev` have no caller anywhere in the tree — dead API." FALSE.** Both are **macro-generated** by `CYCLE_OUTPUT` (`src/output.c:753-770`) and **macro-called** by `CYCLE_WORKSPACE` (`src/workspace.c:83-94`) through `hikari_output_##name`. A literal grep for the function name misses the definition and the call site alike, which is exactly how the error was made. They are load-bearing: they are how `workspace-cycle-next`/`-prev` walk between monitors.
+
+3. **"There are no keyboard commands for monitors." FALSE.** `workspace-cycle-next` and `workspace-cycle-prev` move focus to the next and previous monitor's workspace (`src/server.c:2139-2161`), and both are **bound in the shipped configuration**: `LS+n` / `LS+b` (`etc/hikari/hikari.conf:662-663`) and 3-finger swipes left/right (`:405-406`).
+
+4. **"`OUTPUTS` says nothing about multiple displays." OVERSTATED.** Multiple outputs are covered in CONCEPTS (`hikari.md:116`, one workspace per output), in the sheet-assign action (`:412`, TAB cycles outputs), and in the control-socket section (`:1717`, `:1727`, the `output <name>` response). The genuine gap is far narrower and is restated as D-2 below.
+
+**The estimates in the 08:28 plan — "~2 days", "~1.5 days" and the rest — had no basis and are withdrawn.** No replacement estimates are given here; the work is ordered by dependency instead.
+
+### The correction that matters most: **stop proposing a test that depends on the broken feature**
+
+The 08:28 entry and `TODOS.md` Phase 94 both direct the user to verify the layer-placement defect by setting `outputs { position }` for two monitors and restarting. **The user's opening request for this whole line of work was to investigate whether positioning and reorganising screens is possible at all.** Asking them to prove a defect by exercising the feature under investigation is circular, and it is worse than circular here because the same defects corrupt the result:
+
+* Panels are drawn at the layout origin regardless of position (`src/layer_shell.c:127-131`), so repositioning monitors does not move them.
+* On reload the layout moves but nothing re-derives from it (below), so the visible result of a position change is partial.
+
+**No position-based test is required, because the measurement already exists.** The `sofi` session recorded hikari's own IPC reporting `output DP-3` as the active workspace while `sofi` was drawing on `eDP-1`. That is a direct contradiction, taken from the running compositor, and it establishes the defect on its own. A second no-cost observation is available if corroboration is wanted: a menu summoned with the pointer on `DP-3` should appear on `eDP-1` **laid out for 1920x1080 rather than the panel's 1920x1200**, because the size comes from the correct output and only the origin is wrong. **Neither requires touching the configuration. `L-V1` should be struck from `TODOS.md` Phase 94.**
+
+### What `outputs { position }` actually does — verified end to end, because this is the session's original question
+
+The code path exists and is complete on paper:
+
+* **Parsed.** `parse_output_config()` accepts exactly two keys, `background` and `position` (`src/configuration.c:1758`, `:1787`). `position` is routed to `hikari_position_config_absolute_parse()` **directly** (`:1789`), so it takes an `{ x, y }` object and nothing else — the nine relative keywords implemented in `src/position_config.c:35-73` are reachable for *views* and unreachable for outputs.
+* **Resolved.** `hikari_configuration_resolve_output_config()` (`src/configuration.c:2744`) matches the connector name exactly, then falls back to `"*"`. `HIKARI_OPTION`'s merge only fills unconfigured fields (`include/hikari/option.h:41-50`), so a per-output position is not clobbered by the wildcard.
+* **Applied at startup.** `src/output.c:570-581` — absolute position if configured, otherwise auto-placement at `extents.x + extents.width, 0`, appending left to right. The configuration is loaded (`src/server.c:1518`) before the backend is started (`:1857`), so the config is present when outputs are enumerated.
+* **Applied on reload.** `src/configuration.c:2506-2516` calls `hikari_output_move()` when the value differs.
+
+**And here is why it does not work from the user's seat.** `hikari_output_move()` calls `wlr_output_layout_add()`, which fires the layout-change signal. `output_layout_change_handler()` (`src/server.c:1243-1288`) then updates `output->geometry`, reloads every wallpaper and repositions view scene nodes — **and stops.** Grepped over the whole function body: it contains no `usable_area`, no `arrange`, no `output_geometry`, no bar call. So after a position change:
+
+* `output->usable_area` keeps the value it was given at output init — windows are laid out against the wrong box.
+* The top bar's strip is not re-reserved.
+* **No layer surface is re-arranged at all**, so bars, menus and notification surfaces stay exactly where they were.
+
+Combined with the origin defect, the observable behaviour of setting `outputs { position }` is that the layout changes underneath while the visible furniture does not move. **That is the honest answer to "does positioning screens work": the configuration key exists, is parsed, and is applied to the output layout — and almost nothing downstream re-derives from it.**
+
+### Verified findings — every one re-checked in the tree at 08:57
+
+**Defects**
+
+| # | Finding | Evidence |
+|---|---|---|
+| 1 | `arrange_layers()` builds `full_area` at `{0,0}` while the scene root's space is the whole output layout, so every layer surface lands inside the layout rectangle of the monitor at origin | `src/layer_shell.c:127-131`; scene attached to layout at `src/server.c:1005` |
+| 2 | `output_layout_change_handler()` never recomputes `usable_area`, never re-reserves the bar, never re-arranges layers. `output_geometry()` has **exactly one call site in the tree** — output init | `src/server.c:1243-1288`; `src/output.c:610` (grep for `output_geometry` returns 3 hits: definition `:298`, an unrelated comment `:462`, that call) |
+| 3 | The noop output's `geometry` and `usable_area` are **never assigned**. They are written only by `output_geometry()`, which is inside `if (!noop)`; `hikari_malloc()` is a bare `malloc(3)` | `src/output.c:499-610`; `src/memory.c:19-21` |
+| 4 | `focus()` wraps its **entire** body in `if (state->keyboard_interactive)`, and inside that branch writes `focus_layer` onto `hikari_server.workspace` — never `layer->output->workspace` | `src/layer_shell.c:904-936` |
+| 5 | `hikari_layer_init()` dereferences `hikari_server.workspace` unguarded, which `hikari_output_fini()` sets NULL during teardown | `src/layer_shell.c:225-227` |
+| 6 | `make install-user` writes `/usr/local/home/<user>/.config/hikari/hikari_wallpaper.png`. **Confirmed by running the real sed chain**, not by reading it | `Makefile:408-409` |
+| 7 | Every wallpaper is re-decoded from disk and re-rendered at full size, for every monitor, on every layout change | `src/server.c:1264-1268`; `src/output.c:86-126` |
+
+**Absent capability**
+
+| # | Finding | Evidence |
+|---|---|---|
+| 8 | The `outputs` parser accepts **two** keys. No mode, refresh, scale, transform, enable or adaptive-sync exists anywhere; the only modeset in the tree is `wlr_output_preferred_mode()` at init | `src/configuration.c:1758,1787`; `src/output.c:512` |
+| 9 | Output position accepts absolute `{x,y}` only; the relative keywords work for views and are unreachable for outputs | `src/configuration.c:1789` vs `src/position_config.c:35-73` |
+| 10 | Only `wlr_xdg_output_manager_v1_create` is created — read-only advertisement. No output-management and no output-power-management global, so `wlr-randr`, `kanshi` and `wdisplays` can see nothing and change nothing | `src/server.c:1588`; grep of `src/` for `output_manager_v1_create` returns that one hit |
+| 11 | No single action sends a window to another monitor. Migration itself works and is reachable three ways — walking a window across the seam (`src/server.c:2453-2491`), pointer or touch drag (`src/move_mode.c:77`), and TAB in sheet-assign mode (`src/sheet_assign_mode.c:57`) — all funnelling through `hikari_server_migrate_focus_view()` | full read of `src/action.c`; `src/server.c:2429` |
+| 12 | No record of which monitor a window was on. `hikari_workspace_merge()` is one-directional, so an unplug is not reversible | `src/workspace.c:97` |
+
+**Build**
+
+| # | Finding | Evidence |
+|---|---|---|
+| 13 | A missing pkg-config module produces a **warning** and an empty variable, and the build proceeds to fail later on a missing include. **Reproduced with a throwaway makefile** | `bmake: warning: Command "pkg-config --cflags …" exited with status 1`, variable empty |
+| 14 | `wayland-scanner`, `pandoc`, `install` and `sed` are used by rules and probed by nothing. `pandoc` is required by `make install` from a git checkout | `Makefile` |
+
+**Documentation — measured, and the measurement is why retraction 1 was possible**
+
+Every `strcmp(key, …)` in the configuration parser and every `strcmp(str, …)` in `src/action.c` extracted and checked against `share/man/man1/hikari.md` and `etc/hikari/hikari.conf`: **70 of 70 configuration keys documented; 65 of 66 action names documented** — the only absentee is `debug-damage`, which is `#ifndef NDEBUG`. Apparent gaps in a naive grep are bracket-family entries such as `view-decrease-size-[up|down|left|right]` (`hikari.md:442`) and are correct as written.
+
+## [2026-08-29 08:28] Phase 95: **Rulings taken on Phase 94's tabled question; three more members of the scene-port family; the v1 verdict**
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'`. Scope: a second analysis strand -- multi-output configuration, user-facing documentation, and the dependency/install process -- requested by the user, plus the rulings that close Phase 94's tabled question. **No source file was modified, no build was attempted, no `git` command was run, and nothing was installed. The session's only writes are the six `.devdocs/` trackers.**)*
+
+### Rulings taken from the user
+
+1. **L-2 = (c).** An unassigned layer surface's placement follows the focused output, and **the focus gap is closed at its cause** rather than special-cased in layer shell.
+2. **Dependency handling = B now, A at release.** `make check-deps` as a hard preflight in the next build cycle; a **FreeBSD port/package** as the actual distribution story for the release.
+3. **Phase order approved as proposed:** 95 (coordinate space + output geometry) -> 96 (dependencies) -> 97 (v1 documentation) -> port -> 98 (multi-screen configuration) -> 99 (output management + per-monitor memory).
+4. **Output identity for per-monitor memory = the monitor, not the port.** Ruled in the previous exchange; see "Output identity" below.
+5. **The agent never runs `sudo` and never installs.** Restated by the user as a standing rule, not a per-task instruction. Every build, install and hardware test in every phase below is the user's to run. Recorded here so no future phase plan assumes otherwise.
+
+### (c) does not replace (a), and the distinction decides what gets built
+
+Phase 94 recorded the three options as **"(b) and (c) are strictly additive to it"** -- "it" being (a), the `arrange_layers()` placement fix -- and **"none is observable until L-1 lands"**. So the ruling resolves to **L-1 *and* L-2c**, not L-2c alone. Fixing the focus gap without fixing placement would move focus to the correct output and still draw the surface on the wrong one, which is the reported symptom unchanged. **L-1 is not optional under any of the three answers**; what (c) adds is the second, independent defect below.
+
+### L-2c: the gap has two halves, and only one of them was on record
+
+`focus()` (`src/layer_shell.c:904-935`) was described in Phase 94 as returning "without touching the workspace when a non-keyboard-interactive layer is hovered". That is correct, and it is **half** of it. Read in full against `hikari_workspace_focus_view()`:
+
+* **Half one -- the early return.** `if (state->keyboard_interactive)` wraps the *entire* body. A layer surface without keyboard interactivity -- which is most of them: bars, notification toasts, background setters, `sofi`'s non-input surfaces -- moves `hikari_server.workspace` **not at all**. The pointer can sit on `DP-3` indefinitely while the compositor still believes the active workspace is `eDP-1`'s.
+
+* **Half two -- the wrong workspace is written even on the interactive path.** Inside the branch, `struct hikari_workspace *workspace = hikari_server.workspace;` takes the **currently focused** workspace, and the function ends `workspace->focus_layer = layer;`. When the layer belongs to a different output -- exactly the case this ruling is about -- `focus_layer` is recorded on the workspace of the output the user is *not* pointing at, and the layer's own workspace never learns it holds the focus. Compare `hikari_workspace_focus_view()` (`src/workspace.c:415-489`), which takes the target workspace **as a parameter** and ends `hikari_server.workspace = workspace;` (`:487`). Layer shell is the one focus path that never assigns `hikari_server.workspace`.
+
+**Why the cause is here and not in `cursor_move()`.** `src/normal_mode.c:216-253` re-focuses the workspace **only in its `node == NULL` branch** -- bare desktop. When a node is hit it delegates to `hikari_node_focus(node)`, and that is correct polymorphism: the view implementation moves `hikari_server.workspace` via `hikari_workspace_focus_view()`, and the layer implementation does not. Patching `cursor_move()` would special-case layer shell in the caller and leave every other entry point to `hikari_node_focus()` still broken. **The fix mirrors the view path inside `focus()`: resolve `layer->output->workspace`, assign it, and write `focus_layer` there** -- which makes both halves one change.
+
+### Three further members of the scene-port family, found this session
+
+**Finding A -- `arrange_layers()` is never re-run when output geometry changes. This is L-1's completion, not a separate concern.**
+
+`output->usable_area` has **two writers**: `output_geometry()` (`src/output.c:309-317`) and `arrange_layers()` (`src/layer_shell.c:206`). `output_geometry()` is called from **exactly one place in the tree -- output init, `src/output.c:610`**. `output_layout_change_handler()` (`src/server.c:1243-1288`) updates `output->geometry` and repositions view scene nodes, then stops: it never recomputes `usable_area`, never re-reserves the bar's strip, and never calls `arrange_layers()`. Nothing else does either -- `arrange_layers()` is driven only by layer-surface events (`src/layer_shell.c:583, 606, 631, 751`).
+
+So after L-1a/L-1b land, **moving an output, changing its mode, or hot-plugging one still leaves both the layer arrangement and the usable area stale from init.** Tiling is then computed against the wrong box and layer clients keep stale exclusive zones until they happen to commit on their own. This is the same "written for a single output at layout origin" assumption as L-1 itself, one level up: L-1 fixes *where* layer surfaces are drawn, Finding A fixes *when* the arrangement is recomputed. **They belong in one phase because L-1b's translate-back and Finding A's re-entry are the same two boxes.**
+
+**Consequence for L-V1, and it is worth knowing before the test is run.** L-V1 correctly says *restart*. If the user instead reloads with `L+S+r`, `hikari_output_move()` fires and the layout changes, but **no layer surface is re-arranged at all** -- `sofi` stays exactly where it was and the test reads as a **false negative**, appearing to refute a correct diagnosis. **Restart, do not reload.**
+
+**Finding B -- the noop output's `geometry` and `usable_area` are never initialised.**
+
+`hikari_output_init()` assigns every field of `struct hikari_output` explicitly except `geometry` and `usable_area`, which are written only by `output_geometry()` -- and that call sits inside `if (!noop)` (`src/output.c:499-610`). The struct is allocated with `hikari_malloc()`, which is a bare `malloc(3)` with no zeroing (`src/memory.c:19-21`; the comment there documents the fail-fast policy, not zeroing). Both `new_output_handler()` and `init_noop_output()` (`src/server.c:1442-1446`) allocate this way.
+
+**Reachable when the last real output goes away.** `hikari_output_fini()` merges the departing workspace into `hikari_server.noop_output->workspace` and sets `hikari_server.workspace` to it, after which every geometry path -- `hikari_geometry_constrain_relative()`, the nine named positions, `queue_full_maximize()` (`src/view.c:1748`) -- reads an **indeterminate box**. The same read is available to a layer surface created in that window, since `hikari_layer_init()` resolves a NULL output to `hikari_server.workspace->output`. Two lines to fix, and it belongs with the hotplug work rather than in a phase of its own.
+
+**Finding C -- every wallpaper is re-decoded on every layout change.**
+
+`output_layout_change_handler()` calls `hikari_output_load_background()` for **every** output on **every** layout change (`src/server.c:1260-1268`), and that function decodes the PNG from disk with `cairo_image_surface_create_from_png()` and re-renders it at full output size (`src/output.c:86-126`). Per output, per hotplug, per move. Not a correctness defect -- a visible hitch on a docking event, and trivially cached.
+
+### Output identity for per-monitor memory (ruling 4, made precise)
+
+`wlr_output` carries `make`, `model` and `serial`, and the wlroots header states they **may be NULL** (`wlr_output.h:189`). A per-monitor identity therefore cannot be a single field; it is a documented fallback chain -- **`make|model|serial` -> `make|model|connector` -> `connector`** -- with the resolved identity logged at startup so a user can see which rule fired for their hardware. The consequence is the one the ruling asks for and should be documented as such: **move the same monitor to a different port and its windows follow it; plug a different monitor into the same port and they do not.**
+
+### The v1 verdict: not yet, and the gap is five items
+
+The user asked for an assessment rather than a version bump. **Nothing was tagged, no `VERSION` was changed, no release was prepared.**
+
+| # | Blocker | Why it blocks a 1.0.0 |
+|---|---|---|
+| 1 | **L-1 + L-2c** | Layer surfaces are drawn on the wrong output. The project's own flagship companion shell is unusable on a second screen, and this affects every layer-shell client. |
+| 2 | **Phase 92 M-1/M-2 never run** | Compiled clean at `-Wall -Werror`; never linked, never executed. A 1.0.0 cannot contain an unexercised change to the move path. |
+| 3 | **M-7d** | `make install-user` writes a stranded-prefix wallpaper path, so a fresh seed produces a config whose background cannot load. One line. |
+| 4 | **Finding A** | Now reachable rather than theoretical: this machine has had two outputs since 2026-08-25. |
+| 5 | **C-1 / C-2** | A missing dependency fails incomprehensibly hundreds of lines into a compile. A support burden on every first-time builder. |
+
+**Explicitly not blockers:** the 255 dead `assert()`s (open by the user's standing instruction); OBS ScreenCast black (downstream of the compositor, Phase 81); M-9 global modifier state (real defect, multi-device seats, no observed symptom); and every multi-screen *feature* -- output management, modes/scale/rotation, relative placement, output actions, per-monitor memory -- which is 1.x work.
+
+**One documentation exception is v1-shaped.** The reference is already complete, so this is a navigability gap rather than a coverage gap, but 1.0.0 is the first release strangers will read: there is **no default-keymap reference anywhere** (the shipped config carries ~115 bindings; `hikari(1)` BINDINGS documents syntax only) and **no multiple-displays documentation at all**. Both ship in Phase 97.
+
+### Documentation coverage, measured rather than impressionistic
+
+Every `strcmp(key, ...)` in the configuration parser and every `strcmp(str, ...)` in `src/action.c` was extracted and checked against `share/man/man1/hikari.md` and `etc/hikari/hikari.conf`:
+
+* **70 configuration keys, 70 documented.** No gaps.
+* **66 action names, 65 documented.** The only absentee is `debug-damage`, which is `#ifndef NDEBUG` and unreachable in any shipping build. The apparent gaps in a naive grep -- `view-decrease-size-left`, `group-cycle-view-next` and twenty-five others -- are documented in bracket-family form (`view-decrease-size-[up|down|left|right]`, `hikari.md:442`), which is correct and deliberate.
+* **11 documented actions are bound nowhere in the shipped configuration**: the four `group-cycle-view-*`, `layout-cycle-view-first`/`-last`, `mode-enter-input-grab`, `mode-enter-mark-switch-select`, `workspace-show-group`, `workspace-show-invisible`, `debug-damage`. Discoverable only by reading `hikari(1)` cover to cover.
+
+**`OUTPUTS` in `hikari(1)` (`:1551-1611`) is ~60 lines covering `background` and absolute `position` and nothing else.** It does not state that a workspace is per-output, what an unplug does to the user's windows, how to reach the other screen, or -- the omission that will generate bug reports -- that `wlr-randr` and `kanshi` cannot work because the compositor advertises no output-management protocol.
+
+### The dependency failure mode, measured
+
+`Makefile` resolves nine dependencies with bmake's `!=` assignment. **A missing one is a warning, not an error.** Reproduced with a throwaway makefile rather than reasoned about:
+
+```
+bmake: t.mk:1: warning: Command "pkg-config --cflags nonexistent-lib-xyz" exited with status 1
+X=[]
+```
+
+The variable is left **empty** and the build proceeds, failing far later with `#include <wlr/...>: file not found`. The same is true of `WAYLAND_PROTOCOLS != ${PKG_CONFIG} --variable pkgdatadir wayland-protocols`, where an empty result makes the `xdg-shell-protocol.h` rule scan the nonexistent path `/stable/xdg-shell/xdg-shell.xml`. **`wayland-scanner`, `pandoc`, `install` and `sed` are used by rules and probed by nothing**; `pandoc` is required by `make install` from a git checkout, which a first-time builder discovers only after a full compile.
+
+### Output configuration, for the record -- what exists and what does not
+
+Present and working: one workspace per output (`src/workspace.c:83-94`); `wlr_output_layout` + `wlr_scene_output_layout` (`src/server.c:1579`, `src/output.c:608`); hotplug add and remove with sheet-index-preserving evacuation; per-output wallpaper, bar, lock backdrop, lock clock and layer lists; cross-output focus via `workspace-cycle-next`/`-prev` (`src/server.c:2139-2161`); cross-output window movement via the `wlr_output_layout_output_at()` probe in `move_view()` (`src/server.c:2453-2491`), by pointer or touch drag (`src/move_mode.c:77`), and by TAB in sheet-assign mode (`src/sheet_assign_mode.c:57`).
+
+Absent: **no `wlr-output-management-v1`** -- only read-only `xdg-output` (`src/server.c:1587`), so `wlr-randr`, `kanshi` and `wdisplays` see nothing; the header **is** present in the installed wlroots 0.20.2 alongside `wlr_output_power_management_v1.h` and `wlr_output_swapchain_manager.h`. **No mode, refresh, scale, transform, enable or adaptive-sync anywhere** -- the only modeset in the tree is `wlr_output_preferred_mode()` at init (`src/output.c:512`). **`position` accepts absolute x/y only** -- `src/configuration.c:1789` calls `hikari_position_config_absolute_parse()` directly, so the relative keywords that *views* accept fail to parse for outputs even though the enum and parser exist; there is no `left-of = "eDP-1"` form. **No output-targeted actions** -- `hikari_output_next()`/`hikari_output_prev()` are defined (`src/output.c:751-770`), declared (`include/hikari/output.h:84-87`) and have **no caller anywhere in the tree**. **No memory** -- `hikari_workspace_merge()` is one-directional and a view records no origin output, so an undock/redock cycle collapses every external-screen window onto the panel permanently.
+
+### What was deliberately NOT concluded
+
+**Nothing was built, installed, tagged or run.** No `sudo`, no `make`, no `git`. The compositor was not started, stopped or attached to. `L-V1` remains unrun and its result can still refute L-1; the plan says so and does not pre-commit to the diagnosis. The `sofi`-side defects recorded in that tree are untouched and remain unverifiable until L-1 lands.
+
+## [2026-08-29 08:16] Phase 94: **ROOT CAUSE — every layer surface is drawn on the output at layout origin. `arrange_layers()` positions in output-local coordinates inside a scene tree that is layout-global.**
+
+*(Timestamp source: `date '+%Y-%m-%d %H:%M'`. Raised in the `sofi` repository, 2026-08-29: "the sofi shell only appearing on the builtin main screen — however the menus/layers should appear on the active screen (the screen with the mouse) ... two screens attached and no matter what everything only appears on the main not extended screen." The investigation began in `sofi` and ended here. **No source in either tree has been modified. Nothing is implemented. This entry is the analysis and the ambiguity it tables.**)*
+
+### The measurement that located the defect, and why it is decisive
+
+Taken live against the running compositor (PID 3943), reads only:
+
+```
+$ printf 'state\n' | nc -U $XDG_RUNTIME_DIR/hikari.sock
+sheet 4
+output DP-3          <-- hikari's own active workspace is on the EXTERNAL screen
+```
+
+`sofi` was rendering on `eDP-1` at that moment. **hikari already believed the active output was `DP-3` and drew the surface on `eDP-1` anyway.** That single pair of facts moves the fault past output *selection* — `hikari_layer_init()` resolves the output correctly — and into output *positioning*. It also clears the client: `sofi` passes `wl_output = NULL` to `zwlr_layer_shell_v1_get_layer_surface()`, which is the correct thing for a layer-shell client to do, and which `hikari_layer_init()` (`src/layer_shell.c:225-227`) resolves to `hikari_server.workspace->output` — the answer the user wants.
+
+### The defect
+
+Three facts about this tree, each independently verifiable:
+
+1. **Scene space is layout space.** `src/server.c:1005` calls `wlr_scene_attach_output_layout(server->scene, server->output_layout)`, so a scene node's coordinates are output-layout coordinates.
+2. **The four layer trees are server-global.** `hikari_server.layers.{background,bottom,top,overlay}` (`include/hikari/server.h:97-101`) are created once on the scene root. They are **not** per-output trees, so nothing between a layer node and the root supplies an output offset.
+3. **`arrange_layers()` hands wlroots an output-local box** (`src/layer_shell.c:127-131`):
+
+   ```c
+   struct wlr_box full_area = { .x = 0,          /* <-- output-LOCAL */
+     .y = 0,
+     .width  = output->geometry.width,
+     .height = output->geometry.height };
+   ```
+
+`wlr_scene_layer_surface_v1_configure()` computes the surface's box from `full_area` plus the client's anchors and margins and positions the scene node there. With `full_area` anchored at zero, **every layer surface on every output is positioned somewhere inside layout rectangle `(0,0)-(w,h)` — the output that sits at layout origin.** `eDP-1` is that output: `src/output.c:576-580` places a configured output at its absolute `position` and otherwise auto-places at `extents.x + extents.width, 0`, appending left to right, so the first output added holds x=0 and the internal panel is enumerated first.
+
+**This is not a subtle reading. The file already contradicts itself twenty lines further down** (`src/layer_shell.c:172-180`):
+
+```c
+/* "wlr_scene_node_coords() returns layout-global coordinates;
+    subtract the output's layout origin to get output-local." */
+wlr_scene_node_coords(&layer->scene_layer_surface->tree->node, &nx, &ny);
+layer->geometry.x = nx - output->geometry.x;
+```
+
+That subtraction is written for the **fixed** behaviour. Today `nx` is never layout-global, so on `DP-3` it computes `0 - 1920 = -1920` and `layer->geometry` — the box `hikari_output_add_damage()` and `popup_unconstrain()` both consume — is wrong by a whole screen. The read-back and the configure call have disagreed since they were written; only `full_area`'s origin was left behind.
+
+### Why this is a hikari defect and not a wlroots-port oversight of unknown class
+
+**The rule is already stated in this tree, in this tree's own words, and obeyed everywhere else.** `src/bar.c:1552-1555`:
+
+> *"Position in layout-absolute coordinates — the bar is parented to the scene root, not to an output-local tree, so the output origin must be added explicitly."*
+
+Views obey it (`src/view.c:287-289`, `geometry->x + view->output->geometry.x`). The lock clock, the lock indicator and the indicator bar obey it — `src/indicator_bar.c` was corrected for exactly this in an earlier phase and is recorded in `TODOS.md` as *"untested on an output not at layout origin (0,0)"*. **`arrange_layers()` is the one member of that family that was never corrected**, and it is the fourth instance of the wlroots-0.20 scene-port class already on record twice in `DECISIONS_LOG` (scene restacking, :1340; indicator show/hide, :2290) and a third time in Phase 92 (`move_view()`).
+
+**Consequence beyond the reported symptom:** this affects every layer-shell client, not `sofi` alone — background setters, bars, notification daemons, on-screen keyboards. **The multi-output layer-shell path has never worked in this tree**, and could not have been noticed before, because until 2026-08-25 this machine had exactly one output (recorded at `TODOS.md` M-8d, live-verified: `eDP-1 {0,0 1920x1200}` and nothing else).
+
+### The live topology, now readable — and a correction to the record
+
+`TODOS.md` carries a stale duplicate **M-8d** stating *"The live topology could not be read from here — `wlr-randr` is not installed and there is no DRM sysfs on this platform."* It can be read now, from a Wayland client:
+
+```
+$ sofi -h
+Monitor layout:
+  name: DP-3     size: 1920,1080   (350mm x 190mm, dpi 139x144)
+  name: eDP-1    size: 1920,1200   (300mm x 190mm, dpi 163x160)
+```
+
+**Two screens are attached where there was one.** This changes nothing about M-8: the checked M-8d entry refuted the output-topology hypothesis against a genuinely single-output machine, and **M-8h closed M-8 for good** — the `HS6209` keyboard never emits keycode 105 under `LOGO+ALT`. The stale duplicate is answered rather than reopened.
+
+**One thing that dump does *not* report, and it matters here:** both outputs print `position: 0,0`. That is not the layout — it is `wl_output.geometry`, which wlroots sends with a hardcoded origin; the logical position lives in `zxdg_output_v1`, which hikari does create (`src/server.c:1588`) and which that client does not bind. The layout positions above (`eDP-1` at x=0, `DP-3` at x=1920) are **inferred from `src/output.c`'s auto-placement rule and consistent with the symptom, not measured.** See L-V1 for the one-restart check that measures it.
+
+### The consequence the fix must handle, which is the whole of its difficulty
+
+`usable_area` is initialised **from** `full_area`, shrunk by `hikari_bar_reserve()` and by each exclusive-zone surface, and stored into `output->usable_area`. Moving `full_area`'s origin moves `usable_area`'s origin with it — and `output->usable_area` is consumed as **output-local**:
+
+* `src/geometry.c:64-170` computes every view position directly from `usable_area->x/y` — `hikari_geometry_constrain_relative()`, the nine named positions, `center_x`, `right_x`, `bottom_y`.
+* View geometry is output-local by construction: `src/view.c:287-289` adds `output->geometry.x/y` when pushing it to the scene.
+* Phase 92's live read of the running compositor recorded `eDP-1 usable_area {0,34 1920x1166}` — origin `(0,34)`, output-local, the 34 being the bar.
+
+So `full_area` and `usable_area` cannot simply both become layout-global and be stored as they are: that would offset every view on every non-origin output by the output's layout origin. **wlroots requires the two boxes it is given to be in the same space** — it shrinks one by exclusive zones and positions relative to the other — so the fix is to pass a layout-global pair and translate back to output-local before the store, or to keep two boxes deliberately. `hikari_bar_reserve()` (`src/bar.c:1200-1211`) touches only `y`/`height` and is origin-agnostic either way.
+
+### Design ambiguity tabled for the USER — no default assumed, nothing built
+
+**A-1. Which output should a layer surface with no `wl_output` land on?** `hikari_layer_init()` currently answers `hikari_server.workspace->output` — the **focused** workspace. Focus does follow the pointer in `src/normal_mode.c:216-253` (`cursor_move()` re-focuses when the workspace under the cursor differs, on a view or on bare desktop), so in normal use "focused output" and "the screen with the mouse" coincide, and the live `state` reading is evidence of it. They diverge in two cases: hovering a **non-keyboard-interactive layer surface** on another output (`src/layer_shell.c:904-935` returns without touching the workspace), and any path that changes focus without pointer motion.
+
+| | Route | Cost |
+|---|---|---|
+| a | **Fix `arrange_layers()` only.** Placement keeps following focus | Smallest correct change. Restores the documented meaning of every other layer client too. Recommended — the divergence above is an edge case and is a separate question from a surface being drawn on the wrong screen |
+| b | Fix `arrange_layers()` **and** resolve NULL to `wlr_output_layout_output_at(cursor->x, cursor->y)` | Makes "screen with the mouse" literal and independent of focus. Changes placement for every layer client, including ones that reasonably expect the focused output |
+| c | Fix `arrange_layers()` and close the layer-hover focus gap in `cursor_move()` instead | Fixes the divergence at its cause rather than special-casing layer shell, but touches focus behaviour, which is load-bearing |
+
+**(a) is recommended and (b)/(c) are strictly additive to it** — none of the three is blocked by the others, and the placement bug must be fixed before any of them can be observed.
+
+### What was deliberately NOT concluded
+
+**Nothing was run, patched or attached to.** The compositor was read through its own IPC socket and through a Wayland client; the source was read; no build was attempted and no `git` command was run in either tree. The `sofi` side of the investigation found three genuine client defects (unimplemented `-monitor` position specifiers on Wayland, `@media` theme conditionals evaluated against an uninitialised `workarea`, and no `zxdg_output_manager_v1` binding) — **all three are recorded in the `sofi` tree and all three are unverifiable until this defect is fixed**, because an explicit `-monitor DP-3` today is still drawn on `eDP-1`.
+
 ## [2026-08-27 07:52] Phase 93: **Documentation and branding cohesion — the ecosystem was documented in one direction only**
 
 *(Timestamp source: `date '+%Y-%m-%d %H:%M'`. User directive: make branding, user-facing documentation and everything around it cohesive, comprehensive and correct. Scope is documentation and the build rules that generate or ship it; no compositor source was touched.)*

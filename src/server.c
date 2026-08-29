@@ -80,6 +80,9 @@
 #include <hikari/indicator_frame.h>
 #include <hikari/ipc.h>
 #include <hikari/keyboard.h>
+#ifdef HAVE_LAYERSHELL
+#include <hikari/layer_shell.h>
+#endif
 #include <hikari/layout.h>
 #include <hikari/mark.h>
 #include <hikari/memory.h>
@@ -1248,24 +1251,39 @@ output_layout_change_handler(struct wl_listener *listener, void *data)
   struct hikari_output *output;
   wl_list_for_each (output, &server->outputs, server_outputs) {
     struct wlr_output *wlr_output = output->wlr_output;
-    struct wlr_box output_box;
-    wlr_output_layout_get_box(
-        hikari_server.output_layout, wlr_output, &output_box);
 
-    output->geometry.x = output_box.x;
-    output->geometry.y = output_box.y;
-    output->geometry.width = output_box.width;
-    output->geometry.height = output_box.height;
+    int old_width = output->geometry.width;
+    int old_height = output->geometry.height;
 
-    struct hikari_output_config *output_config =
-        hikari_configuration_resolve_output_config(
-            hikari_configuration, wlr_output->name);
+    /* Action purpose: One entry point for geometry, so a layout move, a mode
+    change and a hotplug all re-derive the usable area and the bar reservation
+    the same way. Recomputing only output->geometry here, as this handler used
+    to, left the window layout box and the bar's strip stale from output init. */
+    hikari_output_update_geometry(output);
 
-    if (output_config != NULL) {
-      hikari_output_load_background(output,
-          output_config->background.value,
-          output_config->background_fit.value);
+    /* Action purpose: The wallpaper is decoded from disk and re-rendered at
+    full output size, so it is redone only when the size it was rendered for
+    changed. A move leaves the image valid and
+    hikari_output_update_geometry() has already repositioned its scene node. */
+    if (output->geometry.width != old_width ||
+        output->geometry.height != old_height) {
+      struct hikari_output_config *output_config =
+          hikari_configuration_resolve_output_config(
+              hikari_configuration, wlr_output->name);
+
+      if (output_config != NULL) {
+        hikari_output_load_background(output,
+            output_config->background.value,
+            output_config->background_fit.value);
+      }
     }
+
+#ifdef HAVE_LAYERSHELL
+    /* Action purpose: After the usable area has been reseeded, never before --
+    this pass shrinks that baseline by each surface's exclusive zone. Without
+    it, panels and menus keep the placement they were given at output init. */
+    hikari_layer_shell_arrange(output);
+#endif
 
     struct hikari_view *view;
     wl_list_for_each (view, &output->views, output_views) {
@@ -1280,6 +1298,11 @@ output_layout_change_handler(struct wl_listener *listener, void *data)
             geometry->y + output->geometry.y);
       }
     }
+
+    /* Action purpose: The usable area has moved or changed size, so a tiled
+    sheet on this output is arranged against a box that no longer exists. The
+    request is idempotent and returns immediately when tiling is off. */
+    hikari_reflow_schedule(output->workspace->sheet);
 
 #ifdef HAVE_XWAYLAND
     hikari_output_rearrange_xwayland_views(output);
