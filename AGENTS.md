@@ -31,11 +31,11 @@ Maintain the following files to manage state and continuity:
 
 * DO NOT retroactively add commenting unless explicitly requested by the user. 
 
-Use the following exact prefixes directly above the relevant code blocks, using the native comment syntax of the language (e.g., `//`, `#`, or `##`), to ensure immediate legibility. For shell scripts, place the comment directly beneath the shebang:
+When documenting inside a script use the following exact prefixes directly above the relevant code blocks, using the native comment syntax of the language (e.g., `//`, `#`, or `##`), to ensure immediate legibility. For shell scripts, place the comment directly beneath the shebang:
 
-* `Script function and purpose:` [What this script does] - Top of every script/source.
+* `Script function and purpose:` [What this script does] - Top of EVERY script/source.
 * `Function purpose:` [Why this function exists and how it is used] - Before standalone functions.
-* `Action purpose:` [Why this logic is being used and an explanation of how it is supposed to work] - Before highly specific actions/commands.
+* `Action purpose:` [Why this logic is being used and an explanation of how it is supposed to work] - Before highly specific/complex actions/commands.
 
 ## OPERATIONAL WORKFLOW
 
@@ -76,7 +76,7 @@ Read `.devdocs/` → Update `BRIEFING.md` → Ask Permission → Execute Step �
 
 ## COMMAND LAWS
 
-* When inside an IDE you must ALWAYS use the IDE Native Tooling over Shell or Terminal Commands. 
+* When inside an IDE you must ALWAYS use the IDE Native Tooling over Shell or Terminal Commands unless specifically required or permitted by the user. 
 
 * Only use shell or terminal commands for specific tasks previously permitted from a plan request or othewise directly permitted by the user.
 
