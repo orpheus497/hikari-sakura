@@ -294,8 +294,8 @@ hikari_output_enable(struct hikari_output *output)
 }
 
 // [COMMENT] Function purpose: Update internal output geometry tracking from layout box.
-static void
-output_geometry(struct hikari_output *output)
+void
+hikari_output_update_geometry(struct hikari_output *output)
 {
   struct wlr_box output_box;
   wlr_output_layout_get_box(
@@ -459,6 +459,13 @@ hikari_output_init(struct hikari_output *output, struct wlr_output *wlr_output)
   output->lock_clock_node = NULL;
   output->background = NULL;
 
+  /* Action purpose: hikari_malloc() does not zero, and these two are otherwise
+  written only by hikari_output_update_geometry(), which runs for real outputs
+  only. The noop output becomes current when the last real one goes away, after
+  which every geometry path would read an indeterminate box. */
+  output->geometry = (struct wlr_box){ 0 };
+  output->usable_area = (struct wlr_box){ 0 };
+
   /* [COMMENT] Action purpose: Initialise the bar before output_geometry() runs,
   since that path calls hikari_bar_reserve()/hikari_bar_refresh() on it. */
   hikari_bar_init(&output->bar, output);
@@ -607,7 +614,7 @@ hikari_output_init(struct hikari_output *output, struct wlr_output *wlr_output)
 
     wlr_scene_output_layout_add_output(hikari_server.scene_layout, l_output, scene_output);
 
-    output_geometry(output);
+    hikari_output_update_geometry(output);
 
     // [COMMENT] Action purpose: Load xcursor images at this output's actual scale factor.
     // wlr_output->scale is set by the backend (e.g., from EDID or sysctl on FreeBSD)

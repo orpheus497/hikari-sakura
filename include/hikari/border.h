@@ -40,4 +40,16 @@ void
 hikari_border_refresh_geometry(
     struct hikari_border *border, struct wlr_box *geometry);
 
+/* [COMMENT] Function purpose: Crop the four border rects to `clip`, expressed in
+the same content-local space wlr_scene_subsurface_tree_set_clip() uses -- the
+view's content origin is (0, 0), so the rects themselves sit at negative
+coordinates. A NULL clip restores them to their full extent.
+
+This exists because the surface clip does NOT cover them. wlr_scene's clip
+applies to subsurface trees, and these are wlr_scene_rect siblings in the same
+tree, so clipping the window without clipping its border would leave four
+coloured lines drawn around nothing on the neighbouring screen. */
+void
+hikari_border_clip(struct hikari_border *border, struct wlr_box *clip);
+
 #endif

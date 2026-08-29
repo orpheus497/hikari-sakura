@@ -25,6 +25,25 @@ the hikari-topbar helper already use -- picking a different number would mean
 the desktop and the bar could not share one theme. */
 static const int HIKARI_NR_OF_PALETTE_COLORS = 16;
 
+/* [COMMENT] Class purpose: When a window is allowed to be painted outside the
+screen it belongs to.
+
+DRAG is the default and is the only setting that distinguishes the two cases,
+which is why it is not simply a boolean. While the pointer holds a window the
+overhang is feedback -- it is how the user sees that they are about to cross to
+the other screen -- but once the window is let go the same overhang is just a
+window bleeding onto a screen showing a different sheet. */
+enum hikari_spill {
+  // Never clip. A window may overhang its screen freely, at rest or in motion.
+  HIKARI_SPILL_ALWAYS,
+
+  // Overhang while the window is being dragged or resized; clipped at rest.
+  HIKARI_SPILL_DRAG,
+
+  // Always clip a window to its own screen, including mid-drag.
+  HIKARI_SPILL_NEVER
+};
+
 struct hikari_configuration {
   /* [COMMENT] Class purpose: The positional colour palette -- `color0` through
   `color15` of the `ui { palette { ... } }` block.
@@ -74,6 +93,16 @@ struct hikari_configuration {
   it governs behaviour rather than appearance, and singular so it cannot be
   confused with `layouts`, which owns the layout registers themselves. */
   struct hikari_layout_policy layout_policy;
+
+  /* [COMMENT] Class purpose: Whether a window may be painted outside the screen
+  it belongs to -- the `ui { spill }` key.
+
+  Screens are independent in hikari: each output carries its own workspace and
+  each workspace displays its own sheet. So a window overhanging its screen's
+  edge is not merely off-centre, it is painted over a screen showing a DIFFERENT
+  sheet, and hikari_geometry_constrain_relative() permits that overhang down to
+  the last few pixels of the window's own screen. */
+  enum hikari_spill spill;
 
   int border;
   int gap;

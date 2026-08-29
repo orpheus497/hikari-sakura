@@ -85,4 +85,7 @@ hikari_layer_init(struct hikari_layer *layer_surface,
 void
 hikari_layer_fini(struct hikari_layer *layer_surface);
 
+void
+hikari_layer_shell_arrange(struct hikari_output *output);
+
 #endif

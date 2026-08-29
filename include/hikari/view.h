@@ -71,6 +71,20 @@ struct hikari_view {
   rather than merely list it. Same lifetime as the handle above: created on map,
   destroyed on unmap. See src/foreign_toplevel.c. */
   struct hikari_foreign_toplevel foreign_toplevel_management;
+
+  /* [COMMENT] Class purpose: The spill crop currently applied to this view's
+  surface tree, and whether one is applied at all.
+
+  Cached rather than recomputed-and-reapplied, because the crop is refreshed
+  from refresh_border_geometry(), which runs on EVERY pointer motion event of a
+  drag. wlr_scene_subsurface_tree_set_clip() walks the whole subsurface tree, so
+  reapplying an unchanged crop at pointer rate costs a tree walk per event on
+  exactly the windows that can least afford it -- a browser has many
+  subsurfaces, and a window larger than its output damages a correspondingly
+  larger region each time. Valid only while `spill_clipped` is true. */
+  struct wlr_box spill_clip;
+  bool spill_clipped;
+
   struct hikari_border border;
   struct hikari_indicator_frame indicator_frame;
   struct hikari_tile *tile;
@@ -333,6 +347,16 @@ hikari_view_damage_surface(
 void
 hikari_view_refresh_geometry(
     struct hikari_view *view, struct wlr_box *geometry);
+
+/* [COMMENT] Function purpose: Re-evaluate whether this view may overhang its
+screen, without changing its geometry.
+
+Needed because the answer depends on the server's MODE as well as the view's
+position: under the default `ui { spill = drag }` a window may overhang while it
+is being dragged and is cropped once it is let go. Ending a drag changes no
+geometry, so nothing on the geometry path would notice. */
+void
+hikari_view_refresh_spill_clip(struct hikari_view *view);
 
 void
 hikari_view_activate(struct hikari_view *view, bool active);

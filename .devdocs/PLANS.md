@@ -1,8 +1,225 @@
 # Forward Strategy & Plans
 
-*Last Updated:* 2026-08-25 08:09
+*Last Updated:* 2026-08-29 11:35
 
 ## Implementations to be Fully Implemented
+
+-22. **PHASE 96-103 -- THE PROGRAMME: cross-screen motion, tiling manipulation, screen configuration, then documentation and release. Planned 2026-08-29 11:19; re-verified and fully ruled 2026-08-29 11:35. TWELVE RULINGS TAKEN, NO OPEN QUESTIONS, NOTHING IMPLEMENTED, NOTHING BUILT.**
+
+   Full analysis in `DECISIONS_LOG.md` at 11:19; ordered task list in `TODOS.md` Phase 96. Supersedes item -20's sequencing from P-3 onward. **Item -21 (P-1) is delivered, built, installed and running.**
+
+   **Rulings taken from the user 2026-08-29 11:19:** Q1 **snap across screens, glide within one**; Q2 **keep the grab point**; Q3 **follow `layout { on-insert }`**; Q4 **follow `reflow-on-close`**; Q5 **spill while dragging, clip otherwise, plus a configuration key to force always-spill**; Q6 **floating stays floating wherever dropped**; Q7 **screen alignment configurable, with edge-alignment tuneables and an auto-centre form**; Q8 **stop announcing the tearing protocol**; Q9 **tiling manipulation before screen configuration, both required**; Q10 **tag after documentation, port against the tag**. Plus **R-2: the `install-user` wallpaper path is permanently deferred to v1 tagging time** and **R-3: M-V2 provisionally passes, re-run after Phase 96**.
+
+   **Rulings taken from the user 2026-08-29 11:35:** **Q11 clip tiled windows only, never a floating one, always-spill key overrides** -- which unblocks T-6 and leaves Phase 96 with **no open questions** -- and **R-4 change the shipped `layout { auto }` default to `true`** so the template matches the configuration that is actually tested.
+
+   ### Order, by necessity
+
+   | Phase | What | Why here |
+   |---|---|---|
+   | **96** | Cross-screen window motion | The reported defect. Nothing else is worth doing while moving a window between screens looks broken |
+   | **97** | Tiling manipulation (M-3) + send-to-screen (P-5) | Q9. With `auto = true` live, a tiled sheet **cannot be rearranged at all** -- no directional move, no split ratio |
+   | **98** | Motion polish and loose ends | M-4b/c/d/e, M-9, T-8, T-9. Cheap, and all of it sits in code Phase 96 and 97 will have just touched |
+   | **99** | Screen configuration (P-3, P-4 + Q7) | Depends on P-1's re-deriving handler, delivered |
+   | **100** | Screen management and memory (P-7, P-6, O-8) | Depends on 99 |
+   | **101** | Build preflight (P-8 / C-1..C-3, C-6) | Independent; before documentation so the documented install is the real one |
+   | **102** | Documentation (D-2/P-9, D-3..D-7) | Q10 -- documents what is then true, not what was planned |
+   | **103** | Release (P-2, D-8, version, tag, FreeBSD port) | Q10 -- last |
+
+   ### Phase 96 -- cross-screen window motion
+
+   | # | What | Ruling | State |
+   |---|---|---|---|
+   | T-1 | Cancel and re-base the animation on every screen change (`hikari_view_migrate`, `hikari_view_evacuate`); a cross-screen placement is instant | Q1 | Not started |
+   | T-2 | Verify the per-output animation driver is correct **by construction** once T-1 lands; guard, do not restructure | Q1 | Not started |
+   | T-4 | Carry the grab anchor through the crossing branch of `move_mode.c` | Q2 | Not started |
+   | T-5 | State-aware migrate: floating stays floating; tiled folds into the destination layout per `on-insert`; the source sheet closes its hole per `reflow-on-close` | R-1, Q3, Q4, Q6 | Not started |
+   | T-6 | Clip a resting **tiled** window to its own screen, never a floating one, lift the clip while dragging, add the always-spill configuration key | Q5, **Q11** | Not started — **unblocked 11:35** |
+   | T-7a | Refuse to place a window's origin in the dead band between mismatched screen heights | Q7 (guard only) | Not started |
+   | R-4 | Change the shipped `layout { auto }` default to `true`, and move the config comment block and `hikari(1)` prose with it | R-4 | Not started — independent, no compositor source |
+
+   **T-1 is the phase.** It is the whip across the external monitor and it is the only item that alone accounts for the reported symptom. T-4 is independent, small, and is Phase 91's own fix applied to the branch it missed.
+
+   **Q11 IS RULED (2026-08-29 11:35) and Phase 96 now has no open questions.** The collision between Q5 (clip at rest) and Q6 (a floating window rests where it was dropped, straddling permitted) resolves as the recommended reading: **clip tiled windows, never clip floating ones, and let T-6c's always-spill key override the whole behaviour.** T-6 is unblocked and lands in this cycle. The remaining work in T-6 is `T-6d`'s design note, unchanged: `wlr_scene_subsurface_tree_set_clip()` clips a surface tree, while a view's border and indicator-frame rects are separate `wlr_scene_rect` nodes in the same tree.
+
+   **R-4 is new (11:35) and was found by cross-referencing the trackers against the tree.** `etc/hikari/hikari.conf:266` ships `auto = false` while the live file has `auto = true`, and **the entire Phase 96 analysis rests on the live value** -- a fresh checkout does not reach T-1's severe path, so the reported defect would appear not to reproduce. **Ruled: change the shipped default to `true`.** It touches no compositor source and is independent of every T-item, but **its documentation half is not deferrable to Phase 102** -- the config comment block at `:250-263` and `hikari(1)`'s LAYOUT text both assert the old default in prose and become false the moment the value flips.
+
+   ### Phase 97 -- tiling manipulation
+
+   **M-3**, the largest gap in daily use: `src/action.c` offers only list-order `next`/`prev`/`main` for a tiled sheet, and **no action anywhere adjusts a split ratio**. Add directional movement within a layout and split-ratio actions. Plus **P-5** (`view-move-to-output-next`/`-prev`) on top of `hikari_server_migrate_focus_view()`, which Phase 96 will have just made state-aware -- the same action family, and it reuses T-5 rather than duplicating it.
+
+   ### Phase 98 -- motion polish and loose ends
+
+   M-4b/c/d (remaining motion decisions) · **M-4e** (indicators teleport while the window travels -- newly visible and adjacent to Phase 96's work) · **M-9** (global modifier state; real defect, no observed symptom) · **T-8** (stop advertising `wp_tearing_control_v1`: delete `src/server.c:44` and `:1696`, per Q8) · **T-9** (`track_damage` is written, toggled by a bound action, and read nowhere -- either wire it or delete the action).
+
+   ### Phase 99 -- screen configuration
+
+   **P-3** -- `mode`, `refresh`, `scale`, `transform`, `enabled` through **one** `apply_output_config()` shared by startup and reload; today `src/output.c:544-581` and `src/configuration.c:2497-2521` are divergent copies and only the first sets a mode at all. **P-4 + Q7** -- relative positioning between screens with a topological sort, **plus the alignment tuneables Q7 rules**: an edge-alignment key that holds regardless of screen size, and an auto-adjust/centre form so mismatched heights line up without hand-computed offsets. Once `refresh` exists, pinning both panels to one rate becomes possible and would remove the 38-second beat recorded as T-3 -- worth knowing, not a reason to do anything now.
+
+   ### Phase 100 -- screen management and memory
+
+   **P-7** -- `wlr-output-management-v1` behind `WITH_OUTPUT_MANAGEMENT`, applied atomically through `wlr_output_swapchain_manager`; this is what makes `wlr-randr`, `kanshi` and `wdisplays` work. All three headers are present in the installed wlroots 0.20.2. **P-6** -- per-monitor memory on the ruled identity chain `make|model|serial` -> `make|model|connector` -> `connector`. **O-8** -- lock backdrop and clock for a screen hot-plugged while locked.
+
+   ### Phase 101 -- build preflight
+
+   **P-8 / C-1, C-2, C-3, C-6.** `make check-deps` probing every pkg-config module and every required tool, failing fast and naming the exact `pkg install` line, wired as a prerequisite of `all` and `install`. Installs nothing. Plus declaring the runtime dependencies somewhere machine-readable.
+
+   ### Phase 102 -- documentation
+
+   **D-2 / P-9** (the two statements `OUTPUTS` does not make, now rewritable as what is actually true after 99 and 100) · **D-3** (11 documented actions bound nowhere) · **D-4** (task-oriented cookbook) · **D-5** (troubleshooting) · **D-6** (README never states the Makefile is BSD make) · **D-7** (`XDG_CURRENT_DESKTOP` rationale).
+
+   ### Phase 103 -- release
+
+   **P-2 / X-4a / M-7d** -- the `install-user` wallpaper path, **deferred to here by R-2 and due here**. **D-8** CHANGELOG and release notes. Version bump and tag. **P-10 / C-4** the FreeBSD port against the tag, with package origins confirmed on FreeBSD. Q10 is recorded as *preferably* (a) and explicitly to be revisited at the time.
+
+   ### Sequencing note for whoever picks this up
+
+   **Phase 96 is not divisible below T-1 + T-4 + T-5.** T-1 removes the whip, T-4 removes the teleport at the crossing, and T-5 is what makes the arrival correct under `auto = true`; fixing any two of the three leaves a visibly wrong cross-screen move. **T-6 is now fully ruled and joins the same cycle** (it was previously listed as splittable only because Q11 was open); T-7a is a one-line guard that can travel with any of them; **R-4 is documentation and configuration only and can travel with any of them or stand alone.**
+
+   **Re-verified against the tree 2026-08-29 11:35.** Every file-and-line citation in this item was re-read rather than trusted, and all of them resolve exactly; **all six code items are unstarted.** The verification table is in `DECISIONS_LOG.md` at 11:35. This follows the rule adopted at 08:57, when an uncited analysis was found to contain four false claims: a recorded finding is not a verified one.
+
+   **Q1 is why this phase is small.** Snap-on-crossing means no window is ever in flight across the seam, so the per-output animation driver never needs unifying and T-2 is a verification rather than a change. Had Q1 gone the other way, Phase 96 would have been a rewrite of the animation driver that still could not have removed the 60.026/60.000 Hz beat.
+
+   **What no fix can remove, recorded so it is never re-investigated:** a pointer drag of a *spilling* window will always show a boundary step bounded by one frame of travel, because the two panels flip independently. Under the Q5 default it is visible only while the button is held.
+
+-21. **PHASE 95 P-1 -- DELIVERED 2026-08-29 10:21. Compiled and linked; NOT run. Everything else in item -20 is unchanged and still stands.**
+
+   Decisions and the full verified account: `DECISIONS_LOG.md` at 10:21. Task state: `TODOS.md` Phase 95 SS-P-1.
+
+   **Rulings taken before execution:** **L-1b = option (A)**; **N-2 folded into P-1**; **M-8j closed by the user** -- the specific keyboard, now working, which closes M-8 entirely.
+
+   ### Delivered
+
+   | # | What | Where |
+   |---|---|---|
+   | L-1a/b | `full_area` at the output's layout origin; `usable_area` translated back to output-local before the store | `src/layer_shell.c` |
+   | L-1c/e | Verified correct once L-1a landed; no edit | -- |
+   | L-1d | Sweep complete -- **no fifth omission** | -- |
+   | L-2c | `focus()` resolves the layer's own workspace and assigns `hikari_server.workspace` | `src/layer_shell.c` |
+   | X-1 | `hikari_output_update_geometry()` as the single entry point; the layout-change handler re-arranges layers and schedules a reflow | `src/output.c`, `src/server.c` |
+   | X-2 | Noop output geometry initialised | `src/output.c` |
+   | X-3 | Wallpaper re-decoded only on a dimension change | `src/server.c` |
+   | N-2 | `cursor_move()` compares against `focus_layer` too | `src/normal_mode.c` |
+   | Finding 5 | NULL-workspace guard in `hikari_layer_init()` | `src/layer_shell.c` |
+
+   ### What this changes about the rest of the plan
+
+   **P-3, P-6 and P-7 are now buildable on a handler that re-derives.** That was the reason P-1 was declared indivisible: all three mutate output geometry at runtime, and until now that path recomputed nothing. An output-management client can now move, rescale and hot-plug outputs without leaving the usable area and the layer arrangement stale from output init.
+
+   **P-2 is untouched and is still one line** (`X-4a`, `Makefile:408-409`). It depends on nothing and remains the cheapest v1 blocker to close.
+
+   **Two of the five v1 blockers are cleared in code and neither is closed.** V1-1 and V1-4 need the user's in-tree build and a run. V1-2 (Phase 92's M-1/M-2, still never run) is closed by the same build.
+
+   ### Sequencing note for whoever picks this up
+
+   **L-2c-iv is now testable for the first time and is the discriminating check.** Hover a layer surface on `DP-3` with no click and read `printf 'state\n' | nc -U $XDG_RUNTIME_DIR/hikari.sock`; it must report `output DP-3`. Before this phase it reported the other screen, and no amount of client-side work could have changed that.
+
+-20. **PHASE 95 PLAN, RE-VERIFIED AND CORRECTED 2026-08-29 08:57. Supersedes item -19's sequencing and its estimates. NOTHING IMPLEMENTED.**
+
+   Item -19 is left standing so a concurrent session can see what changed. Corrections and the full verified fact base are in `DECISIONS_LOG.md` at 08:57; the ordered task list is `TODOS.md` Phase 95 §P.
+
+   **Four claims in -19 were false and are retracted:** that no default-keymap reference exists (`etc/hikari/hikari.conf:507-701` is one, grouped and commented by task); that `hikari_output_next`/`_prev` are dead (they are macro-generated and macro-called, `src/output.c:753-770` and `src/workspace.c:83-94`); that there are no keyboard commands for monitors (`workspace-cycle-next`/`-prev` are bound to `LS+n`/`LS+b` and to 3-finger swipes); and that `OUTPUTS` says nothing about multiple displays. **All time estimates in -19 are withdrawn** — they had no basis.
+
+   **The verification step in -19 and in `TODOS.md` Phase 94 is struck.** Both directed the user to prove the layer-placement defect by setting `outputs { position }` and restarting. **The user's opening request for this work was to establish whether positioning screens is possible at all**, so the test assumes what it is meant to settle -- and it cannot work regardless, because panels are drawn at the layout origin irrespective of position and nothing downstream re-derives from a moved layout. The defect is already established by the `sofi` session's direct measurement: hikari's own IPC reported `output DP-3` active while `sofi` drew on `eDP-1`.
+
+   ### The answer to the session's original question, stated plainly
+
+   **`outputs { position }` is parsed, resolved and applied to the output layout -- and almost nothing downstream re-derives from it.** Verified end to end: parsed at `src/configuration.c:1758,1787-1789`; resolved by exact connector name then `"*"` at `:2744`, with `HIKARI_OPTION` merging only unconfigured fields (`include/hikari/option.h:41-50`); applied at startup at `src/output.c:570-581` with the configuration loaded (`src/server.c:1518`) before the backend starts (`:1857`); applied on reload at `src/configuration.c:2506-2516`. But `output_layout_change_handler()` (`src/server.c:1243-1288`) updates `output->geometry`, reloads wallpapers and repositions view scene nodes, then **stops** -- the function body contains no `usable_area`, no `arrange`, no `output_geometry` and no bar call. So the window layout box, the top bar's reservation and **every layer surface** stay where they were. **Positioning is a configuration key, not a working capability, and P-1 plus P-3 plus P-7 are what turn it into one.**
+
+   ### Order
+
+   | # | What | Depends on |
+   |---|---|---|
+   | P-1 | Layer placement, layout-change re-derivation, noop init, the focus gap, unguarded workspace deref, wallpaper re-decode | -- |
+   | P-2 | `install-user` wallpaper path, one line | -- |
+   | P-3 | `mode`/`refresh`/`scale`/`transform`/`enabled`, through one apply path shared by startup and reload | P-1 |
+   | P-4 | Relative positioning between monitors | P-3 |
+   | P-5 | Send a window to another monitor | -- |
+   | P-6 | Windows return when their monitor does, keyed on the monitor not the port | P-1 |
+   | P-7 | `wlr-randr` / `kanshi` support | P-1, P-3 |
+   | P-8 | `make check-deps` | -- |
+   | P-9 | The two statements `OUTPUTS` does not make | P-3, P-7 (so it documents what is then true) |
+   | P-10 | FreeBSD port | P-9, a tag |
+   | P-11 | User builds; M-V2 regression check on Phase 92's unrun fixes | -- |
+
+   ### Sequencing note for whoever picks this up
+
+   **P-1 is not divisible.** Fixing where panels are drawn without fixing when the arrangement is recomputed leaves the identical bug reachable through every hotplug and every position change -- and P-3, P-6 and P-7 all mutate output geometry at runtime, which is precisely the path that today re-derives nothing. Building any of them on the current handler would make the defect reachable from a GUI display panel instead of only from a config reload.
+
+   **The estimates are absent deliberately.** The ones in -19 were invented and presented as measurements. Nothing here is estimated until it is scoped against the files it touches.
+
+-19. **PHASE 95-99 -- THE PROGRAMME: coordinate space, dependencies, documentation, then multi-screen. Planned 2026-08-29; RULINGS TAKEN, NOTHING IMPLEMENTED, NOTHING BUILT.**
+
+   Full analysis in `DECISIONS_LOG.md` Phase 95; task list in `TODOS.md` Phase 95; Phase 94's own tasks are unchanged and remain the first work item.
+
+   **Rulings taken from the user 2026-08-29 08:28:** L-2 = **(c)**, additive to (a); dependency handling = **check-deps now, FreeBSD port at release**; phase order **as sequenced below**; per-monitor output identity; and the standing rule that **the agent never runs `sudo` and never installs -- every build, install and hardware test below is the user's.**
+
+   **The v1 verdict, recorded: NOT YET, and the gap is five items** -- L-1 + L-2c; Phase 92's M-1/M-2 never run; the `install-user` wallpaper path; X-1; and the dependency preflight. Nothing was versioned, tagged or released. See `TODOS.md` Phase 95 §V1.
+
+   ### Phase 95 -- coordinate space and output geometry *(contains four of the five v1 blockers)*
+
+   | # | What | State |
+   |---|---|---|
+   | L-V1 | Confirm the layout topology by swapping absolute `outputs { position }` and **restarting** | **Not run -- user's.** See X-1d: reloading instead of restarting produces a **false negative** |
+   | L-1a/b/c/e | The Phase 94 placement fix and its `usable_area` translate-back | Not started |
+   | L-2c-i..iv | Close the layer focus gap at its cause, both halves | Not started -- ruled (c) |
+   | L-1d | Sweep for a fifth scene-port omission | Not started -- X-1 and X-2 are two of them |
+   | X-1a/b/c | Make `output_geometry()` the single entry point; re-arrange layers on layout change | Not started -- **this is what makes reload, mode change and hotplug correct at once** |
+   | X-2a | Initialise the noop output's `geometry`/`usable_area` | Not started -- two lines |
+   | X-3a | Cache the decoded wallpaper surface | Not started -- optional, do it while in the file |
+   | X-4a | Fix the `install-user` sed ordering (M-7d) | Not started -- one line |
+
+   **The L-1b hazard is bounded, and the audit that bounds it is already done.** `output->usable_area` has ~25 consumers -- `src/geometry.c:64-193`, `src/sheet.c:488`, `src/view_config.c:119-158`, and nine sites in `src/view.c` -- and **every one of them produces view geometry, which is output-local by construction** (`src/view.c:287-289` adds the output origin on the way to the scene). So the remedy is a translate-back before the store and the consumer audit is complete; what remains is verification, not discovery.
+
+   ### Phase 96 -- dependencies and install
+
+   `make check-deps` probing all nine pkg-config modules plus `wayland-scanner`, `pandoc`, `install` and `sed`, failing fast with the exact `pkg install` line, wired as a prerequisite of `all` and `install`. Plus declaring the runtime dependencies somewhere a reader can find them. **The failure mode being fixed was measured, not assumed:** bmake's `!=` turns a missing dependency into a *warning* and an empty variable, and the build proceeds to fail hundreds of lines later.
+
+   ### Phase 97 -- v1 documentation
+
+   D-1 (a `DEFAULT BINDINGS` section covering all ~115 shipped bindings, plus a "first ten minutes" table in README) and D-2 (a real multiple-displays section, **including what is not supported**, so nobody files `wlr-randr` as a bug), then D-6 and D-7. **This phase is about navigability, not coverage:** a mechanical audit found 70 of 70 configuration keys and 65 of 66 action names already documented in `hikari(1)`.
+
+   ### The FreeBSD port
+
+   `ports/x11-wm/hikari-sakura/{Makefile,distinfo,pkg-descr,pkg-plist}`, after Phase 97, against a tagged tree. This is the answer to "get all dependencies and install them during the installing process" and the release's distribution story. **Package origins must be confirmed on FreeBSD** -- they could not be queried from the environment this analysis was performed in.
+
+   ### Phase 98 -- multi-screen configuration *(post-1.0)*
+
+   O-2 (mode/refresh/scale/transform/enabled/adaptive-sync through **one** `apply_output_config()` shared by init and reload -- today two divergent copies), then O-5 (wire the dead `hikari_output_next`/`_prev`; add `view-move-to-output-*`), then O-3 (relative placement with a topological sort).
+
+   ### Phase 99 -- output management and per-monitor memory *(post-1.0)*
+
+   O-1 (`wlr-output-management-v1` behind `WITH_OUTPUT_MANAGEMENT`, applied atomically via `wlr_output_swapchain_manager` -- this is what makes `wlr-randr` and `kanshi` work; all three headers are present in the installed wlroots 0.20.2), then O-6 (per-monitor memory on the ruled EDID fallback chain), then O-8 (lock backdrop for an output hot-plugged while locked).
+
+   ### Sequencing note for whoever picks this up
+
+   **Phase 95 is not divisible and its order inside itself is fixed.** L-V1 measures the assumption the diagnosis rests on and must precede any code. L-1a is two lines; L-1b is the reason this is not a two-line phase; and X-1 is the reason L-1 alone is not enough -- fixing *where* layer surfaces are drawn without fixing *when* the arrangement is recomputed leaves the same bug reachable through every hotplug and every `outputs { position }` reload. They touch the same two boxes and must land together.
+
+   **Phases 98 and 99 depend on X-1, not merely on L-1.** An output-management client will move, rotate and rescale outputs at runtime -- which is precisely the code path that today never re-derives `usable_area` or re-arranges layers. Building O-1 on the current geometry handling would make the defect trivially reachable from any GUI display panel instead of only from a config reload.
+
+-18. **PHASE 94 -- LAYER SURFACES ARE DRAWN ON THE WRONG OUTPUT. Analysed 2026-08-29; NOTHING IMPLEMENTED, NOTHING APPROVED.**
+
+   Raised in the `sofi` repository. Full analysis in `DECISIONS_LOG.md` Phase 94; task list in `TODOS.md` Phase 94.
+
+   **No user ruling has been taken yet.** One question is tabled (L-2) and one non-code verification is outstanding (L-V1).
+
+   ### The work, in dependency order
+
+   | # | What | State |
+   |---|---|---|
+   | L-V1 | Confirm the layout topology by swapping absolute `outputs { position }` and restarting | **Not run** -- costs one restart, no code, and measures the one thing currently inferred |
+   | L-1a | `full_area` origin becomes `output->geometry.x/y` in `arrange_layers()` | Not started -- ~2 lines, and the whole of the reported fix |
+   | L-1b | Keep `output->usable_area` output-local across that change | Not started -- **this is where the difficulty actually is** |
+   | L-1c/e | Verify the geometry read-back and popup unconstrain against corrected coordinates | Not started |
+   | L-1d | Sweep for a fifth scene-port omission | Not started |
+   | L-2 | Rule: unassigned layer surface follows **focus** (a, recommended) or **pointer** (b), or fix the layer-hover focus gap (c) | **Tabled, unruled** |
+
+   ### Sequencing note for whoever picks this up
+
+   **L-1a is two lines and L-1b is the reason this is not a two-line phase.** `full_area` and `usable_area` are the same box on entry; wlroots requires the pair it is given to share one coordinate space; and `output->usable_area` is read as **output-local** by `src/geometry.c` for every view position on the output. Change the origin without translating back and every window on every non-origin output moves by that output's layout origin -- silently, and only on a multi-output machine, which is the shape of bug this tree has already paid for twice.
+
+   **Do L-V1 before writing any code.** The claim that `eDP-1` holds layout x=0 is inferred from `src/output.c`'s auto-placement rule, not measured -- `wl_output.geometry` reports `0,0` for both outputs because wlroots sends a hardcoded origin, and hikari's `zxdg_output_manager_v1` (`src/server.c:1588`) is what carries the real position. L-V1 measures it in one restart and its prediction is falsifiable.
+
+   **The client side is already scoped and is deliberately not this project's work.** `sofi` has three genuine defects of its own in this area, recorded in its tree; **all three are unverifiable until L-1 lands**, because an explicit `-monitor DP-3` is today still drawn on `eDP-1`. Nothing here waits on them.
 
 -17. **PHASE 91 -- LAYOUTS, MOTION, PALETTE. Planned and approved 2026-08-25; WP-A/B/C/D EXECUTED the same day. Remaining: WP-B3 only, deferred by user decision.**
 

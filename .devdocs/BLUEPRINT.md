@@ -208,6 +208,8 @@ Key points:
 * **Handbook Verification:** FreeBSD Handbook Ch.6 §6.1-6.4 cross-referenced — all requirements verified correct.
 * **Test Specifications:** Added build compilation (TC-BUILD-01), pkg-config dependencies (TC-PKG-01), and manual protocols for Evdev, Shared Memory, and PAM.
 
+* **Phase 95 P-1 Coordinate Space & Output Geometry:** `arrange_layers()` anchors `full_area` at the output's layout origin (`src/layer_shell.c`) -- layer surfaces were positioned inside the layout rectangle of whichever output sat at `{0,0}`, breaking every layer-shell client since the wlroots-0.20 scene port. `usable_area` is translated back to output-local before the store, keeping the field output-local for all ~26 consumers. `output_geometry()` promoted to the public `hikari_output_update_geometry()` and made the single entry point; `output_layout_change_handler()` (`src/server.c`) now re-derives geometry, re-arranges layers via the new `hikari_layer_shell_arrange()`, and schedules a reflow, so a position change, a mode change and a hotplug all recompute. `focus()` resolves the layer's own workspace and assigns `hikari_server.workspace` -- layer shell was the one focus path that never did. Noop output `geometry`/`usable_area` initialised; wallpaper re-decoded only on a dimension change; `cursor_move()` compares against `focus_layer` as well as `focus_view` (`src/normal_mode.c`). **The wlroots-0.20 scene-port omission family is closed at four.** 71 translation units compile at `-Wall -Werror` and link; not yet run on hardware.
+
 ## 8. Test Specifications & Verification Framework
 
 | Test Case ID | Test Target | Description | Expected Outcome | Status |
@@ -1280,3 +1282,51 @@ Borders and indicator frames need no animation of their own: they are children o
 * The palette is resolved by an explicit `ucl_object_lookup()` **before** `parse_ui()`'s iteration, the same idiom `hikari_configuration_load()` uses for `actions` and `layouts`, and for the same reason.
 
 Three colourscheme keys -- `foreground`, `grouped`, `first` -- were parsed, validated, documented in `hikari(1)` and **read by nothing** before this phase. They are now wired to the sites the man page already described. The corroborating evidence that this was the intended home was already in the tree: `src/normal_mode.c` brackets both indicator transitions with `hikari_group_damage(focus_view->group)`, a call that only makes sense if showing the indicator changes how the focused group's views are drawn -- and until now it did not.
+
+## 19. Multi-Screen Motion and the Animation Coordinate Space (added 2026-08-29, Phase 96)
+
+### 19.1 The three coordinate spaces, and which one each field lives in
+
+This is the single most load-bearing fact in `src/view.c`, `src/animation.c` and `src/output.c`, and getting it wrong is silent on a one-screen machine.
+
+| Space | What lives in it | Converted by |
+|---|---|---|
+| **Output-local** | `view->geometry`, `view->current_geometry`, `tile->view_geometry`, `maximized_state->geometry`, `output->usable_area`, **and every field of `struct hikari_animation`** | adding `output->geometry.x/y` |
+| **Layout-global** | `wlr_scene_node` positions, `wlr_cursor->x/y`, the `full_area` handed to `wlr_scene_layer_surface_v1_configure()`, `output->geometry` itself | subtracting `output->geometry.x/y` |
+| **Surface-local** | subsurface offsets, damage boxes inside a surface | -- |
+
+**The scene root's space IS the output layout** (`wlr_scene_attach_output_layout`, `src/server.c:1005`). Every node parented to it -- views, the four layer trees, the bar, the lock clock, the lock indicator -- must have the output origin added explicitly. `src/bar.c:1552-1555` states the rule outright; `src/view.c:287-289` and `hikari_view_refresh_geometry()` (`:2616-2620`) obey it; `hikari_cursor_center()` (`src/cursor.c:786-793`) obeys it. **Phase 95 P-1 closed the fourth and last omission of that rule** (`arrange_layers()`); the family is closed at four.
+
+### 19.2 The rule Phase 96 exists to enforce
+
+> **A field in output-local space is only meaningful together with the output it was measured against. Anything that changes `view->output` must re-base or discard every output-local field the view carries.**
+
+`view->geometry` is re-based -- `hikari_view_migrate()` runs `hikari_geometry_constrain_relative()` against the destination's `usable_area` before `migrate_view()` swaps the output. **`view->animation` is not.**
+
+`include/hikari/animation.h:57-79` documents `from_*`, `to_*` and `drawn_*` as *"output-local coordinates -- written by whoever moved it, never derived."* `hikari_animation_tick()` places at `current_x + output->geometry.x` (`src/animation.c:276-278`) and `hikari_animation_cancel()` at `to_x + view->output->geometry.x` (`:303-305`) -- **both add the origin of whichever output the view is attached to at the moment of the call.**
+
+The animation is reset in exactly two places in `src/view.c`: `hikari_view_init()` (`:632`) and the unmap path (`:1457-1458`, whose comment explains precisely why a stale origin must not survive a remap). **The two functions that change `view->output` on a live view -- `hikari_view_migrate()` (`:2741`) and `hikari_view_evacuate()` (`:2191`) -- do neither.**
+
+Consequence, worked against the measured topology (eDP-1 at layout 0, DP-3 at layout 1920): a window at eDP-1-local x = 1911 migrating to DP-3 at local x = 91 keeps `from_x = drawn_x = 1911`, and the first tick places it at **layout x 3831** -- the far right edge of DP-3 -- then eases 120 ms back. **A full-monitor-width whip on every crossing.**
+
+### 19.3 Why it was invisible until 2026-08-29
+
+Three conditions had to hold at once, and the third only arrived with this reboot.
+
+1. **Two outputs.** The machine had exactly one until 2026-08-25.
+2. **`ui { animation { enabled = true } }`.** Off in both the shipped and the live configuration through Phase 92; **on** in the live file now.
+3. **The asynchronous reset path.** `queue_reset()` (`src/view.c:577-603`) commits synchronously when `view_geometry` and `geometry` agree on size, and at that point `view_unlink_visible()` has already set the hidden flag -- so `may_animate()` is false and the move snaps, correctly. The asynchronous path commits from the client's ack, **after** `hikari_view_migrate()` has run `hikari_view_show()`, when the view is visible and `may_animate()` is true. It is taken whenever the sizes differ: **every tiled or maximized view**, and every XWayland view routed through `view->move_resize`.
+
+**`layout { auto = true }` is live, so every window on a sheet is tiled and the asynchronous path is the only path.**
+
+### 19.4 Independent per-output page flips: the floor
+
+Each `hikari_output` owns a `wlr_scene_output` and commits on its own vblank from its own `frame_handler()` (`src/output.c:349-401`). The two panels here run at **60.026 Hz and 60.000 Hz**, measured live -- a beat period of ~**38 seconds**, over which the inter-screen phase offset sweeps the entire 16.67 ms frame interval and back.
+
+A window spanning the seam therefore has its two halves composited up to one frame apart, and the resulting horizontal step *breathes* on that cycle. **This is inherent to independent page flips and cannot be removed in software.** It bounds what any fix can achieve, and it is why Phase 96 rules that a cross-screen move is **instant**: a window that is never in flight over the seam never exhibits it.
+
+The animation driver's per-output structure -- `hikari_animation_tick(output, …)` walking `output->views` (`src/animation.c:245`), and `hikari_animation_move()` scheduling a frame on `view->output` alone (`:210`) -- is **correct by construction under that rule** and wrong without it, because a crossing view sits in exactly one output's list while being drawn on two.
+
+### 19.5 What hikari does not do to the scanout
+
+hikari sets `wlr_output_state.tearing_page_flip` **nowhere**, and commits only through `wlr_scene_output_commit(scene_output, NULL)` (`src/output.c:391`), whose `wlr_scene_output_state_options` (`wlr_scene.h:598-613`) carries `timer`, `color_transform` and `swapchain` and no tearing field. **Every page flip is vblank-synchronised.** `wlr_tearing_control_manager_v1_create()` (`src/server.c:1696`) advertises `wp_tearing_control_v1` with no listener on its `new_object` signal -- a promise the compositor does not keep, scheduled for withdrawal in Phase 98 per the Q8 ruling. Recorded here so no future investigation of a visual artifact starts by suspecting the scanout.

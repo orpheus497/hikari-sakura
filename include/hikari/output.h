@@ -72,6 +72,13 @@ hikari_output_disable(struct hikari_output *output);
 void
 hikari_output_enable(struct hikari_output *output);
 
+/* Function purpose: Re-derive an output's geometry, usable area, bar
+reservation and background placement from the output layout. The single entry
+point for that -- output init and the layout-change handler both call it, so a
+move, a mode change and a hotplug all take the same path. */
+void
+hikari_output_update_geometry(struct hikari_output *output);
+
 void
 hikari_output_load_background(struct hikari_output *output,
     const char *path,

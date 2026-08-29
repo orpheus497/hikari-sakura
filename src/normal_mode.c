@@ -233,10 +233,24 @@ cursor_move(uint32_t time)
           &sy);
 
 if (node != NULL) {
-    struct hikari_node *focus_node =
-        (struct hikari_node *)hikari_server.workspace->focus_view;
+    struct hikari_workspace *focused = hikari_server.workspace;
 
-    if (node != focus_node) {
+    /* Action purpose: A layer node is never equal to focus_view, so comparing
+    against that alone re-focused a hovered layer surface on every motion event
+    -- for a keyboard-interactive one, a full seat keyboard leave/enter per
+    event. */
+    struct hikari_node *focus_node = (struct hikari_node *)focused->focus_view;
+#ifdef HAVE_LAYERSHELL
+    struct hikari_node *focus_layer_node =
+        (struct hikari_node *)focused->focus_layer;
+#else
+    /* Action purpose: hikari_workspace::focus_layer only exists with
+    layer-shell support, and without it no layer node can be hovered, so the
+    comparison below is against nothing. */
+    struct hikari_node *focus_layer_node = NULL;
+#endif
+
+    if (node != focus_node && node != focus_layer_node) {
       hikari_node_focus(node);
     }
 

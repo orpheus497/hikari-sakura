@@ -53,6 +53,12 @@ cursor_move(uint32_t time_msec)
   struct wlr_output *wlr_output =
       wlr_output_layout_output_at(hikari_server.output_layout, lx, ly);
 
+  /* [COMMENT] Action purpose: The pointer is over no output at all. Screens of
+  different heights sharing a row leave layout rectangles that belong to nothing
+  -- a 1920x1200 panel beside a 1920x1080 one puts rows 1080-1200 at x >= 1920
+  on no display -- and the cursor is free to enter them. Returning here holds the
+  window at its last valid position rather than moving it somewhere unpaintable;
+  the drag resumes the moment the pointer is over a screen again. */
   if (wlr_output == NULL) {
     return;
   }
@@ -63,18 +69,27 @@ cursor_move(uint32_t time_msec)
   assert(focus_view != NULL);
 
   struct hikari_output *view_output = focus_view->output;
+  struct hikari_move_mode *move_mode = &hikari_server.move_mode;
+
+  /* [COMMENT] Action purpose: Subtract the grab anchor, so the window follows
+  the pointer's DELTA rather than teleporting its origin to the pointer's
+  absolute position. See the anchor's comment in move_mode.h.
+
+  Applied to BOTH branches. Crossing a screen boundary is still the same drag,
+  and passing the raw pointer position to the migrate path put the window's
+  top-left corner under the cursor for exactly one motion event before the next
+  one returned it -- a corner-jump at the seam on every crossing. The migrate
+  path uses these coordinates only as a position and never as a pointer
+  location, so anchoring them here is correct rather than merely convenient. */
+  double anchored_x = lx - move_mode->anchor_x;
+  double anchored_y = ly - move_mode->anchor_y;
 
   if (output == view_output) {
-    struct hikari_move_mode *move_mode = &hikari_server.move_mode;
-
-    /* [COMMENT] Action purpose: Subtract the grab anchor, so the window follows
-    the pointer's DELTA rather than teleporting its origin to the pointer's
-    absolute position. See the anchor's comment in move_mode.h. */
     hikari_view_move_absolute(focus_view,
-        lx - view_output->geometry.x - move_mode->anchor_x,
-        ly - view_output->geometry.y - move_mode->anchor_y);
+        anchored_x - view_output->geometry.x,
+        anchored_y - view_output->geometry.y);
   } else {
-    hikari_server_migrate_focus_view(output, lx, ly, false);
+    hikari_server_migrate_focus_view(output, anchored_x, anchored_y, false);
   }
 }
 

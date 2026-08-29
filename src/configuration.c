@@ -2305,6 +2305,27 @@ parse_ui(struct hikari_configuration *configuration, const ucl_object_t *ui_obj)
       if (!parse_gap(configuration, cur)) {
         goto done;
       }
+    } else if (!strcmp(key, "spill")) {
+      const char *spill;
+
+      if (!ucl_object_tostring_safe(cur, &spill)) {
+        fprintf(stderr, "configuration error: expected string for \"spill\"\n");
+        goto done;
+      }
+
+      if (!strcmp(spill, "always")) {
+        configuration->spill = HIKARI_SPILL_ALWAYS;
+      } else if (!strcmp(spill, "drag")) {
+        configuration->spill = HIKARI_SPILL_DRAG;
+      } else if (!strcmp(spill, "never")) {
+        configuration->spill = HIKARI_SPILL_NEVER;
+      } else {
+        fprintf(stderr,
+            "configuration error: expected \"always\", \"drag\" or \"never\" "
+            "for \"spill\", got \"%s\"\n",
+            spill);
+        goto done;
+      }
     } else if (!strcmp(key, "step")) {
       if (!parse_step(configuration, cur)) {
         goto done;
@@ -2626,6 +2647,14 @@ hikari_configuration_init(struct hikari_configuration *configuration)
   hikari_bar_config_init(&configuration->bar_config);
   hikari_layout_policy_init(&configuration->layout_policy);
   hikari_animation_config_init(&configuration->animation);
+
+  /* [COMMENT] Action purpose: DRAG rather than ALWAYS, even though ALWAYS is
+  the behaviour every previous release had. A window resting half-painted over a
+  screen showing a different sheet is a defect rather than a preference, and the
+  overhang that IS useful -- the one that shows a drag is about to cross -- is
+  exactly what this setting keeps. ALWAYS remains available for anyone who wants
+  the old behaviour back verbatim. */
+  configuration->spill = HIKARI_SPILL_DRAG;
 
   configuration->border = 1;
   configuration->gap = 5;

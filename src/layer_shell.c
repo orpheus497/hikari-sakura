@@ -125,20 +125,34 @@ arrange_layers(struct hikari_output *output)
 {
   assert(output != NULL);
 
-  struct wlr_box full_area = { .x = 0,
-    .y = 0,
+  /* [COMMENT] Action purpose: The box handed to
+  wlr_scene_layer_surface_v1_configure() must be expressed in the coordinate
+  space of the tree the scene node lives in. The four layer trees hang off the
+  scene root, and the scene root's space IS the output layout
+  (wlr_scene_attach_output_layout, src/server.c), so this box is
+  LAYOUT-GLOBAL -- anchored at the output's layout origin, never at {0,0}.
+  Anchoring it at {0,0} placed every layer surface on every output inside the
+  layout rectangle of whichever output happened to sit at the layout origin,
+  which is why layer-shell clients only ever appeared on one screen. */
+  struct wlr_box full_area = { .x = output->geometry.x,
+    .y = output->geometry.y,
     .width = output->geometry.width,
     .height = output->geometry.height };
 
   /* [COMMENT] Action purpose: usable_area starts as the full output area and
-  is progressively shrunk by exclusive-zone surfaces as we iterate. The result
-  is stored in output->usable_area for use by the view layout engine. */
+  is progressively shrunk by exclusive-zone surfaces as we iterate. wlroots
+  requires the two boxes it is handed to share one coordinate space, so this
+  one is layout-global for the whole pass and is translated back to
+  output-local at the end, immediately before it is stored. */
   struct wlr_box usable_area = full_area;
 
   /* [COMMENT] Action purpose: Reserve the native top bar's strip first. This
   pass re-derives usable_area from the full output box, so without repeating the
   reservation here every layer-shell arrangement would silently hand the bar's
-  rows back to views. Matches output_geometry()'s baseline. */
+  rows back to views. Matches hikari_output_update_geometry()'s baseline.
+  hikari_bar_reserve() only advances y and shrinks height, so it is
+  translation-invariant and gives the same answer on the layout-global box used
+  here as on the output-local box used there. */
   hikari_bar_reserve(&output->bar, &usable_area);
 
   /* [COMMENT] Action purpose: Process layers in protocol-defined order.
@@ -203,7 +217,26 @@ arrange_layers(struct hikari_output *output)
     }
   }
 
+  /* Action purpose: wlroots requires both boxes in one space, so usable_area
+  was layout-global for this pass. Every reader of output->usable_area treats it
+  as output-local and adds the output origin itself, so translate back before
+  storing. */
+  usable_area.x -= output->geometry.x;
+  usable_area.y -= output->geometry.y;
+
   output->usable_area = usable_area;
+}
+
+/* Function purpose: Re-run the arrangement for one output after its geometry
+changes -- a layout move, a mode change, a hotplug. Must run after
+hikari_output_update_geometry(), which reserves the bar from the full output
+box; running it first hands the bar's rows back to views. */
+void
+hikari_layer_shell_arrange(struct hikari_output *output)
+{
+  assert(output != NULL);
+
+  arrange_layers(output);
 }
 
 /* [COMMENT] Function purpose: Initialise a hikari_layer for a new
@@ -222,9 +255,17 @@ hikari_layer_init(
   printf("LAYER INIT %p\n", layer);
 #endif
 
-  struct hikari_output *output = wlr_layer_surface->output != NULL
-                                     ? wlr_layer_surface->output->data
-                                     : hikari_server.workspace->output;
+  /* Action purpose: hikari_output_fini() clears hikari_server.workspace while
+  it tears an output down, and a client can create a layer surface in that
+  window. The noop output always exists and always carries a workspace. */
+  struct hikari_output *output;
+  if (wlr_layer_surface->output != NULL) {
+    output = wlr_layer_surface->output->data;
+  } else if (hikari_server.workspace != NULL) {
+    output = hikari_server.workspace->output;
+  } else {
+    output = hikari_server.noop_output;
+  }
 
   layer->node.surface_at = surface_at;
   layer->node.focus = focus;
@@ -908,18 +949,26 @@ focus(struct hikari_node *node)
   struct hikari_layer *layer = (struct hikari_layer *)node;
   struct wlr_layer_surface_v1_state *state = &layer->surface->current;
 
+  /* Action purpose: The workspace the layer lives on, not whichever one happens
+  to be focused. hikari_workspace_focus_view() takes its target as a parameter
+  and ends by assigning hikari_server.workspace; layer shell was the one focus
+  path that never did, so pointing at a bar or menu on a second monitor left the
+  compositor believing the other screen was still active. */
+  struct hikari_workspace *workspace = layer->output->workspace;
+
   if (state->keyboard_interactive) {
-    struct hikari_workspace *workspace = hikari_server.workspace;
-    struct hikari_view *focus_view = workspace->focus_view;
-    struct hikari_layer *focus_layer = workspace->focus_layer;
+    struct hikari_workspace *focused = hikari_server.workspace;
     struct wlr_seat *seat = hikari_server.seat;
     struct wlr_keyboard *wlr_keyboard = wlr_seat_get_keyboard(seat);
 
-    if (focus_view != NULL) {
-      hikari_workspace_focus_view(workspace, NULL);
+    if (focused->focus_view != NULL) {
+      hikari_workspace_focus_view(focused, NULL);
     }
 
-    if (focus_layer != NULL) {
+    /* Action purpose: The workspace losing layer focus is not necessarily the
+    one gaining it, so clear it where it is actually recorded. */
+    if (focused->focus_layer != NULL) {
+      focused->focus_layer = NULL;
       wlr_seat_keyboard_clear_focus(seat);
     }
 
@@ -933,6 +982,8 @@ focus(struct hikari_node *node)
 
     workspace->focus_layer = layer;
   }
+
+  hikari_server.workspace = workspace;
 }
 
 static void

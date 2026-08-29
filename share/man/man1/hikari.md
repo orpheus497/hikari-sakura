@@ -943,9 +943,16 @@ asking for it.
 * **auto**
 
   When *true*, mapping a view offers it to the current sheet's layout and
-  closing one re-tiles the survivors. When *false*, which is the default and the
-  historical behaviour, a layout only ever changes in response to a tiling
-  action.
+  closing one re-tiles the survivors. When *false*, which is the built-in
+  default and the historical behaviour, a layout only ever changes in response
+  to a tiling action.
+
+  Note that the two defaults differ on purpose. **hikari** itself defaults to
+  *false*, so a configuration that says nothing about layout policy behaves as
+  it always has; the *hikari.conf* shipped with the distribution sets *true*,
+  because that is the configuration the compositor is developed and tested
+  against. If you started from the shipped file, automatic tiling is on and this
+  is the line that turns it off.
 
   Re-tiling is deferred rather than immediate. A view that has a resize in
   flight cannot be laid out -- it is not *tileable* until the client answers the
@@ -1010,6 +1017,31 @@ The standard **gap** value is 5.
 
 ```
 gap = 5
+```
+
+* **spill**
+
+  Whether a view may be painted outside the output it belongs to. Every output
+  carries its own workspace and each workspace displays its own sheet, so a view
+  overhanging an output edge is drawn over an output showing a different set of
+  views, and the position constraint permits that overhang down to the last few
+  pixels of the view's own output.
+
+  Either *drag*, *always* or *never*, defaulting to *drag*.
+
+  With *drag* a view may overhang while it is being moved or resized, which is
+  how you see that a drag is about to cross to the other output, and is cropped
+  to its own output once it is released. A **floating** view is exempt and is
+  never cropped -- it was positioned by hand, and cropping it would overrule the
+  position the user chose. *always* disables cropping entirely and is the
+  behaviour of every release before this one. *never* crops every view at all
+  times, mid-drag and floating views included.
+
+  Cropping is visual only. It changes where a view is painted and never where it
+  is, so no view is moved, resized or reported differently to its client.
+
+```
+spill = drag
 ```
 
 * **font**
