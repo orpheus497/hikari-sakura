@@ -134,3 +134,78 @@ hikari_border_refresh_geometry(
   wlr_scene_rect_set_color(border->left, premultiplied);
   wlr_scene_rect_set_color(border->right, premultiplied);
 }
+
+/* [COMMENT] Function purpose: Crop one border rect to `clip` and place it.
+
+`nominal` is the rect's unclipped parent-relative box. Both boxes are in the
+view's content-local space. An intersection that comes out empty disables the
+node rather than setting a zero-sized rect, because a zero width or height is
+not a size wlr_scene_rect_set_size() is meant to be handed. */
+static void
+clip_rect(struct wlr_scene_rect *rect,
+    struct wlr_box *nominal,
+    struct wlr_box *clip)
+{
+  if (clip == NULL) {
+    wlr_scene_node_set_position(&rect->node, nominal->x, nominal->y);
+    wlr_scene_rect_set_size(rect, nominal->width, nominal->height);
+    wlr_scene_node_set_enabled(&rect->node, true);
+    return;
+  }
+
+  struct wlr_box cropped;
+  if (!wlr_box_intersection(&cropped, nominal, clip)) {
+    wlr_scene_node_set_enabled(&rect->node, false);
+    return;
+  }
+
+  wlr_scene_node_set_position(&rect->node, cropped.x, cropped.y);
+  wlr_scene_rect_set_size(rect, cropped.width, cropped.height);
+  wlr_scene_node_set_enabled(&rect->node, true);
+}
+
+void
+hikari_border_clip(struct hikari_border *border, struct wlr_box *clip)
+{
+  if (border->top == NULL || border->state == HIKARI_BORDER_NONE) {
+    return;
+  }
+
+  int border_width = hikari_configuration->border;
+
+  /* [COMMENT] Action purpose: The content box is recovered from the border box
+  rather than passed in, so this can be called from anywhere that has already
+  run hikari_border_refresh_geometry() without threading the view's geometry
+  through as well. The two are the same rectangle inflated by border_width on
+  every side, which is exactly what refresh_geometry above computes. */
+  int content_width = border->geometry.width - border_width * 2;
+  int content_height = border->geometry.height - border_width * 2;
+
+  /* [COMMENT] Action purpose: The same four parent-relative boxes
+  hikari_border_refresh_geometry() lays out, restated here as data so the crop
+  is a pure intersection. Keep in step with that function. */
+  struct wlr_box nominal_top = { .x = -border_width,
+    .y = -border_width,
+    .width = border->geometry.width,
+    .height = border_width };
+
+  struct wlr_box nominal_bottom = { .x = -border_width,
+    .y = content_height,
+    .width = border->geometry.width,
+    .height = border_width };
+
+  struct wlr_box nominal_left = { .x = -border_width,
+    .y = -border_width,
+    .width = border_width,
+    .height = border->geometry.height };
+
+  struct wlr_box nominal_right = { .x = content_width,
+    .y = -border_width,
+    .width = border_width,
+    .height = border->geometry.height };
+
+  clip_rect(border->top, &nominal_top, clip);
+  clip_rect(border->bottom, &nominal_bottom, clip);
+  clip_rect(border->left, &nominal_left, clip);
+  clip_rect(border->right, &nominal_right, clip);
+}

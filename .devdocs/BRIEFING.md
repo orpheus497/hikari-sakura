@@ -1,8 +1,48 @@
 # Hikari Project Briefing
 
-*Last Updated:* 2026-08-29 10:21
+*Last Updated:* 2026-08-29 11:35
 
 ## Current Status
+
+- **Phase:** Phase 96 (**PLANNED AND FULLY RULED — RE-VERIFIED AGAINST THE TREE. NOTHING IMPLEMENTED, awaiting approval.**)
+- **Twelve rulings taken; NO open questions remain.** **Q11 is ruled** — clip tiled windows only, never a floating one, and T-6c's always-spill key overrides — which **unblocks T-6** and puts it in this cycle. **R-4 is new and ruled**: change the shipped `layout { auto }` default to `true`.
+
+### The 11:35 re-verification, in one paragraph
+
+The user asked for the trackers to be cross-referenced against the codebase. **Every file-and-line citation in the Phase 96 plan was re-read in the tree rather than trusted, and all of them resolve exactly** — the table is in `DECISIONS_LOG.md` at 11:35. `migrate_view()` (`src/view.c:2726-2738`) assigns `view->output` and calls `queue_reset()` with **no animation reset**; `hikari_view_evacuate()` (`:2191`) has the identical omission; the crossing branch of `move_mode.c` `cursor_move()` (`:77`) still passes raw `lx, ly`; the migrate path still calls `hikari_reflow_schedule()` nowhere; `gap*2 - border` with the live `gap = 5`, `border = 1` is **9 px** exactly as recorded; and the tearing manager is still created at `src/server.c:1696`. **Phase 96 is 0 of 6 code items started** — `T-3a` is the only checked item and is a measurement. **Phase 95 P-1 was verified present rather than assumed delivered**, since everything downstream depends on it: `full_area` at the output's layout origin (`src/layer_shell.c:137-140`) and the handler running update-geometry → arrange → reflow (`src/server.c:1262`, `:1285`, `:1305`). The working tree carries **no uncommitted product change**; `.devdocs/` alone is modified.
+
+**Q11 is ruled and the collision dissolves rather than being traded off.** Q5 exists to stop a window resting half-painted over a panel showing a *different sheet*, and a tiled window is placed by the compositor, so clipping it takes nothing from the user; Q6 exists so a window the user dropped stays dropped, which is only meaningful for the one kind of window the user positions by hand. **The two rulings were never in conflict about intent, only about a case neither had been asked about.**
+
+**R-4 was found by the cross-reference and was on no tracker.** `etc/hikari/hikari.conf:266` ships `layout { auto = false }` while the live `~/.config/hikari/hikari.conf:261` has `auto = true` — and **the entire Phase 96 analysis rests on the live value**, because T-1's severe asynchronous path is every tiled or maximized view. A maintainer reproducing the phase from a fresh checkout would not have a tiled sheet, would not reach that path, and would conclude the analysis was wrong. **Same failure shape as the struck `L-V1` and as FB-4's ~60-phase survival: a recorded fact whose preconditions were never recorded with it.** **Ruled: change the shipped default to `true`.** Total Feature Retention is intact — `auto = false` remains available and unchanged — but **the documentation moves with it and that half is not deferrable to Phase 102**: `etc/hikari/hikari.conf:250-263` and `hikari(1)`'s LAYOUT text both assert the old default in prose.
+
+- **Blockers:** none. **Nothing has been modified outside `.devdocs/`. No `sudo`, no `make`, no `git`, no install, nothing built or tagged.** The approval gate is the only thing between this plan and execution.
+- **Next action is the user's:** approve Phase 96. **T-1 + T-4 + T-5 are not divisible**; T-6 now joins them, T-7a travels with any of them, and R-4 is independent.
+
+---
+## Previous Status
+
+- **Phase:** Phase 96 (**PLANNED, TEN RULINGS TAKEN — NOTHING IMPLEMENTED, awaiting approval.**)
+- **Phase 95 P-1 is built, installed and running.** `/usr/local/bin/hikari` is dated 10:27 and matches the in-tree binary. **V1-1, V1-4 and V1-2 are closed on hardware.**
+- **Rulings taken:** ten (Q1–Q10), plus **R-2** — the `install-user` wallpaper path is **permanently deferred to v1 tagging time and leaves the v1-blocker list** — and **R-3**, M-V2 passes only **provisionally**.
+
+### Phase 96 in one paragraph
+
+The user installed and rebooted, reported most previously known problems resolved, and reported one that is not: **moving or dragging a window from one screen to the other tears badly.** **It is not scanout tearing**, and the proof is exhaustive — `wp_tearing_control_v1` is created at `src/server.c:1696` with no listener on its `new_object` signal, `wlr_output_state.tearing_page_flip` is set nowhere in the tree, and hikari commits only through `wlr_scene_output_commit(scene_output, NULL)`, whose options struct has no tearing field. **Every page flip hikari performs is vblank-synchronised.** The cause is arithmetic. `include/hikari/animation.h:57-79` documents `from_*`, `to_*` and `drawn_*` as **output-local**; `hikari_animation_tick()` places the node at `current_x + output->geometry.x`; and the animation is reset in exactly two places — `hikari_view_init()` and the unmap path — **while `hikari_view_migrate()` changes `view->output` and never touches it.** A window at eDP-1-local x = 1911 that migrates to DP-3 keeps `from_x = 1911` and the first tick places it at `1911 + 1920` = **layout x 3831, the far right edge of DP-3**, then eases 120 ms back. **The window whips across the entire external monitor on every crossing.**
+
+**Two things were measured rather than assumed, and both changed the analysis.** A read-only Wayland probe read the live topology: **eDP-1 1920x1200 @ 60.026 Hz at logical (0,0)** and **DP-3 1920x1080 @ 60.000 Hz at logical (1920,0)**, both reporting `wl_output.geometry` as `(0,0)`. That **confirms Phase 94's assumption that eDP-1 holds layout x = 0** by a means that assumes nothing — settling what the struck `L-V1` was reaching for. And the live configuration is **`layout { auto = true }`** with **`animation { enabled = true, duration = 120 }`** — *both false in every prior phase's analysis*. Every window on a sheet is now tiled and every compositor-driven move is interpolated, which is exactly why these defects surfaced on this reboot and not before.
+
+**Four further defects, all read rather than inferred.** **T-4:** `move_mode.c` `cursor_move()` subtracts the grab anchor on the same-screen branch and passes raw `lx, ly` on the crossing branch, so the window's corner teleports under the cursor at the seam — **Phase 91's own fix applied to the branch it missed.** **T-5:** `queue_reset()` detaches the tile, and `hikari_reflow_schedule()` is called from map, unmap, sheet display and the layout-change handler **and from nowhere on the migrate path** — so the source sheet keeps a hole and the destination gains a floating window on top of its layout. **T-6:** `hikari_geometry_constrain_relative()` permits `x` up to `usable_area.x + width - gap`, where `gap = gap*2 - border` = **9**, so a window can be dragged until 9 px remain on its own screen with the rest painted over a panel showing a **different sheet**. **T-7:** the 1200/1080 height mismatch leaves layout rows 1080–1200 at x ≥ 1920 on no output at all, where the drag silently freezes.
+
+**Q1 is why this phase is small.** Snapping across screens means no window is ever in flight over the seam, so **T-2** — the animation being ticked and rescheduled per-output while a crossing window is drawn on two — collapses from a rewrite of the animation driver to a guard. **And T-3 is the floor, recorded so it is never re-investigated:** 60.026 against 60.000 Hz beat with a period of ~38 seconds, so a spilling window's halves are always sampled up to one frame apart and the artifact *breathes*. That cannot be removed in software; under the Q5 default it is visible only while a drag is held.
+
+**One ambiguity was derived from the rulings rather than existing before them, and it is flagged rather than quietly decided.** **Q11:** Q5 (clip a window at its screen's edge when at rest) and Q6 (a floating window stays exactly where it was dropped, straddling permitted) collide — together they mean a floating window dropped across the seam loses half of itself. Recommended reading: **clip tiled windows, never clip floating ones, and let the new always-spill key override the whole behaviour.** It blocks **T-6 only**; every other item in the phase is fully ruled.
+
+- **Blockers:** none. **Nothing has been modified outside `.devdocs/`. No `sudo`, no `make`, no `git`, no install, nothing built or tagged.** The approval gate is the only thing between this plan and execution.
+- **Next action is the user's:** approve Phase 96, and rule **Q11** if `T-6` is to land in the same cycle. **T-1 + T-4 + T-5 are not divisible** — fixing any two of the three leaves a visibly wrong cross-screen move.
+- **Programme:** 96 (cross-screen motion) → 97 (tiling manipulation, M-3 + P-5) → 98 (motion polish, T-8, T-9, M-9) → 99 (screen configuration, P-3 + P-4 + Q7) → 100 (screen management and memory, P-7, P-6, O-8) → 101 (build preflight, P-8) → 102 (documentation) → 103 (release, including the deferred P-2). Sequencing in `PLANS.md` item -22.
+
+---
+## Previous Status
 
 - **Phase:** Phase 95 (**P-1 IMPLEMENTED. Compiled at `-Wall -Werror` and linked out-of-tree; NOT run. The in-tree build is the USER'S.**)
 - **Rulings taken:** **L-1b = option (A)**; **N-2 folded into P-1**; **M-8j closed by the user** -- the specific keyboard, now working, which closes M-8 entirely.

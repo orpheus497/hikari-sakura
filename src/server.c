@@ -2201,7 +2201,20 @@ hikari_server_enter_normal_mode(void *arg)
 
   hikari_cursor_reset_image(&server->cursor);
 
+  /* [COMMENT] Action purpose: Captured before the mode changes, because the
+  view that was being dragged is the one whose crop has to be re-evaluated and
+  leaving move mode is what changes the answer. Under the default
+  `ui { spill = drag }` a window may overhang its screen while the pointer holds
+  it and is cropped back to its own screen the moment it is released; nothing on
+  the geometry path fires here, since ending a drag moves nothing. */
+  struct hikari_view *dragged_view =
+      server->workspace != NULL ? server->workspace->focus_view : NULL;
+
   hikari_normal_mode_enter();
+
+  if (dragged_view != NULL) {
+    hikari_view_refresh_spill_clip(dragged_view);
+  }
 
   hikari_server_cursor_focus();
 }

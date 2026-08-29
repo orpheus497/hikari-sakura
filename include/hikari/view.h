@@ -334,6 +334,16 @@ void
 hikari_view_refresh_geometry(
     struct hikari_view *view, struct wlr_box *geometry);
 
+/* [COMMENT] Function purpose: Re-evaluate whether this view may overhang its
+screen, without changing its geometry.
+
+Needed because the answer depends on the server's MODE as well as the view's
+position: under the default `ui { spill = drag }` a window may overhang while it
+is being dragged and is cropped once it is let go. Ending a drag changes no
+geometry, so nothing on the geometry path would notice. */
+void
+hikari_view_refresh_spill_clip(struct hikari_view *view);
+
 void
 hikari_view_activate(struct hikari_view *view, bool active);
 

@@ -1,8 +1,85 @@
 # Forward Strategy & Plans
 
-*Last Updated:* 2026-08-29 10:21
+*Last Updated:* 2026-08-29 11:35
 
 ## Implementations to be Fully Implemented
+
+-22. **PHASE 96-103 -- THE PROGRAMME: cross-screen motion, tiling manipulation, screen configuration, then documentation and release. Planned 2026-08-29 11:19; re-verified and fully ruled 2026-08-29 11:35. TWELVE RULINGS TAKEN, NO OPEN QUESTIONS, NOTHING IMPLEMENTED, NOTHING BUILT.**
+
+   Full analysis in `DECISIONS_LOG.md` at 11:19; ordered task list in `TODOS.md` Phase 96. Supersedes item -20's sequencing from P-3 onward. **Item -21 (P-1) is delivered, built, installed and running.**
+
+   **Rulings taken from the user 2026-08-29 11:19:** Q1 **snap across screens, glide within one**; Q2 **keep the grab point**; Q3 **follow `layout { on-insert }`**; Q4 **follow `reflow-on-close`**; Q5 **spill while dragging, clip otherwise, plus a configuration key to force always-spill**; Q6 **floating stays floating wherever dropped**; Q7 **screen alignment configurable, with edge-alignment tuneables and an auto-centre form**; Q8 **stop announcing the tearing protocol**; Q9 **tiling manipulation before screen configuration, both required**; Q10 **tag after documentation, port against the tag**. Plus **R-2: the `install-user` wallpaper path is permanently deferred to v1 tagging time** and **R-3: M-V2 provisionally passes, re-run after Phase 96**.
+
+   **Rulings taken from the user 2026-08-29 11:35:** **Q11 clip tiled windows only, never a floating one, always-spill key overrides** -- which unblocks T-6 and leaves Phase 96 with **no open questions** -- and **R-4 change the shipped `layout { auto }` default to `true`** so the template matches the configuration that is actually tested.
+
+   ### Order, by necessity
+
+   | Phase | What | Why here |
+   |---|---|---|
+   | **96** | Cross-screen window motion | The reported defect. Nothing else is worth doing while moving a window between screens looks broken |
+   | **97** | Tiling manipulation (M-3) + send-to-screen (P-5) | Q9. With `auto = true` live, a tiled sheet **cannot be rearranged at all** -- no directional move, no split ratio |
+   | **98** | Motion polish and loose ends | M-4b/c/d/e, M-9, T-8, T-9. Cheap, and all of it sits in code Phase 96 and 97 will have just touched |
+   | **99** | Screen configuration (P-3, P-4 + Q7) | Depends on P-1's re-deriving handler, delivered |
+   | **100** | Screen management and memory (P-7, P-6, O-8) | Depends on 99 |
+   | **101** | Build preflight (P-8 / C-1..C-3, C-6) | Independent; before documentation so the documented install is the real one |
+   | **102** | Documentation (D-2/P-9, D-3..D-7) | Q10 -- documents what is then true, not what was planned |
+   | **103** | Release (P-2, D-8, version, tag, FreeBSD port) | Q10 -- last |
+
+   ### Phase 96 -- cross-screen window motion
+
+   | # | What | Ruling | State |
+   |---|---|---|---|
+   | T-1 | Cancel and re-base the animation on every screen change (`hikari_view_migrate`, `hikari_view_evacuate`); a cross-screen placement is instant | Q1 | Not started |
+   | T-2 | Verify the per-output animation driver is correct **by construction** once T-1 lands; guard, do not restructure | Q1 | Not started |
+   | T-4 | Carry the grab anchor through the crossing branch of `move_mode.c` | Q2 | Not started |
+   | T-5 | State-aware migrate: floating stays floating; tiled folds into the destination layout per `on-insert`; the source sheet closes its hole per `reflow-on-close` | R-1, Q3, Q4, Q6 | Not started |
+   | T-6 | Clip a resting **tiled** window to its own screen, never a floating one, lift the clip while dragging, add the always-spill configuration key | Q5, **Q11** | Not started — **unblocked 11:35** |
+   | T-7a | Refuse to place a window's origin in the dead band between mismatched screen heights | Q7 (guard only) | Not started |
+   | R-4 | Change the shipped `layout { auto }` default to `true`, and move the config comment block and `hikari(1)` prose with it | R-4 | Not started — independent, no compositor source |
+
+   **T-1 is the phase.** It is the whip across the external monitor and it is the only item that alone accounts for the reported symptom. T-4 is independent, small, and is Phase 91's own fix applied to the branch it missed.
+
+   **Q11 IS RULED (2026-08-29 11:35) and Phase 96 now has no open questions.** The collision between Q5 (clip at rest) and Q6 (a floating window rests where it was dropped, straddling permitted) resolves as the recommended reading: **clip tiled windows, never clip floating ones, and let T-6c's always-spill key override the whole behaviour.** T-6 is unblocked and lands in this cycle. The remaining work in T-6 is `T-6d`'s design note, unchanged: `wlr_scene_subsurface_tree_set_clip()` clips a surface tree, while a view's border and indicator-frame rects are separate `wlr_scene_rect` nodes in the same tree.
+
+   **R-4 is new (11:35) and was found by cross-referencing the trackers against the tree.** `etc/hikari/hikari.conf:266` ships `auto = false` while the live file has `auto = true`, and **the entire Phase 96 analysis rests on the live value** -- a fresh checkout does not reach T-1's severe path, so the reported defect would appear not to reproduce. **Ruled: change the shipped default to `true`.** It touches no compositor source and is independent of every T-item, but **its documentation half is not deferrable to Phase 102** -- the config comment block at `:250-263` and `hikari(1)`'s LAYOUT text both assert the old default in prose and become false the moment the value flips.
+
+   ### Phase 97 -- tiling manipulation
+
+   **M-3**, the largest gap in daily use: `src/action.c` offers only list-order `next`/`prev`/`main` for a tiled sheet, and **no action anywhere adjusts a split ratio**. Add directional movement within a layout and split-ratio actions. Plus **P-5** (`view-move-to-output-next`/`-prev`) on top of `hikari_server_migrate_focus_view()`, which Phase 96 will have just made state-aware -- the same action family, and it reuses T-5 rather than duplicating it.
+
+   ### Phase 98 -- motion polish and loose ends
+
+   M-4b/c/d (remaining motion decisions) · **M-4e** (indicators teleport while the window travels -- newly visible and adjacent to Phase 96's work) · **M-9** (global modifier state; real defect, no observed symptom) · **T-8** (stop advertising `wp_tearing_control_v1`: delete `src/server.c:44` and `:1696`, per Q8) · **T-9** (`track_damage` is written, toggled by a bound action, and read nowhere -- either wire it or delete the action).
+
+   ### Phase 99 -- screen configuration
+
+   **P-3** -- `mode`, `refresh`, `scale`, `transform`, `enabled` through **one** `apply_output_config()` shared by startup and reload; today `src/output.c:544-581` and `src/configuration.c:2497-2521` are divergent copies and only the first sets a mode at all. **P-4 + Q7** -- relative positioning between screens with a topological sort, **plus the alignment tuneables Q7 rules**: an edge-alignment key that holds regardless of screen size, and an auto-adjust/centre form so mismatched heights line up without hand-computed offsets. Once `refresh` exists, pinning both panels to one rate becomes possible and would remove the 38-second beat recorded as T-3 -- worth knowing, not a reason to do anything now.
+
+   ### Phase 100 -- screen management and memory
+
+   **P-7** -- `wlr-output-management-v1` behind `WITH_OUTPUT_MANAGEMENT`, applied atomically through `wlr_output_swapchain_manager`; this is what makes `wlr-randr`, `kanshi` and `wdisplays` work. All three headers are present in the installed wlroots 0.20.2. **P-6** -- per-monitor memory on the ruled identity chain `make|model|serial` -> `make|model|connector` -> `connector`. **O-8** -- lock backdrop and clock for a screen hot-plugged while locked.
+
+   ### Phase 101 -- build preflight
+
+   **P-8 / C-1, C-2, C-3, C-6.** `make check-deps` probing every pkg-config module and every required tool, failing fast and naming the exact `pkg install` line, wired as a prerequisite of `all` and `install`. Installs nothing. Plus declaring the runtime dependencies somewhere machine-readable.
+
+   ### Phase 102 -- documentation
+
+   **D-2 / P-9** (the two statements `OUTPUTS` does not make, now rewritable as what is actually true after 99 and 100) · **D-3** (11 documented actions bound nowhere) · **D-4** (task-oriented cookbook) · **D-5** (troubleshooting) · **D-6** (README never states the Makefile is BSD make) · **D-7** (`XDG_CURRENT_DESKTOP` rationale).
+
+   ### Phase 103 -- release
+
+   **P-2 / X-4a / M-7d** -- the `install-user` wallpaper path, **deferred to here by R-2 and due here**. **D-8** CHANGELOG and release notes. Version bump and tag. **P-10 / C-4** the FreeBSD port against the tag, with package origins confirmed on FreeBSD. Q10 is recorded as *preferably* (a) and explicitly to be revisited at the time.
+
+   ### Sequencing note for whoever picks this up
+
+   **Phase 96 is not divisible below T-1 + T-4 + T-5.** T-1 removes the whip, T-4 removes the teleport at the crossing, and T-5 is what makes the arrival correct under `auto = true`; fixing any two of the three leaves a visibly wrong cross-screen move. **T-6 is now fully ruled and joins the same cycle** (it was previously listed as splittable only because Q11 was open); T-7a is a one-line guard that can travel with any of them; **R-4 is documentation and configuration only and can travel with any of them or stand alone.**
+
+   **Re-verified against the tree 2026-08-29 11:35.** Every file-and-line citation in this item was re-read rather than trusted, and all of them resolve exactly; **all six code items are unstarted.** The verification table is in `DECISIONS_LOG.md` at 11:35. This follows the rule adopted at 08:57, when an uncited analysis was found to contain four false claims: a recorded finding is not a verified one.
+
+   **Q1 is why this phase is small.** Snap-on-crossing means no window is ever in flight across the seam, so the per-output animation driver never needs unifying and T-2 is a verification rather than a change. Had Q1 gone the other way, Phase 96 would have been a rewrite of the animation driver that still could not have removed the 60.026/60.000 Hz beat.
+
+   **What no fix can remove, recorded so it is never re-investigated:** a pointer drag of a *spilling* window will always show a boundary step bounded by one frame of travel, because the two panels flip independently. Under the Q5 default it is visible only while the button is held.
 
 -21. **PHASE 95 P-1 -- DELIVERED 2026-08-29 10:21. Compiled and linked; NOT run. Everything else in item -20 is unchanged and still stands.**
 

@@ -165,12 +165,90 @@ raise_view(struct hikari_view *view)
   }
 }
 
+/* [COMMENT] Function purpose: Decide whether this view may be painted outside
+the screen it belongs to right now.
+
+Two inputs, and the second is the reason this is not simply a configuration
+read. `ui { spill }` states the policy, but DRAG -- the default -- also depends
+on whether this particular view is the one under the pointer, because the
+overhang it permits is drag feedback and only the dragged window is dragging.
+Move and resize mode both act on the focus view, so that is the test.
+
+A floating view is exempt under DRAG, which is the ruling that keeps a window
+where the user dropped it: the user positioned it by hand and moving it back or
+cropping it would overrule them. A tiled view was positioned by the compositor,
+so cropping it takes nothing away. NEVER overrides that exemption -- a user who
+asks for no spill at all means floating windows too. */
+static bool
+may_spill(struct hikari_view *view)
+{
+  switch (hikari_configuration->spill) {
+    case HIKARI_SPILL_ALWAYS:
+      return true;
+
+    case HIKARI_SPILL_NEVER:
+      return false;
+
+    case HIKARI_SPILL_DRAG:
+      if (hikari_view_is_floating(view)) {
+        return true;
+      }
+
+      return (hikari_server_in_move_mode() ||
+                 hikari_server_in_resize_mode()) &&
+             hikari_view_is_focus_view(view);
+  }
+
+  return true;
+}
+
+/* [COMMENT] Function purpose: Crop the view to its own screen, or lift the crop.
+
+The clip box is expressed in the view's CONTENT-LOCAL space -- the coordinate
+space wlr_scene_subsurface_tree_set_clip() documents, in which the content
+origin is (0, 0) and the border rects sit at negative coordinates. The view's
+geometry is output-local and the screen is the box (0, 0, output width, output
+height) in that same space, so translating the screen by the negated geometry
+origin converts it. A view sitting entirely within its screen yields a box that
+contains it completely, which is a no-op rather than a special case. */
+static void
+refresh_spill_clip(struct hikari_view *view)
+{
+  if (view->scene_node == NULL || view->output == NULL ||
+      hikari_configuration == NULL) {
+    return;
+  }
+
+  if (may_spill(view)) {
+    wlr_scene_subsurface_tree_set_clip(view->scene_node, NULL);
+    hikari_border_clip(&view->border, NULL);
+    return;
+  }
+
+  struct wlr_box *geometry = hikari_view_geometry(view);
+
+  struct wlr_box clip = { .x = -geometry->x,
+    .y = -geometry->y,
+    .width = view->output->geometry.width,
+    .height = view->output->geometry.height };
+
+  wlr_scene_subsurface_tree_set_clip(view->scene_node, &clip);
+  hikari_border_clip(&view->border, &clip);
+}
+
 static void
 refresh_border_geometry(struct hikari_view *view)
 {
   assert(view != NULL);
   hikari_border_refresh_geometry(&view->border, view->current_geometry);
   hikari_indicator_frame_refresh_geometry(&view->indicator_frame, view);
+
+  /* [COMMENT] Action purpose: After the border rects have been laid out at
+  their full extent, never before -- the crop is applied on top of that layout
+  and hikari_border_refresh_geometry() would otherwise undo it. This is the one
+  funnel every geometry change in this file reaches, which is why the clip is
+  refreshed here rather than at each of the callers. */
+  refresh_spill_clip(view);
 }
 
 static inline void
@@ -2188,8 +2266,19 @@ hikari_view_evacuate(struct hikari_view *view, struct hikari_sheet *sheet)
   any meaningful sense. */
   unshadow_fullscreen(view);
 
+  /* [COMMENT] Action purpose: The same output-local animation state that
+  migrate_view() has to settle, for the same reason and in the same order --
+  cancel against the outgoing output, re-initialise against the incoming one.
+
+  Evacuation runs from hikari_output_fini(), so the outgoing output is being
+  torn down: leaving an animation active here would also leave the tick writing
+  to a scene node on behalf of an output that is going away. */
+  hikari_animation_cancel(view);
+
   view->output = sheet->workspace->output;
   view->sheet = sheet;
+
+  hikari_animation_init(&view->animation);
 
   /* Action purpose: Unconditionally move the view's list links to the new
   sheet and output before evaluating visibility. If the view is hidden, its
@@ -2702,6 +2791,14 @@ hikari_view_commit_pending_operation(
 }
 
 void
+hikari_view_refresh_spill_clip(struct hikari_view *view)
+{
+  assert(view != NULL);
+
+  refresh_spill_clip(view);
+}
+
+void
 hikari_view_activate(struct hikari_view *view, bool active)
 {
   assert(view != NULL);
@@ -2728,9 +2825,28 @@ migrate_view(struct hikari_view *view, struct hikari_sheet *sheet, bool center)
 {
   assert(hikari_view_is_hidden(view));
 
+  /* [COMMENT] Action purpose: Finish any in-flight motion BEFORE the output
+  changes, and clear the interpolation state immediately after.
+
+  The order is the whole point and reversing it reproduces the defect this
+  guards against. The animation's from_/to_/drawn_ coordinates are OUTPUT-LOCAL
+  (see include/hikari/animation.h), and both the tick and the cancel place the
+  node at those coordinates plus view->output->geometry -- so a cancel issued
+  after the reassignment would add the INCOMING output's origin to coordinates
+  measured against the outgoing one. A window at eDP-1-local x=1911 crossing to
+  DP-3 would be placed at layout x 3831, the far edge of the external monitor.
+
+  Cancelling first settles the node on the screen it is leaving, where its
+  coordinates are still meaningful. Re-initialising after clears `placed`, which
+  makes may_animate() false for the next move, so the arrival is instant rather
+  than interpolated across the seam -- a window is never in flight over the
+  boundary between two independently flipping panels. */
+  hikari_animation_cancel(view);
+
   view->output = sheet->workspace->output;
   view->sheet = sheet;
 
+  hikari_animation_init(&view->animation);
 
   move_to_top(view);
 
@@ -2746,6 +2862,11 @@ hikari_view_migrate(struct hikari_view *view,
 {
   struct hikari_output *output = sheet->workspace->output;
   struct wlr_box *view_geometry = hikari_view_geometry(view);
+
+  /* [COMMENT] Action purpose: Captured before migrate_view() reassigns
+  view->sheet, because the sheet being left behind is the one that has to close
+  the hole and there is no way back to it afterwards. */
+  struct hikari_sheet *source_sheet = view->sheet;
 
   hikari_indicator_position(&hikari_server.indicator, view);
   hikari_view_damage_whole(view);
@@ -2772,6 +2893,37 @@ hikari_view_migrate(struct hikari_view *view,
 
   if (hikari_view_is_hidden(view)) {
     hikari_view_show(view);
+  }
+
+  /* [COMMENT] Action purpose: Re-tile both ends of the crossing. A migrating
+  window leaves a hole behind it and arrives on top of an arrangement it is not
+  part of, and until now neither sheet was told -- hikari_reflow_schedule() was
+  reachable from map, unmap, sheet display and the layout-change handler, and
+  from nothing on this path.
+
+  Both requests are deferred and idempotent, and hikari_reflow_schedule() gates
+  itself on `layout { auto }`, so this is inert for a user who has not turned
+  automatic tiling on.
+
+  A floating window is unaffected by either call, which is what makes it stay
+  where it was dropped: restack folds in only views that are tileable, and
+  hikari_view_is_tileable() is false for a floating one. So Q6 holds without a
+  test for it here, and a tiled window folds into the destination layout through
+  the same `layout { insert }` preference the manual restack bindings use --
+  rather than arriving floating on top of it, which is what queue_reset()'s tile
+  detach leaves behind on its own. */
+  if (source_sheet != sheet) {
+    /* [COMMENT] Action purpose: The source is gated on `reflow-on-close`
+    separately, exactly as the unmap path gates it. A window leaving a sheet is
+    the same event to the survivors whether it was closed or moved away, and
+    folding a new window in is a different preference from moving every window
+    that stayed. */
+    if (hikari_configuration != NULL &&
+        hikari_configuration->layout_policy.on_close) {
+      hikari_reflow_schedule(source_sheet);
+    }
+
+    hikari_reflow_schedule(sheet);
   }
 }
 
