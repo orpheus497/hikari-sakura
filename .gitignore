@@ -13,6 +13,10 @@ wlr-layer-shell-unstable-v1-protocol.h
 # Core dumps
 *.core
 
+# Agent process docs: machine-specific development notes, not product code.
+# Kept on disk for the AGENTS.md workflow, deliberately not published.
+.devdocs/
+
 # IDE/tooling
 hikari.log
 wlroots-0.20.0/
