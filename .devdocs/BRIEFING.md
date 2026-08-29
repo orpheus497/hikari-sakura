@@ -1,8 +1,27 @@
 # Hikari Project Briefing
 
-*Last Updated:* 2026-08-29 11:35
+*Last Updated:* 2026-08-29 16:46
 
 ## Current Status
+
+- **Phase:** Phase 96 **Cycle 2** (**COMPLETE 2026-08-29 16:49 — running on hardware, all six verifications passed, R-3 discharged. Documentation moved with the behaviour.**)
+- **User, verbatim:** *"everything seems to be working so far after reinstall and reboot"* — recorded as written, per the Phase 91 precedent, rather than as "tests pass".
+
+### Where the cycle stands, in one paragraph
+
+**The reported defect is gone and the compositor is stable across a reboot, which closes the cycle's largest risk** — `track_pending_origin()` sits on the funnel every move in `src/view.c` converges on, and the damage fan-out is reached by every damage path in the tree, so a no-regression session over real use is meaningful evidence about both. **V-3 and V-4 were then confirmed separately by the user at 16:49** — the two checks that isolate T-13 and T-10 respectively, and the ones ordinary use does not force. **Both halves of the reported defect now have direct evidence rather than inference. V-6 passed too, which discharges R-3** — M-V2 was provisional and fell due here because this cycle rewrote `move_mode.c` again. **All six verifications pass and the cycle is closed.**
+
+**Documentation moved with the behaviour, and only where the behaviour made it false.** Ruled by R-4's reasoning — a documentation half is not deferrable to Phase 102 when prose becomes false the moment behaviour changes. **This was not a Phase 102 pass; D-2/P-9's full `OUTPUTS` rewrite remains Phase 102's, untouched and unclaimed.** Three edits to `share/man/man1/hikari.md`: **LAYOUT POLICY `auto`**, whose deferral paragraph enumerated exactly when a re-tile is held or dropped and which **T-11 made incomplete rather than merely thin**; **`view-move-*`**, where the ability to move a view to another output at all was undocumented and **had been true far longer than this cycle**; and a new **OUTPUTS** subsection stating T-12's rule — the top left corner decides, for pointer and keyboard alike, so the two agree — with what happens on arrival and **T-7a's dead band**. Converted with `pandoc` and **both new passages rendered through `nroff -man` and read back**, per the Phase 93 standard. Only `hikari.md` is tracked; `hikari.1` is generated and `.gitignore`'d, confirmed with `git ls-files` and `git check-ignore` rather than assumed.
+
+**Nothing was documented that has no user-facing surface.** T-10, T-13 and T-15a are bug fixes — a window that no longer snaps back and a seam that no longer tears are the absence of defects, not features — and **T-13's fan-out is invisible by design**, changing when a frame is scheduled and never what is drawn.
+
+- **Blockers:** none.
+- **Still open and unchanged:** the **12:07 crash report** (dragging a floating window larger than the destination screen) was addressed by a mechanism that fit rather than a confirmed diagnosis; **nothing in this cycle bears on it** and it should be re-tested with V-3 and V-4. The **pointer warp at the end of every drag** — move mode's `cancel()` ends with `hikari_view_center_cursor()` — remains pre-existing, untouched and unruled.
+- **Nothing installed, built in tree, tagged or versioned by this session. No `sudo`, no `git`.**
+- **Next action is the user's:** **Phase 97 as programmed** — tiling manipulation (M-3) and send-to-screen (P-5), which builds on `hikari_server_migrate_focus_view()`. The **12:07 crash** is the one thing worth re-testing opportunistically; nothing in this cycle bears on it.
+
+---
+## Previous Status
 
 - **Phase:** Phase 96 (**PLANNED AND FULLY RULED — RE-VERIFIED AGAINST THE TREE. NOTHING IMPLEMENTED, awaiting approval.**)
 - **Twelve rulings taken; NO open questions remain.** **Q11 is ruled** — clip tiled windows only, never a floating one, and T-6c's always-spill key overrides — which **unblocks T-6** and puts it in this cycle. **R-4 is new and ruled**: change the shipped `layout { auto }` default to `true`.
