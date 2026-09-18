@@ -194,14 +194,24 @@ grid_layout(struct wlr_box *frame,
     int views_height = frame->height - border * row_gaps - gaps_height;
     int views_width = frame->width - border * col_gaps - gaps_width;
 
+    /* A border/gap combination large relative to the output can drive
+    these negative; hikari_view_tile() and everything it queues to
+    wlroots assumes a positive size. Clamped to the cell count rather
+    than to 1, so each cell's share of the division below is still at
+    least 1. */
+    if (views_width < nr_of_cols) {
+      views_width = nr_of_cols;
+    }
+    if (views_height < nr_of_rows) {
+      views_height = nr_of_rows;
+    }
+
     int width = views_width / nr_of_cols;
     int height = views_height / nr_of_rows;
 
-    int rest_width =
-        frame->width - border * col_gaps - gaps_width - width * nr_of_cols;
+    int rest_width = views_width - width * nr_of_cols;
 
-    int rest_height =
-        frame->height - border * row_gaps - gaps_height - height * nr_of_rows;
+    int rest_height = views_height - height * nr_of_rows;
 
     struct wlr_box geometry = { .y = frame->y, .x = frame->x };
 
@@ -249,6 +259,12 @@ grid_layout(struct wlr_box *frame,
     LAYOUT_VIEWS(nr_of_views, first, frame, center)                            \
     {                                                                          \
       int views_width = frame->width - border * gaps - gaps_##width;           \
+                                                                               \
+      /* See grid_layout()'s matching clamp. */                               \
+      if (views_width < nr_of_views) {                                        \
+        views_width = nr_of_views;                                            \
+      }                                                                       \
+                                                                               \
       int width = views_width / nr_of_views;                                   \
       int rest = views_width - width * nr_of_views;                            \
                                                                                \
