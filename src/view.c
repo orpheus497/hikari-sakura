@@ -1918,9 +1918,25 @@ hikari_view_tile(
   differ (sheet 0 tiling in the background while another sheet is shown). */
   struct hikari_layout *layout = view->sheet->layout;
 
+  /* Every layout function (grid/queue/stack in sheet.c, the recursive
+  splits in split.c) ultimately hands its computed box to this one
+  function, so this is the one place a clamp reaches all of them,
+  including split.c's own arithmetic, which has no clamp of its own, and
+  the single-view shortcut in sheet.c's LAYOUT_VIEWS macro, which bypasses
+  grid_layout()'s clamp entirely. A copy is clamped, not *geometry itself,
+  so a caller that keeps using its own box afterwards (grid_layout()'s
+  loop does, to advance to the next cell) isn't affected by it. */
+  struct wlr_box tile_geometry = *geometry;
+  if (tile_geometry.width < 1) {
+    tile_geometry.width = 1;
+  }
+  if (tile_geometry.height < 1) {
+    tile_geometry.height = 1;
+  }
+
   struct hikari_tile *tile = hikari_malloc(sizeof(struct hikari_tile));
   assert(tile != NULL);
-  hikari_tile_init(tile, view, layout, geometry, geometry);
+  hikari_tile_init(tile, view, layout, &tile_geometry, &tile_geometry);
 
   queue_tile(view, layout, tile, center);
 
