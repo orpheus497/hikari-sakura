@@ -126,7 +126,8 @@ the right answer there. */
 static void
 warp_to_cursor_hint(struct wlr_pointer_constraint_v1 *wlr_constraint)
 {
-  if (!wlr_constraint->current.cursor_hint.enabled) {
+  if (!(wlr_constraint->current.committed &
+          WLR_POINTER_CONSTRAINT_V1_STATE_CURSOR_HINT)) {
     return;
   }
 
@@ -258,8 +259,9 @@ deactivate(bool honour_hint)
 
   struct wlr_pointer_constraint_v1 *wlr_constraint = constraint->wlr_constraint;
 
-  bool warp_to_hint =
-      honour_hint && wlr_constraint->current.cursor_hint.enabled;
+  bool warp_to_hint = honour_hint &&
+      (wlr_constraint->current.committed &
+          WLR_POINTER_CONSTRAINT_V1_STATE_CURSOR_HINT);
   double hint_x = wlr_constraint->current.cursor_hint.x;
   double hint_y = wlr_constraint->current.cursor_hint.y;
   struct wlr_surface *surface = wlr_constraint->surface;

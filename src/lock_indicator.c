@@ -10,6 +10,7 @@
 #include <wlr/render/drm_format_set.h>
 #include <wlr/render/wlr_renderer.h>
 #include <wlr/types/wlr_scene.h>
+#include <wlr/util/log.h>
 
 #include <hikari/configuration.h>
 #include <hikari/geometry.h>

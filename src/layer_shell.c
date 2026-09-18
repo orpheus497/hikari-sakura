@@ -663,11 +663,12 @@ damage_popup(struct hikari_layer_popup *layer_popup, bool whole)
   struct wlr_xdg_popup *popup = layer_popup->popup;
   struct wlr_surface *surface = popup->base->surface;
 
-  /* [COMMENT] Action purpose: Compute the popup origin relative to the parent
-  surface's window geometry. wlroots 0.20 moved the flat wlr_xdg_popup.geometry
-  field into the popup state struct (popup->current.geometry). */
-  int ox = popup->current.geometry.x - popup->base->geometry.x;
-  int oy = popup->current.geometry.y - popup->base->geometry.y;
+  /* Both the popup's own offset and its base xdg_surface's window geometry
+  live in the current/pending state struct, not as a flat field on either
+  type -- wlr_xdg_popup_state.geometry and wlr_xdg_surface_state.geometry
+  respectively. */
+  int ox = popup->current.geometry.x - popup->base->current.geometry.x;
+  int oy = popup->current.geometry.y - popup->base->current.geometry.y;
 
   struct hikari_layer *layer;
   struct hikari_layer_popup *current = layer_popup;
@@ -693,12 +694,12 @@ damage_popup(struct hikari_layer_popup *layer_popup, bool whole)
 
       case HIKARI_LAYER_NODE_TYPE_POPUP:
         current = current->parent.node.popup;
-        /* [COMMENT] Action purpose: Accumulate nested popup offsets via the
-        0.20 popup-state geometry field. */
+        /* Accumulate nested popup offsets the same way: both operands come
+        from their respective current state struct, not a flat field. */
         ox += current->popup->current.geometry.x -
-              current->popup->base->geometry.x;
+              current->popup->base->current.geometry.x;
         oy += current->popup->current.geometry.y -
-              current->popup->base->geometry.y;
+              current->popup->base->current.geometry.y;
         break;
     }
   }

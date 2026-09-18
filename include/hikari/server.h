@@ -144,6 +144,10 @@ struct hikari_server {
   struct wl_listener new_layer_shell_surface;
 #endif
 
+#ifdef HAVE_GAMMACONTROL
+  struct wl_listener gamma_control_set_gamma;
+#endif
+
 #ifdef HAVE_XWAYLAND
   struct wl_listener new_xwayland_surface;
   struct wl_listener xwayland_ready;

@@ -1274,6 +1274,36 @@ setup_layer_shell(struct hikari_server *server)
 }
 #endif
 
+#ifdef HAVE_GAMMACONTROL
+// Function purpose: Apply (or, for a NULL control, reset to default) a
+// client-requested gamma table to the output it targets, and tell the
+// client if that failed.
+static void
+gamma_control_set_gamma_handler(struct wl_listener *listener, void *data)
+{
+  struct wlr_gamma_control_manager_v1_set_gamma_event *event = data;
+  struct wlr_output *wlr_output = event->output;
+
+  struct wlr_output_state state;
+  wlr_output_state_init(&state);
+
+  bool ok = wlr_gamma_control_v1_apply(event->control, &state);
+
+  if (ok) {
+    ok = wlr_output_commit_state(wlr_output, &state);
+  }
+
+  wlr_output_state_finish(&state);
+
+  if (!ok) {
+    wlr_gamma_control_v1_send_failed_and_destroy(event->control);
+    return;
+  }
+
+  wlr_output_schedule_frame(wlr_output);
+}
+#endif
+
 struct hikari_server hikari_server;
 
 static void
@@ -1722,7 +1752,30 @@ server_init(struct hikari_server *server, char *config_path)
   hikari_output_management_init(server);
 
 #ifdef HAVE_GAMMACONTROL
-  wlr_gamma_control_manager_v1_create(server->display);
+  struct wlr_gamma_control_manager_v1 *gamma_control_manager =
+      wlr_gamma_control_manager_v1_create(server->display);
+
+  /* Verified against real wlroots 0.17.1 source (types/wlr_gamma_control_v1.c
+  and the installed include/wlr/types/wlr_gamma_control_v1.h) after this
+  session's original assumption -- that this protocol needed a
+  compositor-side listener at all -- was found to rest on pattern-matching
+  against a neighboring manager rather than on checked fact. As of 0.17,
+  the manager is NOT self-contained: it emits events.set_gamma (data:
+  struct wlr_gamma_control_manager_v1_set_gamma_event {output, control})
+  whenever a client requests a new gamma table OR releases its gamma
+  control (control == NULL in that second case, meaning "reset this
+  output to default" -- wlr_gamma_control_v1_apply() already handles a
+  NULL control by loading a null LUT, so no special-casing is needed
+  here). Without this listener, wlr_gamma_control_manager_v1_create()
+  alone advertises the protocol and accepts requests, but never applies
+  any of them and never even replies failed -- exactly the "protocol
+  exists, does nothing" gap this was originally flagged for, just via a
+  different, now-verified mechanism than first assumed. */
+  if (gamma_control_manager != NULL) {
+    server->gamma_control_set_gamma.notify = gamma_control_set_gamma_handler;
+    wl_signal_add(&gamma_control_manager->events.set_gamma,
+        &server->gamma_control_set_gamma);
+  }
 #endif
 
 #ifdef HAVE_SCREENCOPY
