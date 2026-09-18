@@ -24,6 +24,16 @@ hikari_tile_init(struct hikari_tile *tile,
   {                                                                            \
     assert(!hikari_view_is_hidden(tile->view));                                \
                                                                                \
+    /* A tile whose view is mid-async-operation (queue_reset() and            \
+    similar) can have hikari_tile_detach() clear tile->layout while the      \
+    view still points at this tile, reachable through callers -- such as    \
+    workspace.c's CYCLE_LAYOUT_VIEW -- whose own guard checks the view's     \
+    SHEET's layout, not this specific tile's attachment, and so does not    \
+    catch a tile detached from an otherwise still-populated layout. */      \
+    if (!hikari_tile_is_attached(tile)) {                                     \
+      return NULL;                                                            \
+    }                                                                        \
+                                                                               \
     struct wl_list *link = tile->layout_tiles.link;                            \
     struct hikari_tile *link##_tile;                                           \
     /* tile's OWN layout, not the currently-displayed sheet's -- sheet 0    \

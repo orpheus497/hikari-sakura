@@ -2,6 +2,7 @@
 
 #include <ctype.h>
 #include <errno.h>
+#include <limits.h>
 
 #include <ucl.h>
 
@@ -1870,8 +1871,10 @@ parse_border(
     return false;
   }
 
-  if (border < 0) {
-    fprintf(stderr, "configuration error: \"border\" must not be negative\n");
+  if (border < 0 || border > INT_MAX) {
+    fprintf(stderr,
+        "configuration error: \"border\" must be between 0 and %d\n",
+        INT_MAX);
     return false;
   }
 
@@ -1891,8 +1894,9 @@ parse_gap(
     return false;
   }
 
-  if (gap < 0) {
-    fprintf(stderr, "configuration error: \"gap\" must not be negative\n");
+  if (gap < 0 || gap > INT_MAX) {
+    fprintf(stderr,
+        "configuration error: \"gap\" must be between 0 and %d\n", INT_MAX);
     return false;
   }
 
