@@ -4,6 +4,8 @@
 
 #include <hikari/touch.h>
 
+#include <wlr/types/wlr_touch.h>
+
 #include <hikari/cursor.h>
 #include <hikari/memory.h>
 #include <hikari/server.h>
@@ -19,12 +21,13 @@ destroy_handler(struct wl_listener *listener, void *data)
   touch_up/touch_cancel ever delivered for whatever point it was driving.
   Without this, a primary touch latched to this device would stay latched
   forever, permanently disabling touch-driven focus/move/resize compositor
-  -wide, since nothing else would ever clear it. Touch IDs aren't
-  correlated to a specific device here, so this can't distinguish "this
-  device's touch" from "some other device's touch" -- it releases whatever
-  is currently latched, trading a rare, harmless early release of an
-  unrelated touch for eliminating a permanent stuck state. */
-  hikari_cursor_release_primary_touch(&hikari_server.cursor);
+  -wide, since nothing else would ever clear it. Scoped to this device via
+  wlr_touch_from_input_device() -- destroy fires before the device is
+  actually freed, so the cast back to its containing wlr_touch is still
+  valid here -- so unplugging one touchscreen never releases a different,
+  still-active one's latched touch. */
+  hikari_cursor_release_primary_touch(
+      &hikari_server.cursor, wlr_touch_from_input_device(touch->device));
 
   hikari_touch_fini(touch);
   hikari_free(touch);

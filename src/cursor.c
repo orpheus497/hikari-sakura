@@ -179,9 +179,10 @@ release_primary_touch(struct hikari_cursor *cursor, uint32_t time_msec)
 }
 
 void
-hikari_cursor_release_primary_touch(struct hikari_cursor *cursor)
+hikari_cursor_release_primary_touch(
+    struct hikari_cursor *cursor, struct wlr_touch *touch)
 {
-  if (cursor->has_primary_touch) {
+  if (cursor->has_primary_touch && cursor->primary_touch_device == touch) {
     release_primary_touch(cursor, 0);
   }
 }
@@ -218,6 +219,7 @@ cursor_touch_down_handler(struct wl_listener *listener, void *data)
   if (!cursor->has_primary_touch) {
     cursor->has_primary_touch = true;
     cursor->primary_touch_id = event->touch_id;
+    cursor->primary_touch_device = event->touch;
 
     wlr_cursor_warp(cursor->wlr_cursor, &event->touch->base, lx, ly);
 

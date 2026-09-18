@@ -377,45 +377,46 @@ locker_result_handler(int fd, uint32_t mask, void *data)
   struct hikari_unlock_reply reply = { 0 };
   bool got_result = false;
 
-  // Action purpose: Read the authentication reply from the unlocker pipe
-  // when data is available, distinguishing a complete reply from read
-  // failure or EOF. A single read() for the whole fixed-size reply relies
-  // on the same pipe-atomicity guarantee the previous single-byte read
-  // did (the reply is written in one write() call on the other end, far
-  // under PIPE_BUF) -- a retry-loop accumulating partial reads has no
-  // real read to accumulate here, and would risk blocking this
-  // event-loop callback on a read() for bytes that are not coming.
-  if (mask & WL_EVENT_READABLE) {
+  bool hangup = (mask & WL_EVENT_HANGUP) != 0;
+
+  // Action purpose: The helper is long-lived across attempts (it loops
+  // internally on a wrong password, only exiting on success or a fatal
+  // error), so a wrong attempt's reply and a subsequent correct attempt's
+  // reply can both be sitting in the pipe's buffer by the time this fires
+  // -- e.g. the helper writes a false reply for attempt A, immediately
+  // reads and authenticates attempt B successfully, and exits, all before
+  // the event loop dispatches this callback. That delivers READABLE and
+  // HANGUP together with TWO replies queued. A single read() would only
+  // ever see the stale one (A) and misreport the correct attempt (B) as
+  // failed, with B's actual reply never read. On a plain READABLE (no
+  // hangup), exactly one reply is guaranteed available and reading more
+  // would block on a blocking pipe with nothing further coming, so only
+  // hangup drains: once the helper is gone, every reply it will ever send
+  // is already in the buffer, and the closed write end turns the last
+  // read into EOF instead of a block.
+  for (;;) {
+    struct hikari_unlock_reply candidate;
     ssize_t n;
     do {
-      n = read(fd, &reply, sizeof(reply));
+      n = read(fd, &candidate, sizeof(candidate));
     } while (n == -1 && errno == EINTR);
 
-    if (n == (ssize_t)sizeof(reply)) {
+    if (n != (ssize_t)sizeof(candidate)) {
+      break;
+    }
+
+    if (candidate.seq == mode->next_seq) {
+      reply = candidate;
       got_result = true;
+    }
+
+    if (!hangup) {
+      break;
     }
   }
 
-  bool hangup = (mask & WL_EVENT_HANGUP) != 0;
-
-  // Action purpose: A reply whose seq doesn't match the most recently
-  // submitted attempt is a stale leftover from an earlier attempt that
-  // was superseded before its own reply was ever read (see
-  // submit_password() and the wire-format comment above
-  // hikari_unlock_request). Discard it without touching the indicator or
-  // the child/pipe state: the helper is still alive and still owes a
-  // reply for the CURRENT attempt, which arrives in a later firing of
-  // this same handler -- the event loop fires again immediately, since
-  // the pipe still has that reply buffered right behind the stale one. A
-  // hangup arriving alongside a stale reply is different: the child is
-  // gone regardless of what its last message said, so that case still
-  // falls through to the terminal cleanup below, exactly like any other
-  // hangup with no usable result.
-  if (got_result && reply.seq != mode->next_seq) {
-    if (!hangup) {
-      return 0;
-    }
-    got_result = false;
+  if (!got_result && !hangup) {
+    return 0;
   }
 
   bool success = got_result && reply.success;

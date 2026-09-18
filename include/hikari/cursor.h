@@ -8,6 +8,7 @@
 #include <hikari/gesture_config.h>
 
 struct hikari_output;
+struct wlr_touch;
 
 // [COMMENT] Action purpose: bound generously above any realistic
 // human-driven swipe/pinch (libinput reports these at pointer-frame
@@ -68,8 +69,11 @@ struct hikari_cursor {
   // [COMMENT] Action purpose: tracks which touch point (if any) is driving
   // hikari's own focus/raise/move/resize bookkeeping, so additional
   // simultaneous fingers stay pure client-forwarded multi-touch input.
+  // primary_touch_device is which physical device that point came from,
+  // so a different device being unplugged doesn't release it.
   bool has_primary_touch;
   int32_t primary_touch_id;
+  struct wlr_touch *primary_touch_device;
 
   struct hikari_binding_group bindings[HIKARI_BINDING_GROUP_MASK];
 };
@@ -91,13 +95,18 @@ hikari_cursor_activate(struct hikari_cursor *cursor);
 void
 hikari_cursor_deactivate(struct hikari_cursor *cursor);
 
-/* Release a still-latched primary touch unconditionally. For callers
-outside this file that cannot supply the touch_id a real touch_up/
-touch_cancel event carries -- specifically, a touch device being destroyed
-while it holds the primary touch, which otherwise never generates the
-touch_up/touch_cancel this state machine expects to clear it. */
+/* Release the primary touch if, and only if, it is currently latched to
+the given device. For callers outside this file that cannot supply the
+touch_id a real touch_up/touch_cancel event carries -- specifically, a
+touch device being destroyed while it holds the primary touch, which
+otherwise never generates the touch_up/touch_cancel this state machine
+expects to clear it. The device check matters because more than one
+touch device can drive this cursor: without it, unplugging an unrelated,
+idle touch device would release a different device's still-active
+primary touch mid-gesture. */
 void
-hikari_cursor_release_primary_touch(struct hikari_cursor *cursor);
+hikari_cursor_release_primary_touch(
+    struct hikari_cursor *cursor, struct wlr_touch *touch);
 
 void
 hikari_cursor_set_image(struct hikari_cursor *cursor, const char *path);
