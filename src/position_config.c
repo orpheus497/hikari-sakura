@@ -117,7 +117,7 @@ parse_position(const ucl_object_t *position_obj, int *x, int *y)
 
   if (!parsed_x) {
     fprintf(stderr,
-        "configuration error: missing \"x\"-coordinate in \"position\2\n");
+        "configuration error: missing \"x\"-coordinate in \"position\"\n");
     goto done;
   }
 

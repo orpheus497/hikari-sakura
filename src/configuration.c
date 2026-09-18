@@ -1870,6 +1870,19 @@ parse_border(
     return false;
   }
 
+  /* The upper bound here is not a realistic display size -- it exists so
+  that border.c's and sheet.c's own arithmetic on this value (doubling it
+  for a border's total inflation, multiplying it against a row/column
+  count for total gap space) stays well inside int range no matter how
+  many rows, columns, or views a layout ends up with. Bounding the input
+  once here is far simpler than auditing and widening every downstream
+  site that multiplies it. */
+  if (border < 0 || border > 100000) {
+    fprintf(stderr, "configuration error: \"border\" must be between 0 and "
+                     "100000\n");
+    return false;
+  }
+
   configuration->border = border;
 
   return true;
@@ -1883,6 +1896,15 @@ parse_gap(
 
   if (!ucl_object_toint_safe(gap_obj, &gap)) {
     fprintf(stderr, "configuration error: expected integer for \"gap\"\n");
+    return false;
+  }
+
+  /* Same reasoning as parse_border's bound -- protects sheet.c's
+  gap * row_gaps / gap * col_gaps arithmetic from overflowing, not a
+  realistic gap size. */
+  if (gap < 0 || gap > 100000) {
+    fprintf(
+        stderr, "configuration error: \"gap\" must be between 0 and 100000\n");
     return false;
   }
 
@@ -2338,6 +2360,10 @@ parse_ui(struct hikari_configuration *configuration, const ucl_object_t *ui_obj)
       if (!parse_bar(&configuration->bar_config, cur)) {
         goto done;
       }
+    } else {
+      fprintf(
+          stderr, "configuration error: unknown key \"%s\" for \"ui\"\n", key);
+      goto done;
     }
   }
 
@@ -2708,6 +2734,7 @@ hikari_configuration_init(struct hikari_configuration *configuration)
 void
 hikari_configuration_fini(struct hikari_configuration *configuration)
 {
+  hikari_font_fini(&configuration->font);
   hikari_lock_config_fini(&configuration->lock);
   hikari_bar_config_fini(&configuration->bar_config);
 

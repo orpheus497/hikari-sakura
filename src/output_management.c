@@ -232,13 +232,29 @@ out:
       continue;
     }
 
-    wlr_output_layout_add(hikari_server.output_layout,
-        config_head->state.output,
-        config_head->state.x,
-        config_head->state.y);
+    if (wlr_output_layout_add(hikari_server.output_layout,
+            config_head->state.output,
+            config_head->state.x,
+            config_head->state.y) == NULL) {
+      fprintf(stderr,
+          "error: failed to position output \"%s\" at %d,%d; its enabled/"
+          "mode changes from this configuration were still applied\n",
+          config_head->state.output->name,
+          config_head->state.x,
+          config_head->state.y);
+
+      /* Action purpose: The client's request asked for this position, and
+      it did not happen -- reporting success here would tell a well-behaved
+      client (kanshi, wdisplays) that the output is where it asked for it
+      to be when it is not. Reporting failure does not undo the mode/
+      enablement changes already committed above: this protocol's "failed"
+      means "not everything you asked for took effect", not "roll back
+      what did". */
+      success = false;
+    }
   }
 
-  return true;
+  return success;
 }
 
 /* Function purpose: Shared body of both requests.

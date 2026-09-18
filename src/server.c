@@ -838,6 +838,15 @@ server_decoration_handler(struct wl_listener *listener, void *data)
     return;
   }
 
+  if (xdg_view->view.decoration.wlr_decoration != NULL) {
+    /* A second server-decoration create request for a surface that already
+    has one registered. Re-adding these listeners would splice them into
+    the new wlr_decoration's signal lists while they are still linked into
+    the first one's, corrupting both lists. Ignore the repeat; the surface
+    keeps whatever decoration mode the first registration negotiated. */
+    return;
+  }
+
   wl_signal_add(&wlr_decoration->events.mode, &xdg_view->view.decoration.mode);
   xdg_view->view.decoration.mode.notify = server_decoration_mode_handler;
 
@@ -898,20 +907,13 @@ setup_decorations(struct hikari_server *server)
 static void
 start_drag_handler(struct wl_listener *listener, void *data)
 {
-  struct wlr_surface *surface;
-  struct hikari_workspace *workspace;
-  double sx, sy;
-
-  struct hikari_node *node = node_at(hikari_server.cursor.wlr_cursor->x,
-      hikari_server.cursor.wlr_cursor->y,
-      &surface,
-      &workspace,
-      &sx,
-      &sy);
-
-  if (node != NULL) {
-    hikari_dnd_mode_enter();
-  }
+  /* wlr_seat_start_pointer_drag() has already started a real wlroots-level
+  drag grab by the time this fires, unconditionally -- there is no valid
+  choice here other than to always follow it into dnd_mode, regardless of
+  what happens to be under the cursor right now. Not doing so left hikari's
+  own mode state machine running whatever mode was previously active
+  concurrently with a live protocol drag. */
+  hikari_dnd_mode_enter();
 }
 
 static void
@@ -1269,6 +1271,36 @@ setup_layer_shell(struct hikari_server *server)
   wl_signal_add(&server->layer_shell->events.new_surface,
       &server->new_layer_shell_surface);
   server->new_layer_shell_surface.notify = new_layer_shell_surface_handler;
+}
+#endif
+
+#ifdef HAVE_GAMMACONTROL
+// Function purpose: Apply (or, for a NULL control, reset to default) a
+// client-requested gamma table to the output it targets, and tell the
+// client if that failed.
+static void
+gamma_control_set_gamma_handler(struct wl_listener *listener, void *data)
+{
+  struct wlr_gamma_control_manager_v1_set_gamma_event *event = data;
+  struct wlr_output *wlr_output = event->output;
+
+  struct wlr_output_state state;
+  wlr_output_state_init(&state);
+
+  bool ok = wlr_gamma_control_v1_apply(event->control, &state);
+
+  if (ok) {
+    ok = wlr_output_commit_state(wlr_output, &state);
+  }
+
+  wlr_output_state_finish(&state);
+
+  if (!ok) {
+    wlr_gamma_control_v1_send_failed_and_destroy(event->control);
+    return;
+  }
+
+  wlr_output_schedule_frame(wlr_output);
 }
 #endif
 
@@ -1720,7 +1752,30 @@ server_init(struct hikari_server *server, char *config_path)
   hikari_output_management_init(server);
 
 #ifdef HAVE_GAMMACONTROL
-  wlr_gamma_control_manager_v1_create(server->display);
+  struct wlr_gamma_control_manager_v1 *gamma_control_manager =
+      wlr_gamma_control_manager_v1_create(server->display);
+
+  /* Verified against real wlroots 0.17.1 source (types/wlr_gamma_control_v1.c
+  and the installed include/wlr/types/wlr_gamma_control_v1.h) after this
+  session's original assumption -- that this protocol needed a
+  compositor-side listener at all -- was found to rest on pattern-matching
+  against a neighboring manager rather than on checked fact. As of 0.17,
+  the manager is NOT self-contained: it emits events.set_gamma (data:
+  struct wlr_gamma_control_manager_v1_set_gamma_event {output, control})
+  whenever a client requests a new gamma table OR releases its gamma
+  control (control == NULL in that second case, meaning "reset this
+  output to default" -- wlr_gamma_control_v1_apply() already handles a
+  NULL control by loading a null LUT, so no special-casing is needed
+  here). Without this listener, wlr_gamma_control_manager_v1_create()
+  alone advertises the protocol and accepts requests, but never applies
+  any of them and never even replies failed -- exactly the "protocol
+  exists, does nothing" gap this was originally flagged for, just via a
+  different, now-verified mechanism than first assumed. */
+  if (gamma_control_manager != NULL) {
+    server->gamma_control_set_gamma.notify = gamma_control_set_gamma_handler;
+    wl_signal_add(&gamma_control_manager->events.set_gamma,
+        &server->gamma_control_set_gamma);
+  }
 #endif
 
 #ifdef HAVE_SCREENCOPY

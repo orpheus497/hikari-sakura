@@ -40,6 +40,37 @@ extern void explicit_bzero(void *, size_t);
 
 #define BUFFER_SIZE 1024
 
+/* Wire format for the password-submission pipe to hikari-unlocker. Must be
+kept byte-for-byte identical to the copy of these two structs in
+hikari_unlocker.c -- there is deliberately no shared header, so that
+hikari-unlocker's build stays independent of the rest of the tree (see the
+Makefile's dedicated, minimal build rule for it). Both ends are the same
+architecture and compiler (hikari-unlocker is forked directly from this
+process), so native struct layout is fine; this is local IPC framing, not
+a network protocol needing byte-order/alignment portability.
+
+Replaces the previous bare byte-in/byte-out protocol (a NUL-terminated
+password in, a single result byte out), which had no way to tell a stale
+result from a superseded earlier attempt apart from a fresh one for the
+password just submitted: submit_password() could write a second attempt
+before locker_result_handler() had consumed the first attempt's result,
+and whichever byte happened to be read next was treated as if it
+answered whatever was most recently submitted -- occasionally granting
+unlock based on a stale, unrelated result rather than the password the
+user had actually just typed. The `seq` field closes that: every reply is
+checked against the seq of the most recently submitted request, and
+anything else is a stale leftover from an earlier attempt and is
+discarded rather than acted on. */
+struct hikari_unlock_request {
+  uint64_t seq;
+  uint32_t password_len;
+};
+
+struct hikari_unlock_reply {
+  uint64_t seq;
+  uint8_t success;
+};
+
 // [COMMENT] Action purpose: Resolve the unlock helper through a compile-time
 // absolute path rather than the inherited PATH. hikari-unlocker is installed
 // setuid (mode 4555); resolving it via `/bin/sh -c "hikari-unlocker"` would let
@@ -343,47 +374,65 @@ static int
 locker_result_handler(int fd, uint32_t mask, void *data)
 {
   struct hikari_lock_mode *mode = data;
-  bool success = false;
+  struct hikari_unlock_reply reply = { 0 };
   bool got_result = false;
 
-  // [COMMENT] Action purpose: Read the authentication result boolean from the
-  // unlocker pipe when data is available, distinguishing a complete result from
-  // read failure or EOF.
-  if (mask & WL_EVENT_READABLE) {
+  bool hangup = (mask & WL_EVENT_HANGUP) != 0;
+
+  // Action purpose: The helper is long-lived across attempts (it loops
+  // internally on a wrong password, only exiting on success or a fatal
+  // error), so a wrong attempt's reply and a subsequent correct attempt's
+  // reply can both be sitting in the pipe's buffer by the time this fires
+  // -- e.g. the helper writes a false reply for attempt A, immediately
+  // reads and authenticates attempt B successfully, and exits, all before
+  // the event loop dispatches this callback. That delivers READABLE and
+  // HANGUP together with TWO replies queued. A single read() would only
+  // ever see the stale one (A) and misreport the correct attempt (B) as
+  // failed, with B's actual reply never read. On a plain READABLE (no
+  // hangup), exactly one reply is guaranteed available and reading more
+  // would block on a blocking pipe with nothing further coming, so only
+  // hangup drains: once the helper is gone, every reply it will ever send
+  // is already in the buffer, and the closed write end turns the last
+  // read into EOF instead of a block.
+  for (;;) {
+    struct hikari_unlock_reply candidate;
     ssize_t n;
     do {
-      n = read(fd, &success, sizeof(bool));
+      n = read(fd, &candidate, sizeof(candidate));
     } while (n == -1 && errno == EINTR);
 
-    if (n == (ssize_t)sizeof(bool)) {
-      // [COMMENT] Action purpose: A complete authentication result was read
-      // from the unlocker pipe. Mark as received so hangup does not override.
+    if (n != (ssize_t)sizeof(candidate)) {
+      break;
+    }
+
+    if (candidate.seq == mode->next_seq) {
+      reply = candidate;
       got_result = true;
-    } else {
-      // [COMMENT] Action purpose: Treat read failure, EOF, or incomplete read
-      // as authentication failure -- hikari-unlocker may have crashed.
-      success = false;
+    }
+
+    if (!hangup) {
+      break;
     }
   }
 
-  // [COMMENT] Action purpose: Handle pipe hangup when no readable result was
-  // obtained -- the unlocker exited or crashed without writing a result, so
-  // this is a terminal failure requiring child cleanup.
-  if ((mask & WL_EVENT_HANGUP) && !got_result) {
-    success = false;
+  if (!got_result && !hangup) {
+    return 0;
   }
 
-  // [COMMENT] Action purpose: Determine whether this result is terminal (the
-  // child has exited or will exit) or retryable (wrong password, child stays
-  // alive for the next attempt). Terminal conditions: success, read failure,
-  // or ANY hangup. WL_EVENT_READABLE and WL_EVENT_HANGUP can be delivered in
-  // the same callback when the child writes a false result and then exits; in
-  // that case got_result is true and success is false, so without the explicit
-  // hangup term this would be misclassified as retryable, leaving locker_pid
-  // unreaped and the pipe fds open on a dead child. The next password attempt
-  // would then write into a broken pipe. Retryable: a complete false result
-  // read while the helper is still alive.
-  bool terminal = success || !got_result || (mask & WL_EVENT_HANGUP);
+  bool success = got_result && reply.success;
+
+  // Action purpose: Determine whether this result is terminal (the child
+  // has exited or will exit) or retryable (wrong password, child stays
+  // alive for the next attempt). Terminal conditions: success, no usable
+  // result, or ANY hangup. WL_EVENT_READABLE and WL_EVENT_HANGUP can be
+  // delivered in the same callback when the child writes a false result
+  // and then exits; in that case got_result is true and success is
+  // false, so without the explicit hangup term this would be
+  // misclassified as retryable, leaving locker_pid unreaped and the pipe
+  // fds open on a dead child. The next password attempt would then write
+  // into a broken pipe. Retryable: a complete, current-attempt false
+  // result read while the helper is still alive.
+  bool terminal = success || !got_result || hangup;
 
   // [COMMENT] Action purpose: Remove the fd event source now that we have a
   // result. The source must be cleaned up before closing the pipe fds.
@@ -456,16 +505,35 @@ submit_password(void)
     }
   }
 
-  size_t password_length = strnlen(input_buffer, BUFFER_SIZE - 1) + 1;
+  size_t password_length = strnlen(input_buffer, BUFFER_SIZE - 1);
 
   hikari_lock_indicator_set_verify(mode->lock_indicator);
-  // [COMMENT] Action purpose: Write the full password to the unlocker pipe,
-  // advancing past each partial write and retrying on EINTR. On any other
-  // write failure the password never reaches the unlocker, which then writes
-  // no result -- locker_result_handler eventually fires with WL_EVENT_HANGUP
-  // and shows the deny indicator, so the attempt fails closed.
-  const char *buf = input_buffer;
-  size_t remaining = password_length;
+
+  // Action purpose: Advance the sequence before building the request, so
+  // this attempt's reply is the one locker_result_handler will now
+  // expect -- any reply still outstanding for a previous attempt is
+  // immediately stale from this point on and will be discarded rather
+  // than acted on, instead of being read as if it answered this attempt.
+  mode->next_seq++;
+
+  struct hikari_unlock_request request = {
+    .seq = mode->next_seq,
+    .password_len = (uint32_t)password_length,
+  };
+
+  unsigned char request_buf[sizeof(request) + BUFFER_SIZE];
+  memcpy(request_buf, &request, sizeof(request));
+  memcpy(request_buf + sizeof(request), input_buffer, password_length);
+  size_t request_buf_len = sizeof(request) + password_length;
+
+  // [COMMENT] Action purpose: Write the full framed request (header then
+  // password bytes) to the unlocker pipe, advancing past each partial
+  // write and retrying on EINTR. On any other write failure the request
+  // never reaches the unlocker, which then writes no reply --
+  // locker_result_handler eventually fires with WL_EVENT_HANGUP and shows
+  // the deny indicator, so the attempt fails closed.
+  const unsigned char *buf = request_buf;
+  size_t remaining = request_buf_len;
   while (remaining > 0) {
     ssize_t nw = write(locker_pipe[0][1], buf, remaining);
     if (nw == -1) {
@@ -479,6 +547,7 @@ submit_password(void)
     remaining -= (size_t)nw;
   }
   clear_buffer();
+  explicit_bzero(request_buf, sizeof(request_buf));
 
   // [COMMENT] Action purpose: Register the locker result pipe with the Wayland
   // event loop for non-blocking read. The locker_result_handler will fire when

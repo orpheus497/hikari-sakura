@@ -111,7 +111,7 @@ commit_handler(struct wl_listener *listener, void *data)
   assert(view->surface != NULL);
 
   if (hikari_view_was_updated(view, serial)) {
-    struct wlr_box new_geometry = surface->geometry;
+    struct wlr_box new_geometry = surface->current.geometry;
 
     switch (view->pending_operation.type) {
       case HIKARI_OPERATION_TYPE_TILE:
@@ -150,7 +150,7 @@ commit_handler(struct wl_listener *listener, void *data)
     struct hikari_output *output = view->output;
     bool visible = !hikari_view_is_hidden(view);
 
-    struct wlr_box new_geometry = surface->geometry;
+    struct wlr_box new_geometry = surface->current.geometry;
 
     /* [COMMENT] Action purpose: A fullscreen view's size is the compositor's,
     and this branch would hand it back to the client.
@@ -219,7 +219,7 @@ first_map(struct hikari_xdg_view *xdg_view)
   struct wlr_box *geometry = &xdg_view->view.geometry;
 
   if (xdg_surface->surface->mapped) {
-    *geometry = xdg_surface->geometry;
+    *geometry = xdg_surface->current.geometry;
     if (geometry->width <= 0 || geometry->height <= 0) {
       *geometry = (struct wlr_box){0, 0, 1, 1};
     }
@@ -252,12 +252,12 @@ surface_at(
 
   /* Action purpose: view->geometry tracks the xdg WINDOW geometry, but
   wlr_xdg_surface_surface_at() takes wl_surface-local coordinates. The two
-  differ by xdg_surface->geometry.x/y -- the client-side decoration margin,
-  non-zero for most GTK/CSD clients -- so omitting it made every hit test land
-  that far up and to the left of the real pointer. Rendering was already
-  correct: wlr_scene_xdg_surface_create() offsets the surface tree by
+  differ by xdg_surface->current.geometry.x/y -- the client-side decoration
+  margin, non-zero for most GTK/CSD clients -- so omitting it made every hit
+  test land that far up and to the left of the real pointer. Rendering was
+  already correct: wlr_scene_xdg_surface_create() offsets the surface tree by
   -geometry.x/y, which is the same correction with the opposite sign. */
-  struct wlr_box *window = &xdg_view->surface->geometry;
+  struct wlr_box *window = &xdg_view->surface->current.geometry;
 
   return wlr_xdg_surface_surface_at(xdg_view->surface,
       ox - geometry->x + window->x,
@@ -948,7 +948,7 @@ hikari_xdg_view_init(struct hikari_xdg_view *xdg_view,
   xdg_view->pending_maximized_value = false;
 
   if (xdg_surface->surface->mapped) {
-    struct wlr_box new_geometry = xdg_surface->geometry;
+    struct wlr_box new_geometry = xdg_surface->current.geometry;
     if (new_geometry.width > 0 && new_geometry.height > 0) {
       xdg_view->view.geometry = new_geometry;
     } else {

@@ -206,7 +206,7 @@ parse_property(struct hikari_view_properties *properties,
       goto done;
     }
 
-    if (strlen(mark_name) != 1) {
+    if (strlen(mark_name) != 1 || mark_name[0] < 'a' || mark_name[0] > 'z') {
       fprintf(stderr,
           "configuration error: invalid \"mark\" register \"%s\" for "
           "\"views\"\n",
@@ -350,7 +350,9 @@ parse_inherited_properties(struct hikari_view_properties *properties,
         break;
 
       case UCL_OBJECT:
-        parse_properties(child_properties, cur);
+        if (!parse_properties(child_properties, cur)) {
+          goto done;
+        }
         break;
 
       default:

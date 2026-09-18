@@ -938,12 +938,24 @@ hikari_workspace_reset_view_geometry(struct hikari_workspace *workspace)
       struct hikari_workspace *workspace)                                      \
   {                                                                            \
     struct hikari_view *focus_view = workspace->focus_view;                    \
-    struct hikari_layout *layout = workspace->sheet->layout;                   \
                                                                                \
-    if (focus_view == NULL || layout == NULL ||                                \
-        !hikari_view_is_tiled(focus_view)) {                                   \
+    if (focus_view == NULL || hikari_view_is_dirty(focus_view) ||              \
+        !hikari_view_is_tiled(focus_view) ||                                   \
+        !hikari_tile_is_attached(focus_view->tile)) {                          \
       return;                                                                  \
     }                                                                          \
+                                                                               \
+    /* hikari_view_is_tiled() only guarantees focus_view->tile is non-     \
+    NULL, not that it is still attached to a layout: an async resize can   \
+    leave view->tile set while hikari_tile_detach() has already cleared    \
+    tile->layout (and possibly freed the layout entirely), which is       \
+    exactly what the is_dirty/is_attached checks above rule out before    \
+    hikari_tile_##link##_view() dereferences tile->layout->tiles below.    \
+    focus_view's own tile's layout is used, not the currently-displayed   \
+    sheet's, because focus_view can be a sheet-0 view (always visible,    \
+    stacked below whichever sheet is selected) even while workspace->     \
+    sheet is a different sheet entirely; see the matching comment on      \
+    tile.c's CYCLE_LAYOUT. */                                              \
                                                                                \
     struct hikari_view *link = hikari_tile_##link##_view(focus_view->tile);    \
                                                                                \
@@ -964,12 +976,16 @@ void
 hikari_workspace_exchange_main_layout_view(struct hikari_workspace *workspace)
 {
   struct hikari_view *focus_view = workspace->focus_view;
-  struct hikari_layout *layout = workspace->sheet->layout;
 
-  if (focus_view == NULL || layout == NULL ||
-      !hikari_view_is_tiled(focus_view) || hikari_view_is_dirty(focus_view)) {
+  if (focus_view == NULL || !hikari_view_is_tiled(focus_view) ||
+      hikari_view_is_dirty(focus_view)) {
     return;
   }
+
+  /* focus_view's own tile's layout, not the currently-displayed sheet's --
+  see the matching comment on VIEW_EXCHANGE above and on tile.c's
+  CYCLE_LAYOUT. */
+  struct hikari_layout *layout = focus_view->tile->layout;
 
   struct hikari_view *first = hikari_layout_first_view(layout);
 

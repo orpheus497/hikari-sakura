@@ -39,5 +39,8 @@ hikari_font_init(struct hikari_font *font, const char *font_name)
 void
 hikari_font_fini(struct hikari_font *font)
 {
-  pango_font_description_free(font->desc);
+  if (font->desc != NULL) {
+    pango_font_description_free(font->desc);
+    font->desc = NULL;
+  }
 }

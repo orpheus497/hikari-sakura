@@ -432,6 +432,19 @@ dissociate_handler(struct wl_listener *listener, void *data)
   struct hikari_xwayland_unmanaged_view *xwayland_unmanaged_view =
       wl_container_of(listener, xwayland_unmanaged_view, dissociate);
 
+  /* Same reasoning as xwayland_view.c's dissociate_handler: the underlying
+  wl_surface can be unbound while this view is still mapped (hidden ==
+  false). unmap() here is already idempotent (guarded by the hidden flag,
+  see its own comment), so calling it is safe even on a dissociate that
+  arrives while genuinely unmapped, or if a real unmap follows later.
+  Without this, hidden stayed false and the view stayed linked into
+  output->unmanaged_xwayland_views with surface->surface now NULL --
+  surface_at() dereferenced that unconditionally, and the compositor's own
+  per-motion hit test in server.c crashed on the very next mouse move. */
+  if (!xwayland_unmanaged_view->hidden) {
+    unmap(xwayland_unmanaged_view);
+  }
+
   wl_list_remove(&xwayland_unmanaged_view->map.link);
   wl_list_init(&xwayland_unmanaged_view->map.link);
   wl_list_remove(&xwayland_unmanaged_view->unmap.link);

@@ -1913,11 +1913,30 @@ hikari_view_tile(
   assert(!hikari_view_is_dirty(view));
   assert(hikari_view_is_tileable(view));
 
-  struct hikari_layout *layout = view->sheet->workspace->sheet->layout;
+  /* This view's own sheet's layout, not the currently-displayed sheet's --
+  see the matching comment on tile.c's CYCLE_LAYOUT for why those two can
+  differ (sheet 0 tiling in the background while another sheet is shown). */
+  struct hikari_layout *layout = view->sheet->layout;
+
+  /* Every layout function (grid/queue/stack in sheet.c, the recursive
+  splits in split.c) ultimately hands its computed box to this one
+  function, so this is the one place a clamp reaches all of them,
+  including split.c's own arithmetic, which has no clamp of its own, and
+  the single-view shortcut in sheet.c's LAYOUT_VIEWS macro, which bypasses
+  grid_layout()'s clamp entirely. A copy is clamped, not *geometry itself,
+  so a caller that keeps using its own box afterwards (grid_layout()'s
+  loop does, to advance to the next cell) isn't affected by it. */
+  struct wlr_box tile_geometry = *geometry;
+  if (tile_geometry.width < 1) {
+    tile_geometry.width = 1;
+  }
+  if (tile_geometry.height < 1) {
+    tile_geometry.height = 1;
+  }
 
   struct hikari_tile *tile = hikari_malloc(sizeof(struct hikari_tile));
   assert(tile != NULL);
-  hikari_tile_init(tile, view, layout, geometry, geometry);
+  hikari_tile_init(tile, view, layout, &tile_geometry, &tile_geometry);
 
   queue_tile(view, layout, tile, center);
 
@@ -2035,15 +2054,30 @@ commit_horizontal_maximize(
     view->maximized_state =
         hikari_malloc(sizeof(struct hikari_maximized_state));
   } else {
+    /* The only two states this switch can actually observe (traced against
+    every caller of queue_horizontal_maximize()): FULLY_MAXIMIZED, from
+    hikari_view_toggle_vertical_maximize()'s FULLY_MAXIMIZED case turning
+    vertical off while leaving horizontal on; and HORIZONTALLY_MAXIMIZED,
+    from queue_unfullscreen() restoring a view that was already
+    horizontally maximized before it got fullscreened. Neither case means
+    "become fully maximized" -- both mean "this view is already committed
+    to becoming horizontally maximized; adjust the border if needed and
+    proceed." Redirecting either one into commit_full_maximize() (the
+    previous behavior here) silently re-tagged the view FULLY_MAXIMIZED
+    with a non-full-height box whenever a horizontally-maximized window
+    was fullscreened and then un-fullscreened -- an entirely ordinary
+    sequence, not an edge case. VERTICALLY_MAXIMIZED is asserted because no
+    caller ever invokes queue_horizontal_maximize() while the view is
+    vertically maximized -- toggling horizontal on from vertical goes
+    through queue_full_maximize() instead. */
     switch (view->maximized_state->maximization) {
-      case HIKARI_MAXIMIZATION_HORIZONTALLY_MAXIMIZED:
-        commit_full_maximize(view, operation);
-        return;
-
       case HIKARI_MAXIMIZATION_FULLY_MAXIMIZED:
         if (!view->use_csd) {
           view->border.state = HIKARI_BORDER_INACTIVE;
         }
+        break;
+
+      case HIKARI_MAXIMIZATION_HORIZONTALLY_MAXIMIZED:
         break;
 
       case HIKARI_MAXIMIZATION_VERTICALLY_MAXIMIZED:
@@ -2088,11 +2122,17 @@ commit_vertical_maximize(
     view->maximized_state =
         hikari_malloc(sizeof(struct hikari_maximized_state));
   } else {
+    /* Mirror of commit_horizontal_maximize() -- see its comment. Traced
+    against every caller of queue_vertical_maximize(): FULLY_MAXIMIZED
+    (hikari_view_toggle_horizontal_maximize() turning horizontal off) and
+    VERTICALLY_MAXIMIZED (queue_unfullscreen() restoring a previously
+    vertically-maximized view) are both reachable and both mean "proceed
+    becoming vertically maximized," not "become fully maximized."
+    HORIZONTALLY_MAXIMIZED is asserted because no caller ever invokes
+    queue_vertical_maximize() while the view is horizontally maximized --
+    toggling vertical on from horizontal goes through queue_full_maximize()
+    instead. */
     switch (view->maximized_state->maximization) {
-      case HIKARI_MAXIMIZATION_HORIZONTALLY_MAXIMIZED:
-        commit_full_maximize(view, operation);
-        return;
-
       case HIKARI_MAXIMIZATION_FULLY_MAXIMIZED:
         if (!view->use_csd) {
           view->border.state = HIKARI_BORDER_INACTIVE;
@@ -2100,6 +2140,9 @@ commit_vertical_maximize(
         break;
 
       case HIKARI_MAXIMIZATION_VERTICALLY_MAXIMIZED:
+        break;
+
+      case HIKARI_MAXIMIZATION_HORIZONTALLY_MAXIMIZED:
         assert(false);
         break;
     }
@@ -2633,7 +2676,12 @@ hikari_view_exchange(struct hikari_view *from, struct hikari_view *to)
   assert(to->tile != NULL);
   assert(to->tile->view->sheet == from->tile->view->sheet);
 
-  struct hikari_layout *layout = from->sheet->workspace->sheet->layout;
+  /* from's own tile's layout, not the currently-displayed sheet's -- see
+  the matching comment on tile.c's CYCLE_LAYOUT. from->tile is asserted
+  non-NULL just above, and its ->layout is exactly the layout both tiles
+  being built here belong to (the assert two lines up already guarantees
+  from and to share a sheet, hence a layout). */
+  struct hikari_layout *layout = from->tile->layout;
 
   struct wlr_box *from_geometry = &from->tile->tile_geometry;
   struct wlr_box *to_geometry = &to->tile->tile_geometry;
