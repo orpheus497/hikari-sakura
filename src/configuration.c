@@ -1870,6 +1870,11 @@ parse_border(
     return false;
   }
 
+  if (border < 0) {
+    fprintf(stderr, "configuration error: \"border\" must not be negative\n");
+    return false;
+  }
+
   configuration->border = border;
 
   return true;
@@ -1883,6 +1888,11 @@ parse_gap(
 
   if (!ucl_object_toint_safe(gap_obj, &gap)) {
     fprintf(stderr, "configuration error: expected integer for \"gap\"\n");
+    return false;
+  }
+
+  if (gap < 0) {
+    fprintf(stderr, "configuration error: \"gap\" must not be negative\n");
     return false;
   }
 
@@ -2338,6 +2348,10 @@ parse_ui(struct hikari_configuration *configuration, const ucl_object_t *ui_obj)
       if (!parse_bar(&configuration->bar_config, cur)) {
         goto done;
       }
+    } else {
+      fprintf(
+          stderr, "configuration error: unknown key \"%s\" for \"ui\"\n", key);
+      goto done;
     }
   }
 
@@ -2708,6 +2722,7 @@ hikari_configuration_init(struct hikari_configuration *configuration)
 void
 hikari_configuration_fini(struct hikari_configuration *configuration)
 {
+  hikari_font_fini(&configuration->font);
   hikari_lock_config_fini(&configuration->lock);
   hikari_bar_config_fini(&configuration->bar_config);
 

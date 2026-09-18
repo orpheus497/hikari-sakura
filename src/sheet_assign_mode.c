@@ -88,6 +88,14 @@ handle_keysym(
   struct hikari_workspace *workspace = hikari_server.workspace;
   struct hikari_sheet *sheet = mode->sheet;
 
+  /* Guarded rather than asserted: assert() compiles out under NDEBUG (this
+  project's release build). This is the single entry point both
+  update_state() and confirm_sheet_assign() are reached through below, and
+  neither checks focus_view itself before dereferencing it. */
+  if (workspace->focus_view == NULL) {
+    return;
+  }
+
   assert(sheet != NULL);
 
   switch (sym) {

@@ -350,6 +350,10 @@ hikari_output_enable(struct hikari_output *output)
   }
 
   if (!wlr_output_commit_state(wlr_output, &state)) {
+    fprintf(stderr,
+        "error: failed to enable output \"%s\"; it may already be lit at "
+        "the hardware level but will not receive frame updates\n",
+        wlr_output->name);
     wlr_output_state_finish(&state);
     return;
   }
@@ -660,6 +664,7 @@ hikari_output_init(struct hikari_output *output, struct wlr_output *wlr_output)
       wlr_output_state_set_enabled(&state, false);
       if (wlr_output_commit_state(wlr_output, &state)) {
         wl_list_remove(&output->server_outputs);
+        wl_list_init(&output->server_outputs);
         wl_list_remove(&output->frame.link);
         wl_list_remove(&output->request_state.link);
         output->scene_output = NULL;
@@ -698,6 +703,7 @@ hikari_output_init(struct hikari_output *output, struct wlr_output *wlr_output)
       wlr_output_state_set_enabled(&state, false);
       if (wlr_output_commit_state(wlr_output, &state)) {
         wl_list_remove(&output->server_outputs);
+        wl_list_init(&output->server_outputs);
         wl_list_remove(&output->frame.link);
         wl_list_remove(&output->request_state.link);
         wlr_scene_output_destroy(scene_output);

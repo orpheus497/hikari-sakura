@@ -348,6 +348,19 @@ request_configure_handler(struct wl_listener *listener, void *data)
 
   struct hikari_sheet *sheet = xwayland_view->view.sheet;
 
+  if (sheet == NULL && hikari_server.workspace == NULL) {
+    /* No sheet yet (this view hasn't mapped) and no workspace to fall
+    back to either -- this only happens in the narrow window while an
+    output is being torn down (hikari_output_fini's noop branch sets
+    hikari_server.workspace to NULL). There is no usable area to
+    constrain against here, so apply the client's requested geometry
+    unconstrained rather than dereferencing a workspace that doesn't
+    exist. */
+    wlr_xwayland_surface_configure(
+        xwayland_surface, event->x, event->y, event->width, event->height);
+    return;
+  }
+
   struct hikari_output *output = sheet != NULL
                                      ? xwayland_view->view.output
                                      : hikari_server.workspace->output;
@@ -539,6 +552,22 @@ dissociate_handler(struct wl_listener *listener, void *data)
 {
   struct hikari_xwayland_view *xwayland_view =
       wl_container_of(listener, xwayland_view, dissociate);
+
+  struct hikari_view *view = (struct hikari_view *)xwayland_view;
+
+  /* The underlying wl_surface is being unbound here, independently of
+  whether this view is currently mapped -- X11 surface recreation
+  dissociates and later re-associates a NEW wl_surface without an
+  intervening unmap of the view itself. Without this, view->surface, the
+  commit listener, and foreign-toplevel state all kept referencing content
+  that was about to disappear, and the eventual real destroy_handler's own
+  unmap() call then removed listeners against already-freed wl_surface
+  memory. Guarded exactly like destroy_handler's own call to unmap()
+  below, so a dissociate that arrives while genuinely unmapped is a no-op
+  here too. */
+  if (hikari_view_is_mapped(view)) {
+    unmap(view);
+  }
 
   wl_list_remove(&xwayland_view->map.link);
   wl_list_init(&xwayland_view->map.link);

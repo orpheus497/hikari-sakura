@@ -232,10 +232,17 @@ out:
       continue;
     }
 
-    wlr_output_layout_add(hikari_server.output_layout,
-        config_head->state.output,
-        config_head->state.x,
-        config_head->state.y);
+    if (wlr_output_layout_add(hikari_server.output_layout,
+            config_head->state.output,
+            config_head->state.x,
+            config_head->state.y) == NULL) {
+      fprintf(stderr,
+          "error: failed to position output \"%s\" at %d,%d; its enabled/"
+          "mode changes from this configuration were still applied\n",
+          config_head->state.output->name,
+          config_head->state.x,
+          config_head->state.y);
+    }
   }
 
   return true;

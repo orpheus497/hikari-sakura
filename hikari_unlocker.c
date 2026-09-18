@@ -3,6 +3,7 @@
 #include <pwd.h>
 #include <security/pam_appl.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -11,17 +12,46 @@
 #include <unistd.h>
 #include <errno.h>
 
+/* Wire format for the password-submission pipe from hikari (lock_mode.c).
+Must be kept byte-for-byte identical to the copy of these two structs
+there -- there is deliberately no shared header, so this binary's build
+stays independent of the rest of the tree. Both ends are the same
+architecture and compiler (this process is forked directly from hikari),
+so native struct layout is fine; this is local IPC framing, not a network
+protocol needing byte-order/alignment portability.
+
+Replaces a previous bare byte-in/byte-out protocol (a NUL-terminated
+password in, a single result byte out) that gave the reader no way to
+tell a stale, already-superseded result apart from the one answering the
+password just submitted. The `seq` field is opaque here -- this process
+only ever echoes back whatever seq arrived with the request it is
+currently answering; hikari is the one that assigns meaning to it. */
+struct hikari_unlock_request {
+  uint64_t seq;
+  uint32_t password_len;
+};
+
+struct hikari_unlock_reply {
+  uint64_t seq;
+  uint8_t success;
+};
 
 static char *input_buffer = NULL;
 
 #define INPUT_BUFFER_SIZE 1024
 
-// [COMMENT] Function purpose: Helper to robustly write boolean result to stdout fd 1.
-static void write_success(bool success) {
+// [COMMENT] Function purpose: Helper to robustly write the authentication
+// reply, echoing back the request's own sequence number, to stdout fd 1.
+static void write_reply(uint64_t seq, bool success) {
+  struct hikari_unlock_reply reply = { .seq = seq, .success = success ? 1 : 0 };
   ssize_t nwritten;
-  // [COMMENT] Action purpose: Retry write on EINTR.
+  // [COMMENT] Action purpose: Retry write on EINTR. A single write() for
+  // this small, fixed-size reply is atomic on a pipe (POSIX guarantees
+  // atomicity for writes at least up to PIPE_BUF, far larger than this),
+  // so no partial-write handling is needed here, matching the previous
+  // single-write behavior for the bare bool this replaces.
   do {
-    nwritten = write(1, &success, sizeof(bool));
+    nwritten = write(1, &reply, sizeof(reply));
   } while (nwritten == -1 && errno == EINTR);
 }
 
@@ -81,55 +111,72 @@ check_password(const char *username)
   bool success = false;
   pam_handle_t *auth_handle = NULL;
 
-  // [COMMENT] Action purpose: Initialize PAM authentication context.
-  if (pam_start("hikari-unlocker", username, &conv, &auth_handle) !=
-      PAM_SUCCESS) {
-    // [COMMENT] Action purpose: Return -1 and write false if PAM initialization fails fatally.
-    write_success(success);
-    return -1;
-  }
-
-  // [COMMENT] Action purpose: Read password string from stdin into locked buffer until null terminator.
-  ssize_t nread = 0;
-  ssize_t res;
-  char c;
-  bool overflow = false;
-  // [COMMENT] Action purpose: Retry password read on EINTR and accumulate until frame terminator is received.
-  do {
-    res = read(0, &c, 1);
+  // [COMMENT] Action purpose: Read the fixed-size request header first,
+  // accumulating across partial reads (a genuine possibility for a
+  // larger, non-atomic transfer, unlike the small fixed-size reply this
+  // process writes back) and retrying on EINTR.
+  struct hikari_unlock_request request;
+  size_t header_read = 0;
+  while (header_read < sizeof(request)) {
+    ssize_t res = read(
+        0, (unsigned char *)&request + header_read, sizeof(request) - header_read);
     if (res == -1 && errno == EINTR) {
       continue;
     }
     if (res <= 0) {
-      break;
+      // [COMMENT] Action purpose: EOF or error before a complete header
+      // was ever read -- the parent closed its end (e.g. during
+      // shutdown) or something is badly wrong. There is no reliably-read
+      // seq to reply with here, so exit without one, exactly as the
+      // parent's own hangup handling already expects for "no usable
+      // result at all".
+      return -1;
     }
-    if (c == '\0') {
-      break;
-    }
-    if (nread < INPUT_BUFFER_SIZE - 1) {
-      input_buffer[nread++] = c;
-    } else {
-      overflow = true;
-    }
-  } while (1);
-
-  // [COMMENT] Action purpose: Check if read failed, returned EOF before terminator, or overflowed.
-  if (res <= 0 || overflow) {
-    // [COMMENT] Action purpose: Abort PAM initialization and write false to stdout on read failure or overlong password.
-    if (overflow) {
-      // [COMMENT] Action purpose: Drain remaining stdin bytes until frame terminator to discard overlong input.
-      while ((res = read(0, &c, 1)) == 1 || (res == -1 && errno == EINTR)) {
-        if (res == 1 && c == '\0') break;
-      }
-    }
-    explicit_bzero(input_buffer, INPUT_BUFFER_SIZE);
-    write_success(success);
-    pam_end(auth_handle, PAM_ABORT);
-    return overflow ? 0 : -1;
+    header_read += (size_t)res;
   }
 
-  input_buffer[nread] = '\0';
+  // [COMMENT] Action purpose: Reject a request whose claimed password
+  // length exceeds this process's own buffer before reading a single
+  // byte of it. The parent should never construct a request larger than
+  // its own matching buffer size; a mismatch here means something is
+  // badly wrong (protocol drift between binaries, memory corruption), and
+  // failing fast is safer than any attempt to interpret or resynchronize
+  // an explicitly length-framed stream.
+  if (request.password_len > INPUT_BUFFER_SIZE - 1) {
+    write_reply(request.seq, false);
+    return -1;
+  }
 
+  // [COMMENT] Action purpose: Initialize PAM authentication context.
+  if (pam_start("hikari-unlocker", username, &conv, &auth_handle) !=
+      PAM_SUCCESS) {
+    // [COMMENT] Action purpose: Reply false and return -1 if PAM
+    // initialization fails fatally.
+    write_reply(request.seq, success);
+    return -1;
+  }
+
+  // [COMMENT] Action purpose: Read exactly password_len bytes into the
+  // locked buffer, accumulating across partial reads and retrying on
+  // EINTR -- the length is now explicit, so there is no terminator to
+  // scan for and no possibility of an overlong read.
+  size_t body_read = 0;
+  while (body_read < request.password_len) {
+    ssize_t res = read(
+        0, input_buffer + body_read, request.password_len - body_read);
+    if (res == -1 && errno == EINTR) {
+      continue;
+    }
+    if (res <= 0) {
+      explicit_bzero(input_buffer, INPUT_BUFFER_SIZE);
+      write_reply(request.seq, false);
+      pam_end(auth_handle, PAM_ABORT);
+      return -1;
+    }
+    body_read += (size_t)res;
+  }
+
+  input_buffer[request.password_len] = '\0';
 
   int pam_status = pam_authenticate(auth_handle, 0);
 
@@ -150,15 +197,16 @@ check_password(const char *username)
     // what changes is that the compositor is told, rather than left to deduce
     // it. locker_result_handler already handles the READABLE|HANGUP pair this
     // produces, since the child exits immediately afterwards.
-    write_success(success);
+    write_reply(request.seq, success);
     pam_end(auth_handle, pam_status);
     return -1;
   }
 
   success = (pam_status == PAM_SUCCESS);
 
-  // [COMMENT] Action purpose: Write authentication success boolean result to stdout fd 1.
-  write_success(success);
+  // [COMMENT] Action purpose: Write the authentication reply, echoing this
+  // request's seq, to stdout fd 1.
+  write_reply(request.seq, success);
 
   pam_end(auth_handle, pam_status);
 

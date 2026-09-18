@@ -31,6 +31,32 @@ get_mode(void)
   return mode;
 }
 
+/* mode->group is a raw pointer to a candidate group Tab-completion has
+resolved the typed text to -- necessarily some OTHER group than the view
+actually being reassigned. hikari_group_fini()/hikari_free() run on ANY
+view unmapping the instant its group's view list empties, with no
+awareness that this mode might be holding a pointer to that group, so
+mode->group can dangle while this mode is still open (close a window that
+was the last member of the group currently Tab-completed here). This
+walks the server's own live-group list rather than dereferencing
+mode->group directly, so a dangling mode->group is recognized as gone
+instead of read. The one residual risk -- a freed group's memory being
+reused by an unrelated, later-allocated group at the same address before
+this check runs -- degrades to highlighting the wrong (but valid, live)
+group, not a memory-safety issue. */
+static bool
+group_is_live(struct hikari_group *candidate)
+{
+  struct hikari_group *group;
+  wl_list_for_each (group, &hikari_server.groups, server_groups) {
+    if (group == candidate) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 static void
 init_completion(void)
 {
@@ -131,7 +157,7 @@ update_state(void)
   }
 
   if (mode->group != group) {
-    if (mode->group != NULL) {
+    if (mode->group != NULL && group_is_live(mode->group)) {
       hikari_group_damage(mode->group);
     }
 
@@ -286,7 +312,9 @@ cancel(void)
   }
 
   if (mode->group != NULL) {
-    hikari_group_damage(mode->group);
+    if (group_is_live(mode->group)) {
+      hikari_group_damage(mode->group);
+    }
     mode->group = NULL;
   }
 

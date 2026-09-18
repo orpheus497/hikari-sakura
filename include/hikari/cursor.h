@@ -91,6 +91,14 @@ hikari_cursor_activate(struct hikari_cursor *cursor);
 void
 hikari_cursor_deactivate(struct hikari_cursor *cursor);
 
+/* Release a still-latched primary touch unconditionally. For callers
+outside this file that cannot supply the touch_id a real touch_up/
+touch_cancel event carries -- specifically, a touch device being destroyed
+while it holds the primary touch, which otherwise never generates the
+touch_up/touch_cancel this state machine expects to clear it. */
+void
+hikari_cursor_release_primary_touch(struct hikari_cursor *cursor);
+
 void
 hikari_cursor_set_image(struct hikari_cursor *cursor, const char *path);
 

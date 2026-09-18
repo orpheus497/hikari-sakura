@@ -92,6 +92,11 @@ hikari_lock_indicator_init(struct hikari_lock_indicator *lock_indicator)
 
   lock_indicator->reset_state = wl_event_loop_add_timer(
       hikari_server.event_loop, reset_state_handler, lock_indicator);
+  if (lock_indicator->reset_state == NULL) {
+    wlr_log(WLR_ERROR,
+        "hikari_lock_indicator_init: failed to create reset-state timer -- "
+        "indicator auto-reset disabled for this lock session");
+  }
 }
 
 // [COMMENT] Function purpose: Finalize lock indicator state, destroy scene
@@ -129,7 +134,9 @@ hikari_lock_indicator_fini(struct hikari_lock_indicator *lock_indicator)
     wlr_buffer_drop(lock_indicator->deny);
   }
 
-  wl_event_source_remove(lock_indicator->reset_state);
+  if (lock_indicator->reset_state != NULL) {
+    wl_event_source_remove(lock_indicator->reset_state);
+  }
 }
 
 void
@@ -139,7 +146,9 @@ hikari_lock_indicator_set_type(struct hikari_lock_indicator *lock_indicator)
 
   lock_indicator->current = lock_indicator->type;
   hikari_lock_indicator_damage(lock_indicator);
-  wl_event_source_timer_update(lock_indicator->reset_state, 100);
+  if (lock_indicator->reset_state != NULL) {
+    wl_event_source_timer_update(lock_indicator->reset_state, 100);
+  }
 }
 
 void
@@ -149,7 +158,9 @@ hikari_lock_indicator_set_verify(struct hikari_lock_indicator *lock_indicator)
 
   lock_indicator->current = lock_indicator->verify;
   hikari_lock_indicator_damage(lock_indicator);
-  wl_event_source_timer_update(lock_indicator->reset_state, 0);
+  if (lock_indicator->reset_state != NULL) {
+    wl_event_source_timer_update(lock_indicator->reset_state, 0);
+  }
 }
 
 void
@@ -159,7 +170,9 @@ hikari_lock_indicator_set_deny(struct hikari_lock_indicator *lock_indicator)
 
   lock_indicator->current = lock_indicator->deny;
   hikari_lock_indicator_damage(lock_indicator);
-  wl_event_source_timer_update(lock_indicator->reset_state, 1000);
+  if (lock_indicator->reset_state != NULL) {
+    wl_event_source_timer_update(lock_indicator->reset_state, 1000);
+  }
 }
 
 void
@@ -178,7 +191,9 @@ hikari_lock_indicator_clear(struct hikari_lock_indicator *lock_indicator)
 
   lock_indicator->current = NULL;
   hikari_lock_indicator_damage(lock_indicator);
-  wl_event_source_timer_update(lock_indicator->reset_state, 0);
+  if (lock_indicator->reset_state != NULL) {
+    wl_event_source_timer_update(lock_indicator->reset_state, 0);
+  }
 }
 
 static inline void

@@ -150,7 +150,14 @@ static void
 assign_mark(
     struct wlr_keyboard_key_event *event, struct hikari_keyboard *keyboard)
 {
-  assert(hikari_server.workspace->focus_view != NULL);
+  /* Guarded rather than asserted: assert() compiles out under NDEBUG (this
+  project's release build). This is the single entry point handle_keysym
+  is reached through, so guarding here protects update_state()/
+  confirm_mark_assign() as well -- neither of those checks focus_view
+  itself before dereferencing it. */
+  if (hikari_server.workspace->focus_view == NULL) {
+    return;
+  }
 
   uint32_t keycode = event->keycode + 8;
 

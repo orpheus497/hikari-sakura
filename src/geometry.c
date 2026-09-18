@@ -57,6 +57,16 @@ hikari_geometry_shrink(struct wlr_box *geometry, int gap)
   geometry->y += gap;
   geometry->width -= gap * 2;
   geometry->height -= gap * 2;
+
+  /* A gap/border combination large relative to what's left of a small
+  output after nested splits would otherwise drive width/height negative
+  here, which every caller downstream assumes cannot happen. */
+  if (geometry->width < 1) {
+    geometry->width = 1;
+  }
+  if (geometry->height < 1) {
+    geometry->height = 1;
+  }
 }
 
 void

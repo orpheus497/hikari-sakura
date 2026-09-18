@@ -85,6 +85,15 @@ hikari_dnd_mode_enter(void)
 {
   hikari_pointer_constraint_deactivate();
 
+  /* Reachable asynchronously from a client's start_drag request, which can
+  land while any other mode (move, resize, an assign mode) is active --
+  unlike every other mode transition, which only ever happens from
+  normal_mode's own keybinding dispatch. Skipping the outgoing mode's
+  cancel() here left its cleanup undone: group_assign_mode in particular
+  leaks its heap-allocated completion state and reuses stale completion
+  text the next time it's entered. */
+  hikari_server.mode->cancel();
+
   hikari_server.mode = (struct hikari_mode *)&hikari_server.dnd_mode;
   cursor_move(0);
 }

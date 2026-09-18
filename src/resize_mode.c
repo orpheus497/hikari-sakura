@@ -50,7 +50,13 @@ cursor_move(uint32_t time_msec)
 {
   struct hikari_view *focus_view = hikari_server.workspace->focus_view;
 
-  assert(focus_view != NULL);
+  /* Guarded rather than asserted: assert() compiles out under NDEBUG (this
+  project's release build), which would leave the dereference below running
+  on a NULL pointer. There is nothing to resize if focus_view is NULL, so
+  returning is the correct behavior here, not just a safe one. */
+  if (focus_view == NULL) {
+    return;
+  }
 
   struct hikari_resize_mode *resize_mode = &hikari_server.resize_mode;
   struct hikari_output *output = focus_view->output;

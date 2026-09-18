@@ -838,6 +838,15 @@ server_decoration_handler(struct wl_listener *listener, void *data)
     return;
   }
 
+  if (xdg_view->view.decoration.wlr_decoration != NULL) {
+    /* A second server-decoration create request for a surface that already
+    has one registered. Re-adding these listeners would splice them into
+    the new wlr_decoration's signal lists while they are still linked into
+    the first one's, corrupting both lists. Ignore the repeat; the surface
+    keeps whatever decoration mode the first registration negotiated. */
+    return;
+  }
+
   wl_signal_add(&wlr_decoration->events.mode, &xdg_view->view.decoration.mode);
   xdg_view->view.decoration.mode.notify = server_decoration_mode_handler;
 
@@ -898,20 +907,13 @@ setup_decorations(struct hikari_server *server)
 static void
 start_drag_handler(struct wl_listener *listener, void *data)
 {
-  struct wlr_surface *surface;
-  struct hikari_workspace *workspace;
-  double sx, sy;
-
-  struct hikari_node *node = node_at(hikari_server.cursor.wlr_cursor->x,
-      hikari_server.cursor.wlr_cursor->y,
-      &surface,
-      &workspace,
-      &sx,
-      &sy);
-
-  if (node != NULL) {
-    hikari_dnd_mode_enter();
-  }
+  /* wlr_seat_start_pointer_drag() has already started a real wlroots-level
+  drag grab by the time this fires, unconditionally -- there is no valid
+  choice here other than to always follow it into dnd_mode, regardless of
+  what happens to be under the cursor right now. Not doing so left hikari's
+  own mode state machine running whatever mode was previously active
+  concurrently with a live protocol drag. */
+  hikari_dnd_mode_enter();
 }
 
 static void

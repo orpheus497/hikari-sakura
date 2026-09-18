@@ -26,7 +26,15 @@ hikari_tile_init(struct hikari_tile *tile,
                                                                                \
     struct wl_list *link = tile->layout_tiles.link;                            \
     struct hikari_tile *link##_tile;                                           \
-    struct wl_list *tiles = &hikari_server.workspace->sheet->layout->tiles;    \
+    /* tile's OWN layout, not the currently-displayed sheet's -- sheet 0    \
+    can be independently re-tiled by reflow while a different sheet is     \
+    shown (hikari_sheet_is_visible() treats it as always-visible), so the  \
+    two are not interchangeable. Using the wrong one here meant the wrap-  \
+    around sentinel below never matched this walk's real list head, and   \
+    wl_container_of() on the real (mismatched) sentinel then read 32       \
+    bytes before a hikari_layout allocation and dereferenced it as a      \
+    hikari_view*. */                                                      \
+    struct wl_list *tiles = &tile->layout->tiles;                             \
                                                                                \
     do {                                                                       \
       if (link == tiles) {                                                     \

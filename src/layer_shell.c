@@ -379,6 +379,7 @@ hikari_layer_init(
   layer->mapped = false;
   layer->configured = false;
   layer->geometry = (struct wlr_box){ 0 };
+  wl_list_init(&layer->popups);
   layer->desired_width = 0;
   layer->desired_height = 0;
   layer->anchor = 0;
@@ -465,6 +466,19 @@ hikari_layer_fini(struct hikari_layer *layer)
   listener order. Nulling the pointer is all hikari needs to do; wlroots owns
   the teardown. */
   layer->scene_layer_surface = NULL;
+
+  /* A popup opened from this layer (a panel's dropdown/context menu) is a
+  separate wlroots object with its own, independent lifetime -- it does
+  not automatically close just because this layer surface is being torn
+  down. Tear down hikari's tracking for every still-open one now, the
+  same way destroy_popup_handler does for a popup closing on its own, so
+  none of them are left holding a pointer to the layer this function is
+  about to free. */
+  struct hikari_layer_popup *layer_popup, *layer_popup_temp;
+  wl_list_for_each_safe (layer_popup, layer_popup_temp, &layer->popups, link) {
+    fini_popup(layer_popup);
+    hikari_free(layer_popup);
+  }
 
   wl_list_remove(&layer->layer_surfaces);
 
@@ -573,6 +587,21 @@ init_popup(
   It is deferred to commit_popup_handler's initial_commit branch, because the
   popup surface is not yet initialized at new_popup time and wlroots asserts on
   that. See the full explanation there. */
+
+  /* Track this popup on its owning layer -- walking up through any nested
+  popup-of-a-popup chain via get_layer(), which layer_popup->parent (set by
+  both callers before this runs) already makes safe to call -- so
+  hikari_layer_fini() can find and tear down every still-open popup before
+  the layer itself is freed. get_layer() only returns NULL if its own
+  depth-guard fires (a corrupted parent chain, not a real client
+  scenario); wl_list_init as a fallback there keeps fini_popup()'s
+  unconditional wl_list_remove(&layer_popup->link) safe either way. */
+  struct hikari_layer *owning_layer = get_layer(layer_popup);
+  if (owning_layer != NULL) {
+    wl_list_insert(&owning_layer->popups, &layer_popup->link);
+  } else {
+    wl_list_init(&layer_popup->link);
+  }
 
   return true;
 }
@@ -743,6 +772,18 @@ commit_handler(struct wl_listener *listener, void *data)
     /* [COMMENT] Action purpose: Client committed again before mapping.
     Avoid infinite configure loops by only re-arranging if something the
     arrangement depends on actually changed. */
+    /* Note this branch (and the initial-commit branch above) can leave
+    layer->layer stale relative to surface->current.layer if the client
+    called set_layer before mapping -- layer_inputs_changed() deliberately
+    doesn't adopt layer->layer itself (see its own comment), and neither
+    branch here relinks the per-layer list or reparents the scene node the
+    way the mapped branch below does. This is a bounded staleness window,
+    not a permanent one: the moment this surface is mapped and commits
+    again, the mapped branch reads surface->current.layer (wlroots' own
+    live value, not this cached copy) and corrects the list membership and
+    scene parent then. A client that never calls set_layer again after
+    mapping keeps whatever layer it committed most recently before that
+    first mapped commit runs. */
     if (layer_inputs_changed(layer)) {
       arrange_layers(output);
     }
@@ -1201,6 +1242,7 @@ init_popup_popup(struct hikari_layer_popup *layer_popup,
 static void
 fini_popup(struct hikari_layer_popup *layer_popup)
 {
+  wl_list_remove(&layer_popup->link);
   wl_list_remove(&layer_popup->commit.link);
   wl_list_remove(&layer_popup->destroy.link);
   wl_list_remove(&layer_popup->map.link);

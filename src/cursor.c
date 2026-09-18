@@ -178,6 +178,14 @@ release_primary_touch(struct hikari_cursor *cursor, uint32_t time_msec)
   hikari_server.mode->button_handler(cursor, &button_event);
 }
 
+void
+hikari_cursor_release_primary_touch(struct hikari_cursor *cursor)
+{
+  if (cursor->has_primary_touch) {
+    release_primary_touch(cursor, 0);
+  }
+}
+
 static void
 cursor_touch_down_handler(struct wl_listener *listener, void *data)
 {
@@ -317,6 +325,17 @@ find_gesture_binding(enum hikari_gesture_type type,
 static void
 fire_gesture_binding(struct hikari_gesture_binding_config *binding_config)
 {
+  /* Every other live input path (keyboard, pointer button/motion, touch --
+  translated to synthetic pointer events) dispatches through
+  hikari_server.mode's vtable, which lock_mode overrides to no-ops while
+  locked. Gesture recognition never joined that vtable -- it called
+  configured actions directly -- so a configured gesture binding fired
+  regardless of lock state, the one input modality that could act on an
+  unauthenticated locked screen. */
+  if (hikari_server_in_lock_mode()) {
+    return;
+  }
+
   struct hikari_event_action *event_action = &binding_config->action.begin;
 
   if (event_action->action != NULL) {

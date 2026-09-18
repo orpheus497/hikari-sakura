@@ -4,6 +4,7 @@
 
 #include <hikari/touch.h>
 
+#include <hikari/cursor.h>
 #include <hikari/memory.h>
 #include <hikari/server.h>
 
@@ -13,6 +14,17 @@ static void
 destroy_handler(struct wl_listener *listener, void *data)
 {
   struct hikari_touch *touch = wl_container_of(listener, touch, destroy);
+
+  /* A touch device can be removed mid-touch (unplug, driver reset) with no
+  touch_up/touch_cancel ever delivered for whatever point it was driving.
+  Without this, a primary touch latched to this device would stay latched
+  forever, permanently disabling touch-driven focus/move/resize compositor
+  -wide, since nothing else would ever clear it. Touch IDs aren't
+  correlated to a specific device here, so this can't distinguish "this
+  device's touch" from "some other device's touch" -- it releases whatever
+  is currently latched, trading a rare, harmless early release of an
+  unrelated touch for eliminating a permanent stuck state. */
+  hikari_cursor_release_primary_touch(&hikari_server.cursor);
 
   hikari_touch_fini(touch);
   hikari_free(touch);

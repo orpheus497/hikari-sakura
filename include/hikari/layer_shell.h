@@ -42,6 +42,12 @@ struct hikari_layer {
   struct wl_listener unmap;
   struct wl_listener new_popup;
 
+  /* Every hikari_layer_popup parented to this layer, directly or (via a
+  nested popup-of-a-popup chain) indirectly -- see get_layer(). Torn down
+  in hikari_layer_fini() before the layer itself is freed, so a popup
+  still open when its layer is destroyed never outlives it. */
+  struct wl_list popups;
+
   struct wlr_box geometry;
 
   struct hikari_output *output;
@@ -70,6 +76,9 @@ struct hikari_layer {
 
 struct hikari_layer_popup {
   struct hikari_layer_node parent;
+
+  /* Membership in the owning hikari_layer's `popups` list (see there). */
+  struct wl_list link;
 
   struct wlr_xdg_popup *popup;
 
