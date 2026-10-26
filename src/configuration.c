@@ -3,9 +3,7 @@
 #include <ctype.h>
 #include <errno.h>
 
-#include <ucl.h>
-
-#include <dev/evdev/input-event-codes.h>
+#include <hikari/evdev.h>
 #include <wlr/types/wlr_cursor.h>
 #include <wlr/types/wlr_switch.h>
 
@@ -15,7 +13,7 @@
 #include <hikari/binding.h>
 #include <hikari/binding_config.h>
 #include <hikari/color.h>
-#include <hikari/config_key.h>
+#include <hikari/config_lua.h>
 #include <hikari/command.h>
 #include <hikari/exec.h>
 #include <hikari/geometry.h>
@@ -40,8 +38,6 @@
 #include <hikari/view.h>
 #include <hikari/view_config.h>
 #include <hikari/workspace.h>
-
-extern char **environ;
 
 struct hikari_configuration *hikari_configuration = NULL;
 
@@ -68,9 +64,8 @@ parse_layout_func(const char *layout_func_name,
     *explicit_nr_of_views = true;
     *layout_func = hikari_sheet_empty_layout;
   } else {
-    fprintf(stderr,
-        "configuration error: unknown container \"layout\" \"%s\"\n",
-        layout_func_name);
+    hikari_config_error(
+        NULL, "unknown container \"layout\" \"%s\"", layout_func_name);
     return false;
   }
 
@@ -79,7 +74,7 @@ parse_layout_func(const char *layout_func_name,
 
 static bool
 parse_container(
-    const ucl_object_t *container_obj, struct hikari_split **container)
+    lua_State *L, int container_idx, struct hikari_split **container)
 {
   bool success = false;
   struct hikari_split_container *ret = NULL;
@@ -88,18 +83,14 @@ parse_container(
   bool explicit_nr_of_views = false;
   bool override_nr_of_views = false;
   const char *layout_func_name;
-  const ucl_object_t *cur;
+  struct hikari_config_iter iter;
+  const char *key;
 
-  ucl_object_iter_t it = ucl_object_iterate_new(container_obj);
-  while ((cur = ucl_object_iterate_safe(it, false)) != NULL) {
-    hikari_config_warn_duplicate_key(cur, "a layout container");
-
-    const char *key = ucl_object_key(cur);
-
+  hikari_config_iter_init(&iter, L, container_idx);
+  while (hikari_config_iter_next(&iter, L, &key, "a layout container")) {
     if (!strcmp(key, "layout")) {
-      if (!ucl_object_tostring_safe(cur, &layout_func_name)) {
-        fprintf(stderr,
-            "configuration error: expected string for container \"layout\"\n");
+      if (!hikari_config_string(
+              L, iter.vidx, "a layout container", key, &layout_func_name)) {
         goto done;
       }
 
@@ -110,41 +101,45 @@ parse_container(
     } else if (!strcmp(key, "views")) {
       override_nr_of_views = true;
       if (explicit_nr_of_views) {
-        fprintf(stderr,
-            "configuration error: cannot set \"views\" for \"layout\" \"%s\" "
-            "container\n",
+        hikari_config_error("a layout container",
+            "cannot set \"views\" for \"layout\" \"%s\" container",
             layout_func_name);
         goto done;
       }
 
-      if (!ucl_object_toint_safe(cur, &views)) {
-        fprintf(stderr,
-            "configuration error: expected integer for container \"views\"\n");
+      if (!hikari_config_int(
+              L, iter.vidx, "a layout container", key, &views)) {
         goto done;
       }
 
       if (views < 2 || views > 256) {
-        fprintf(stderr,
-            "configuration error: expected integer between 2 and 256 for "
-            "container \"views\"\n");
+        hikari_config_error("a layout container",
+            "expected integer between 2 and 256 for container \"views\"");
         goto done;
       }
     } else {
-      fprintf(
-          stderr, "configuration error: unknown container key \"%s\"\n", key);
+      hikari_config_error(
+          "a layout container", "unknown container key \"%s\"", key);
       goto done;
     }
   }
 
+  /* Action purpose: A false from next() means either "the table is exhausted"
+  or "the walk was abandoned because an entry was malformed", and only the
+  iterator can tell them apart. Every loop in this file carries this test, for
+  the same reason. */
+  if (iter.failed) {
+    goto done;
+  }
+
   if (layout_func == NULL) {
-    fprintf(stderr, "configuration error: container expects \"layout\"\n");
+    hikari_config_error("a layout container", "container expects \"layout\"");
     goto done;
   }
 
   if (override_nr_of_views && explicit_nr_of_views) {
-    fprintf(stderr,
-        "configuration error: cannot set \"views\" for \"layout\" \"%s\" "
-        "container\n",
+    hikari_config_error("a layout container",
+        "cannot set \"views\" for \"layout\" \"%s\" container",
         layout_func_name);
     goto done;
   }
@@ -155,7 +150,7 @@ parse_container(
   success = true;
 
 done:
-  ucl_object_iterate_free(it);
+  hikari_config_iter_fini(&iter, L);
 
   *container = (struct hikari_split *)ret;
 
@@ -163,59 +158,56 @@ done:
 }
 
 static bool
-split_is_container(const ucl_object_t *top,
-    const ucl_object_t *bottom,
-    const ucl_object_t *left,
-    const ucl_object_t *right,
-    const ucl_object_t *layout)
+split_is_container(int top, int bottom, int left, int right, int layout)
 {
-  return layout != NULL && left == NULL && right == NULL && top == NULL &&
-         bottom == NULL;
+  return layout != LUA_TNIL && left == LUA_TNIL && right == LUA_TNIL &&
+         top == LUA_TNIL && bottom == LUA_TNIL;
 }
 
 static bool
-split_is_vertical(const ucl_object_t *top,
-    const ucl_object_t *bottom,
-    const ucl_object_t *left,
-    const ucl_object_t *right,
-    const ucl_object_t *layout)
+split_is_vertical(int top, int bottom, int left, int right, int layout)
 {
-  return left != NULL && right != NULL && top == NULL && bottom == NULL &&
-         layout == NULL;
+  return left != LUA_TNIL && right != LUA_TNIL && top == LUA_TNIL &&
+         bottom == LUA_TNIL && layout == LUA_TNIL;
 }
 
 static bool
-split_is_horizontal(const ucl_object_t *top,
-    const ucl_object_t *bottom,
-    const ucl_object_t *left,
-    const ucl_object_t *right,
-    const ucl_object_t *layout)
+split_is_horizontal(int top, int bottom, int left, int right, int layout)
 {
-  return top != NULL && bottom != NULL && left == NULL && right == NULL &&
-         layout == NULL;
+  return top != LUA_TNIL && bottom != LUA_TNIL && left == LUA_TNIL &&
+         right == LUA_TNIL && layout == LUA_TNIL;
 }
 
 static bool
-parse_vertical(const ucl_object_t *, struct hikari_split **);
+parse_vertical(lua_State *, int, struct hikari_split **);
 
 static bool
-parse_horizontal(const ucl_object_t *, struct hikari_split **);
+parse_horizontal(lua_State *, int, struct hikari_split **);
 
 static bool
-parse_split(const ucl_object_t *split_obj, struct hikari_split **split)
+parse_split(lua_State *L, int split_idx, struct hikari_split **split)
 {
   bool success = false;
   struct hikari_split *ret = NULL;
-  ucl_type_t type = ucl_object_type(split_obj);
+  int entry_top = lua_gettop(L);
+  int type = lua_type(L, split_idx);
 
-  if (type == UCL_STRING) {
+  /* Action purpose: A layout nests arbitrarily deep, and every level holds the
+  five discriminating lookups below plus an iterator cursor and value while it
+  descends. LUA_MINSTACK is only 20, so the guarantee has to be asked for
+  rather than assumed. */
+  if (!lua_checkstack(L, 8)) {
+    hikari_config_error(NULL, "layout is nested too deeply");
+    goto done;
+  }
+
+  if (type == LUA_TSTRING) {
     const char *layout_func_name;
     hikari_layout_func layout_func;
     int64_t views = 256;
     bool explicit_nr_of_views = false;
-    if (!ucl_object_tostring_safe(split_obj, &layout_func_name)) {
-      fprintf(stderr,
-          "configuration error: expected string for container layout\n");
+    if (!hikari_config_string(
+            L, split_idx, NULL, "layout", &layout_func_name)) {
       goto done;
     }
 
@@ -228,98 +220,93 @@ parse_split(const ucl_object_t *split_obj, struct hikari_split **split)
     hikari_split_container_init(
         (struct hikari_split_container *)ret, views, layout_func);
 
-  } else if (type == UCL_OBJECT) {
-    const ucl_object_t *left = ucl_object_lookup(split_obj, "left");
-    const ucl_object_t *right = ucl_object_lookup(split_obj, "right");
-    const ucl_object_t *top = ucl_object_lookup(split_obj, "top");
-    const ucl_object_t *bottom = ucl_object_lookup(split_obj, "bottom");
-    const ucl_object_t *layout = ucl_object_lookup(split_obj, "layout");
+  } else if (type == LUA_TTABLE) {
+    int left = hikari_config_field(L, split_idx, "left");
+    int right = hikari_config_field(L, split_idx, "right");
+    int top = hikari_config_field(L, split_idx, "top");
+    int bottom = hikari_config_field(L, split_idx, "bottom");
+    int layout = hikari_config_field(L, split_idx, "layout");
 
     if (split_is_vertical(top, bottom, left, right, layout)) {
-      if (!parse_vertical(split_obj, &ret)) {
-        fprintf(
-            stderr, "configuration error: failed to parse vertical split\n");
+      if (!parse_vertical(L, split_idx, &ret)) {
+        hikari_config_error(NULL, "failed to parse vertical split");
         goto done;
       }
     } else if (split_is_horizontal(top, bottom, left, right, layout)) {
-      if (!parse_horizontal(split_obj, &ret)) {
-        fprintf(
-            stderr, "configuration error: failed to parse horizontal split\n");
+      if (!parse_horizontal(L, split_idx, &ret)) {
+        hikari_config_error(NULL, "failed to parse horizontal split");
         goto done;
       }
     } else if (split_is_container(top, bottom, left, right, layout)) {
-      if (!parse_container(split_obj, &ret)) {
-        fprintf(stderr, "configuration error: failed to parse container\n");
+      if (!parse_container(L, split_idx, &ret)) {
+        hikari_config_error(NULL, "failed to parse container");
         goto done;
       }
     } else {
-      fprintf(
-          stderr, "configuration error: failed to determine layout element\n");
+      hikari_config_error(NULL, "failed to determine layout element");
       goto done;
     }
   } else {
-    fprintf(stderr,
-        "configuration error: expected string or object for layout element\n");
+    hikari_config_error(
+        NULL, "expected string or table for layout element, got %s",
+        lua_typename(L, type));
     goto done;
   }
 
   success = true;
 
 done:
+  lua_settop(L, entry_top);
+
   *split = ret;
 
   return success;
 }
 
 static bool
-parse_scale_value(
-    const ucl_object_t *scale_value_obj, const char *name, double *scale)
+parse_scale_value(lua_State *L, int idx, const char *name, double *scale)
 {
   bool success = false;
   double ret;
 
-  if (!ucl_object_todouble_safe(scale_value_obj, &ret)) {
-    fprintf(stderr, "configuration error: expected float for \"%s\"\n", name);
+  if (!hikari_config_double(L, idx, "a layout split", name, &ret)) {
     goto done;
   }
 
   if (ret < hikari_split_scale_min || ret > hikari_split_scale_max) {
-    fprintf(stderr,
-        "configuration error: \"%s\" of \"%.2f\" is not between \"0.1\" "
-        "and "
-        "\"0.9\"\n",
+    hikari_config_error("a layout split",
+        "\"%s\" of \"%.2f\" is not between \"0.1\" and \"0.9\"",
         name,
         ret);
     goto done;
   }
 
+  *scale = ret;
+
   success = true;
 
 done:
-  *scale = ret;
 
   return success;
 }
 
 static bool
 parse_scale_dynamic(
-    const ucl_object_t *scale_obj, struct hikari_split_scale_dynamic *scale)
+    lua_State *L, int scale_idx, struct hikari_split_scale_dynamic *scale)
 {
   bool success = false;
+  int entry_top = lua_gettop(L);
 
-  const ucl_object_t *min_obj = ucl_object_lookup(scale_obj, "min");
-  const ucl_object_t *max_obj = ucl_object_lookup(scale_obj, "max");
-
-  if (min_obj != NULL) {
-    if (!parse_scale_value(min_obj, "min", &scale->min)) {
+  if (hikari_config_field(L, scale_idx, "min") != LUA_TNIL) {
+    if (!parse_scale_value(L, lua_gettop(L), "min", &scale->min)) {
       goto done;
     }
   } else {
     scale->min = hikari_split_scale_min;
   }
 
-  if (max_obj != NULL) {
-    if (!parse_scale_value(max_obj, "max", &scale->max)) {
+  if (hikari_config_field(L, scale_idx, "max") != LUA_TNIL) {
+    if (!parse_scale_value(L, lua_gettop(L), "max", &scale->max)) {
       goto done;
     }
   } else {
@@ -329,37 +316,43 @@ parse_scale_dynamic(
   success = true;
 
 done:
+  lua_settop(L, entry_top);
 
   return success;
 }
 
 static bool
-parse_scale(const ucl_object_t *scale_obj, struct hikari_split_scale *scale)
+parse_scale(lua_State *L, int scale_idx, struct hikari_split_scale *scale)
 {
   bool success = false;
+  int type = lua_type(L, scale_idx);
 
-  if (scale_obj != NULL) {
-    ucl_type_t type = ucl_object_type(scale_obj);
-
-    switch (type) {
-      case UCL_FLOAT:
-        scale->type = HIKARI_SPLIT_SCALE_TYPE_FIXED;
-        if (!parse_scale_value(scale_obj, "scale", &scale->scale.fixed)) {
-          goto done;
-        }
-        break;
-
-      case UCL_OBJECT:
-        scale->type = HIKARI_SPLIT_SCALE_TYPE_DYNAMIC;
-
-        if (!parse_scale_dynamic(scale_obj, &scale->scale.dynamic)) {
-          goto done;
-        }
-        break;
-
-      default:
+  switch (type) {
+    /* Action purpose: Both number subtypes are taken, where libucl's parser
+    accepted only UCL_FLOAT here and dropped an integer into the silent
+    default below. No integer is a legal scale -- the range is 0.1 to 0.9 --
+    so `scale = 1` now reaches parse_scale_value() and is refused by name
+    instead of failing with no message at all. */
+    case LUA_TNUMBER:
+      scale->type = HIKARI_SPLIT_SCALE_TYPE_FIXED;
+      if (!parse_scale_value(L, scale_idx, "scale", &scale->scale.fixed)) {
         goto done;
-    }
+      }
+      break;
+
+    case LUA_TTABLE:
+      scale->type = HIKARI_SPLIT_SCALE_TYPE_DYNAMIC;
+
+      if (!parse_scale_dynamic(L, scale_idx, &scale->scale.dynamic)) {
+        goto done;
+      }
+      break;
+
+    default:
+      hikari_config_error("a layout split",
+          "\"scale\" expects a number or a table, got %s",
+          lua_typename(L, type));
+      goto done;
   }
 
   success = true;
@@ -371,11 +364,11 @@ done:
 
 #define PARSE_SPLIT(name, NAME, first, FIRST, second, SECOND)                  \
   static bool parse_##name(                                                    \
-      const ucl_object_t *name##_obj, struct hikari_split **name)              \
+      lua_State *L, int name##_idx, struct hikari_split **name)                \
   {                                                                            \
     bool success = false;                                                      \
-    bool found_orientation = false;                                            \
-    const ucl_object_t *cur;                                                   \
+    struct hikari_config_iter iter;                                            \
+    const char *key;                                                           \
     struct hikari_split_##name *ret = NULL;                                    \
     enum hikari_split_##name##_orientation orientation =                       \
         HIKARI_##NAME##_SPLIT_ORIENTATION_##FIRST;                             \
@@ -385,64 +378,74 @@ done:
     scale.type = HIKARI_SPLIT_SCALE_TYPE_FIXED;                                \
     scale.scale.fixed = hikari_split_scale_default;                            \
                                                                                \
-    ucl_object_iter_t it = ucl_object_iterate_new(name##_obj);                 \
+    hikari_config_iter_init(&iter, L, name##_idx);                             \
                                                                                \
-    while ((cur = ucl_object_iterate_safe(it, false)) != NULL) {               \
-      hikari_config_warn_duplicate_key(cur, "a layout split");                 \
-                                                                               \
-      const char *key = ucl_object_key(cur);                                   \
-                                                                               \
+    while (hikari_config_iter_next(&iter, L, &key, "a layout split")) {        \
       if (!strcmp(key, "scale")) {                                             \
-        if (!parse_scale(cur, &scale)) {                                       \
+        if (!parse_scale(L, iter.vidx, &scale)) {                              \
+          goto done;                                                           \
+        }                                                                      \
+      } else if (!strcmp(key, "orientation")) {                                \
+        /* Action purpose: Which half of a split is laid out first used to be  \
+        decided by which of the two keys libucl yielded first, and a Lua       \
+        table has no order to read that from. The orientation is therefore     \
+        written down, defaulting to the key order's own default so that a      \
+        configuration which wrote "#first" before "#second" -- every split in  \
+        the shipped default does -- needs no new key and behaves as it did. */ \
+        const char *value;                                                     \
+                                                                               \
+        if (!hikari_config_string(                                             \
+                L, iter.vidx, "a layout split", key, &value)) {                \
+          goto done;                                                           \
+        }                                                                      \
+                                                                               \
+        if (!strcmp(value, #first)) {                                          \
+          orientation = HIKARI_##NAME##_SPLIT_ORIENTATION_##FIRST;             \
+        } else if (!strcmp(value, #second)) {                                  \
+          orientation = HIKARI_##NAME##_SPLIT_ORIENTATION_##SECOND;            \
+        } else {                                                               \
+          hikari_config_error("a layout split",                                \
+              "expected \"" #first "\" or \"" #second "\" for \"" #name        \
+              "\" \"orientation\", got \"%s\"",                                \
+              value);                                                          \
           goto done;                                                           \
         }                                                                      \
       } else if (!strcmp(key, #first)) {                                       \
-        if (!parse_split(cur, &first)) {                                       \
-          fprintf(stderr,                                                      \
-              "configuration error: invalid \"" #first "\" for \"" #name       \
-              "\" split\n");                                                   \
+        if (!parse_split(L, iter.vidx, &first)) {                              \
+          hikari_config_error("a layout split",                                \
+              "invalid \"" #first "\" for \"" #name "\" split");               \
           goto done;                                                           \
         }                                                                      \
-                                                                               \
-        if (!found_orientation) {                                              \
-          orientation = HIKARI_##NAME##_SPLIT_ORIENTATION_##FIRST;             \
-          found_orientation = true;                                            \
-        }                                                                      \
       } else if (!strcmp(key, #second)) {                                      \
-        if (!parse_split(cur, &second)) {                                      \
+        if (!parse_split(L, iter.vidx, &second)) {                             \
           if (first != NULL) {                                                 \
             hikari_split_free(first);                                          \
           }                                                                    \
-          fprintf(stderr,                                                      \
-              "configuration error: invalid \"" #second "\" for \"" #name      \
-              "\" split\n");                                                   \
+          hikari_config_error("a layout split",                                \
+              "invalid \"" #second "\" for \"" #name "\" split");              \
           goto done;                                                           \
         }                                                                      \
-                                                                               \
-        if (!found_orientation) {                                              \
-          orientation = HIKARI_##NAME##_SPLIT_ORIENTATION_##SECOND;            \
-          found_orientation = true;                                            \
-        }                                                                      \
       } else {                                                                 \
-        fprintf(stderr,                                                        \
-            "configuration error: unknown \"" #name "\" key \"%s\"\n",         \
-            key);                                                              \
+        hikari_config_error(                                                   \
+            "a layout split", "unknown \"" #name "\" key \"%s\"", key);        \
         goto done;                                                             \
       }                                                                        \
     }                                                                          \
                                                                                \
+    if (iter.failed) {                                                         \
+      goto done;                                                               \
+    }                                                                          \
+                                                                               \
     if (first == NULL) {                                                       \
-      fprintf(stderr,                                                          \
-          "configuration error: missing \"" #first "\" for \"" #name           \
-          "\" split\n");                                                       \
+      hikari_config_error("a layout split",                                    \
+          "missing \"" #first "\" for \"" #name "\" split");                   \
       goto done;                                                               \
     }                                                                          \
                                                                                \
     if (second == NULL) {                                                      \
       hikari_split_free(first);                                                \
-      fprintf(stderr,                                                          \
-          "configuration error: missing \"" #second "\" for " #name            \
-          " split\n");                                                         \
+      hikari_config_error("a layout split",                                    \
+          "missing \"" #second "\" for " #name " split");                      \
       goto done;                                                               \
     }                                                                          \
                                                                                \
@@ -452,7 +455,7 @@ done:
     success = true;                                                            \
                                                                                \
   done:                                                                        \
-    ucl_object_iterate_free(it);                                               \
+    hikari_config_iter_fini(&iter, L);                                         \
                                                                                \
     *name = (struct hikari_split *)ret;                                        \
                                                                                \
@@ -482,12 +485,13 @@ hikari_configuration_resolve_view_config(
 }
 
 static char *
-copy_in_config_string(const ucl_object_t *obj)
+copy_in_config_string(
+    lua_State *L, int idx, const char *where, const char *key)
 {
   const char *str;
   char *ret;
 
-  bool success = ucl_object_tostring_safe(obj, &str);
+  bool success = hikari_config_string(L, idx, where, key, &str);
 
   if (success) {
     size_t len = strlen(str);
@@ -496,7 +500,6 @@ copy_in_config_string(const ucl_object_t *obj)
 
     return ret;
   } else {
-    fprintf(stderr, "configuration error: expected string\n");
     return NULL;
   }
 }
@@ -508,8 +511,8 @@ RGBA, accepting either form:
   string   "#RRGGBB"     -- same, written explicitly
   string   "#RRGGBBAA"   -- carries alpha in the low byte
 
-Alpha deliberately cannot be expressed as an integer. UCL parses `0x0080FFCC`
-and `0x80FFCC` to values that a magnitude test cannot tell apart, so an
+Alpha deliberately cannot be expressed as an integer. `0x0080FFCC` and
+`0x80FFCC` are values that a magnitude test cannot tell apart, so an
 8-vs-6-digit integer heuristic would silently misread any colour whose red
 channel is zero. The string form makes the digit count explicit, so the two
 never collide and every existing integer config keeps its exact meaning. See
@@ -560,31 +563,28 @@ meaning of the file depend on key order; forbidding it costs nothing, since a
 palette is by definition where the literals live. */
 static bool
 parse_color(struct hikari_configuration *configuration,
-    const ucl_object_t *obj,
+    lua_State *L,
+    int idx,
     const char *key,
     float dst[static 4])
 {
-  if (ucl_object_type(obj) == UCL_STRING) {
+  if (lua_type(L, idx) == LUA_TSTRING) {
     const char *str;
 
-    if (!ucl_object_tostring_safe(obj, &str)) {
-      fprintf(stderr,
-          "configuration error: expected \"#RRGGBB\", \"#RRGGBBAA\" or a "
-          "palette reference for \"%s\"\n",
-          key);
+    if (!hikari_config_string(L, idx, NULL, key, &str)) {
       return false;
     }
 
     /* [COMMENT] Action purpose: Anything not starting with '#' is taken to be a
-    palette reference. UCL parses a bare `color3` as a string, so `active =
-    color3` and `active = "color3"` are the same thing and both work. */
+    palette reference. The quotes are not optional in Lua -- a bare `color3` is
+    a variable read, which the configuration sandbox refuses by name -- so
+    `active = "color3"` is the one spelling. */
     if (str[0] != '#') {
       int index;
 
       if (configuration == NULL || !parse_palette_reference(str, &index)) {
-        fprintf(stderr,
-            "configuration error: expected \"#RRGGBB\", \"#RRGGBBAA\"%s for "
-            "\"%s\", got \"%s\"\n",
+        hikari_config_error(NULL,
+            "expected \"#RRGGBB\", \"#RRGGBBAA\"%s for \"%s\", got \"%s\"",
             configuration != NULL ? " or \"color0\"-\"color15\"" : "",
             key,
             str);
@@ -599,19 +599,15 @@ parse_color(struct hikari_configuration *configuration,
     size_t len = strlen(str + 1);
 
     if (len != 6 && len != 8) {
-      fprintf(stderr,
-          "configuration error: \"%s\" must have 6 or 8 hex digits, got %zu\n",
-          key,
-          len);
+      hikari_config_error(
+          NULL, "\"%s\" must have 6 or 8 hex digits, got %zu", key, len);
       return false;
     }
 
     for (size_t i = 1; i <= len; i++) {
       if (!isxdigit((unsigned char)str[i])) {
-        fprintf(stderr,
-            "configuration error: invalid hex digit in \"%s\" value \"%s\"\n",
-            key,
-            str);
+        hikari_config_error(
+            NULL, "invalid hex digit in \"%s\" value \"%s\"", key, str);
         return false;
       }
     }
@@ -629,12 +625,16 @@ parse_color(struct hikari_configuration *configuration,
     return true;
   }
 
+  if (lua_type(L, idx) != LUA_TNUMBER) {
+    hikari_config_error(NULL,
+        "expected integer or \"#RRGGBB[AA]\" string for \"%s\", got %s",
+        key,
+        lua_typename(L, lua_type(L, idx)));
+    return false;
+  }
+
   int64_t color;
-  if (!ucl_object_toint_safe(obj, &color)) {
-    fprintf(stderr,
-        "configuration error: expected integer or \"#RRGGBB[AA]\" string for "
-        "\"%s\"\n",
-        key);
+  if (!hikari_config_int(L, idx, NULL, key, &color)) {
     return false;
   }
 
@@ -642,9 +642,8 @@ parse_color(struct hikari_configuration *configuration,
   truncating them in the cast below -- -1 would otherwise become white, and
   0x1FF0000 would become 0xFF0000. */
   if (color < 0 || color > 0xFFFFFF) {
-    fprintf(stderr,
-        "configuration error: \"%s\" must be between 0x000000 and 0xFFFFFF\n",
-        key);
+    hikari_config_error(
+        NULL, "\"%s\" must be between 0x000000 and 0xFFFFFF", key);
     return false;
   }
 
@@ -662,96 +661,113 @@ NULL configuration, which forbids one palette entry referring to another -- see
 parse_color(). */
 static bool
 parse_palette(
-    struct hikari_configuration *configuration, const ucl_object_t *palette_obj)
+    struct hikari_configuration *configuration, lua_State *L, int palette_idx)
 {
   bool success = false;
-  ucl_object_iter_t it = ucl_object_iterate_new(palette_obj);
+  struct hikari_config_iter iter;
+  const char *key;
 
-  const ucl_object_t *cur;
-  while ((cur = ucl_object_iterate_safe(it, false)) != NULL) {
-    hikari_config_warn_duplicate_key(cur, "ui.palette");
-
-    const char *key = ucl_object_key(cur);
+  hikari_config_iter_init(&iter, L, palette_idx);
+  while (hikari_config_iter_next(&iter, L, &key, "ui.palette")) {
     int index;
 
     if (!parse_palette_reference(key, &index)) {
-      fprintf(stderr,
-          "configuration error: expected \"color0\"-\"color15\" in "
-          "\"palette\", got \"%s\"\n",
+      hikari_config_error("ui.palette",
+          "expected \"color0\"-\"color15\" in \"palette\", got \"%s\"",
           key);
       goto done;
     }
 
-    if (!parse_color(NULL, cur, key, configuration->palette[index])) {
+    if (!parse_color(
+            NULL, L, iter.vidx, key, configuration->palette[index])) {
       goto done;
     }
+  }
+
+  if (iter.failed) {
+    goto done;
   }
 
   success = true;
 
 done:
-  ucl_object_iterate_free(it);
+  hikari_config_iter_fini(&iter, L);
 
   return success;
 }
 
 static bool
 parse_colorscheme(struct hikari_configuration *configuration,
-    const ucl_object_t *colorscheme_obj)
+    lua_State *L,
+    int colorscheme_idx)
 {
   bool success = false;
-  const ucl_object_t *cur;
+  struct hikari_config_iter iter;
+  const char *key;
 
-  ucl_object_iter_t it = ucl_object_iterate_new(colorscheme_obj);
-
-  while ((cur = ucl_object_iterate_safe(it, false)) != NULL) {
-    hikari_config_warn_duplicate_key(cur, "ui.colorscheme");
-
-    const char *key = ucl_object_key(cur);
-
+  hikari_config_iter_init(&iter, L, colorscheme_idx);
+  while (hikari_config_iter_next(&iter, L, &key, "ui.colorscheme")) {
     if (!strcmp("selected", key)) {
-      if (!parse_color(
-              configuration, cur, key, configuration->indicator_selected)) {
+      if (!parse_color(configuration,
+              L,
+              iter.vidx,
+              key,
+              configuration->indicator_selected)) {
         goto done;
       }
     } else if (!strcmp("grouped", key)) {
-      if (!parse_color(
-              configuration, cur, key, configuration->indicator_grouped)) {
+      if (!parse_color(configuration,
+              L,
+              iter.vidx,
+              key,
+              configuration->indicator_grouped)) {
         goto done;
       }
     } else if (!strcmp("first", key)) {
-      if (!parse_color(
-              configuration, cur, key, configuration->indicator_first)) {
+      if (!parse_color(configuration,
+              L,
+              iter.vidx,
+              key,
+              configuration->indicator_first)) {
         goto done;
       }
     } else if (!strcmp("conflict", key)) {
-      if (!parse_color(
-              configuration, cur, key, configuration->indicator_conflict)) {
+      if (!parse_color(configuration,
+              L,
+              iter.vidx,
+              key,
+              configuration->indicator_conflict)) {
         goto done;
       }
     } else if (!strcmp("insert", key)) {
-      if (!parse_color(
-              configuration, cur, key, configuration->indicator_insert)) {
+      if (!parse_color(configuration,
+              L,
+              iter.vidx,
+              key,
+              configuration->indicator_insert)) {
         goto done;
       }
     } else if (!strcmp("active", key)) {
       if (!parse_color(
-              configuration, cur, key, configuration->border_active)) {
+              configuration, L, iter.vidx, key, configuration->border_active)) {
         goto done;
       }
     } else if (!strcmp("inactive", key)) {
-      if (!parse_color(
-              configuration, cur, key, configuration->border_inactive)) {
+      if (!parse_color(configuration,
+              L,
+              iter.vidx,
+              key,
+              configuration->border_inactive)) {
         goto done;
       }
     } else if (!strcmp("foreground", key)) {
       if (!parse_color(
-              configuration, cur, key, configuration->foreground)) {
+              configuration, L, iter.vidx, key, configuration->foreground)) {
         goto done;
       }
     } else if (!strcmp("background", key)) {
       if (!parse_color(
-              configuration, cur, key, configuration->clear)) {
+              configuration, L, iter.vidx, key, configuration->clear)) {
         goto done;
       }
     } else if (!strcmp("bar", key)) {
@@ -760,43 +776,42 @@ parse_colorscheme(struct hikari_configuration *configuration,
       be tinted or made translucent without also changing the desktop
       background behind every window. See DECISIONS_LOG Phase 60. */
       if (!parse_color(
-              configuration, cur, key, configuration->bar)) {
+              configuration, L, iter.vidx, key, configuration->bar)) {
         goto done;
       }
     } else {
-      fprintf(stderr, "configuration error: unknown color key \"%s\"\n", key);
+      hikari_config_error(
+          "ui.colorscheme", "unknown color key \"%s\"", key);
       goto done;
     }
+  }
+
+  if (iter.failed) {
+    goto done;
   }
 
   success = true;
 
 done:
-  ucl_object_iterate_free(it);
+  hikari_config_iter_fini(&iter, L);
 
   return success;
 }
 
 static bool
 parse_execute(
-    struct hikari_configuration *configuration, const ucl_object_t *obj)
+    struct hikari_configuration *configuration, lua_State *L, int marks_idx)
 {
   bool success = false;
-  const ucl_object_t *cur;
+  struct hikari_config_iter iter;
   const char *key;
 
-  ucl_object_iter_t it = ucl_object_iterate_new(obj);
-  while ((cur = ucl_object_iterate_safe(it, false)) != NULL) {
-    hikari_config_warn_duplicate_key(cur, "marks");
-
-    key = ucl_object_key(cur);
-
+  hikari_config_iter_init(&iter, L, marks_idx);
+  while (hikari_config_iter_next(&iter, L, &key, "marks")) {
     struct hikari_exec *execute = NULL;
 
     if (strlen(key) != 1 || !(key[0] >= 'a' && key[0] <= 'z')) {
-      fprintf(stderr,
-          "configuration error: invalid \"marks\" register \"%s\"\n",
-          key);
+      hikari_config_error("marks", "invalid \"marks\" register \"%s\"", key);
       goto done;
     } else {
       int nr = key[0] - 'a';
@@ -805,63 +820,66 @@ parse_execute(
 
     assert(execute != NULL);
 
-    char *command = copy_in_config_string(cur);
+    char *command = copy_in_config_string(L, iter.vidx, "marks", key);
 
     if (command != NULL) {
       execute->command = command;
     } else {
-      fprintf(stderr,
-          "configuration error: invalid command for \"marks\" "
-          "register \"%c\"\n",
+      hikari_config_error("marks",
+          "invalid command for \"marks\" register \"%c\"",
           key[0]);
       goto done;
     }
     execute = NULL;
   }
 
+  if (iter.failed) {
+    goto done;
+  }
+
   success = true;
 
 done:
-  ucl_object_iterate_free(it);
+  hikari_config_iter_fini(&iter, L);
 
   return success;
 }
 
 static bool
 parse_view_configs(
-    struct hikari_configuration *configuration, const ucl_object_t *obj)
+    struct hikari_configuration *configuration, lua_State *L, int views_idx)
 {
   bool success = false;
-  ucl_object_iter_t it = ucl_object_iterate_new(obj);
+  struct hikari_config_iter iter;
+  const char *key;
 
-  const ucl_object_t *cur;
-  while ((cur = ucl_object_iterate_safe(it, false)) != NULL) {
-    hikari_config_warn_duplicate_key(cur, "views");
-
+  hikari_config_iter_init(&iter, L, views_idx);
+  while (hikari_config_iter_next(&iter, L, &key, "views")) {
     struct hikari_view_config *view_config =
         hikari_malloc(sizeof(struct hikari_view_config));
 
     hikari_view_config_init(view_config);
     wl_list_insert(&configuration->view_configs, &view_config->link);
 
-    const char *key = ucl_object_key(cur);
     size_t keylen = strlen(key);
 
     view_config->app_id = hikari_malloc(keylen + 1);
     strcpy(view_config->app_id, key);
 
-    if (!hikari_view_config_parse(view_config, cur)) {
-      fprintf(stderr,
-          "configuration error: failed to parse \"views\" \"%s\"\n",
-          key);
+    if (!hikari_view_config_parse(view_config, L, iter.vidx)) {
+      hikari_config_error("views", "failed to parse \"views\" \"%s\"", key);
       goto done;
     }
+  }
+
+  if (iter.failed) {
+    goto done;
   }
 
   success = true;
 
 done:
-  ucl_object_iterate_free(it);
+  hikari_config_iter_fini(&iter, L);
 
   return success;
 }
@@ -886,7 +904,7 @@ parse_mouse_button(const char *str, uint32_t *keycode)
   } else if (!strcmp(str, "task")) {
     *keycode = BTN_TASK;
   } else {
-    fprintf(stderr, "configuration error: unknown mouse button \"%s\"\n", str);
+    hikari_config_error(NULL, "unknown mouse button \"%s\"", str);
     return false;
   }
 
@@ -895,12 +913,11 @@ parse_mouse_button(const char *str, uint32_t *keycode)
 
 static bool
 parse_action(const char *action_name,
-    const ucl_object_t *action_obj,
+    lua_State *L,
+    int action_idx,
     const char **command)
 {
-  if (!ucl_object_tostring_safe(action_obj, command)) {
-    fprintf(stderr,
-        "configuration error: expected string for \"action\" command\n");
+  if (!hikari_config_string(L, action_idx, "actions", action_name, command)) {
     return false;
   }
 
@@ -909,20 +926,18 @@ parse_action(const char *action_name,
 
 static bool
 parse_actions(
-    struct hikari_configuration *configuration, const ucl_object_t *actions_obj)
+    struct hikari_configuration *configuration, lua_State *L, int actions_idx)
 {
   bool success = false;
   struct hikari_action_config *action_config;
+  struct hikari_config_iter iter;
+  const char *key;
 
-  const ucl_object_t *cur;
-  ucl_object_iter_t it = ucl_object_iterate_new(actions_obj);
-  while ((cur = ucl_object_iterate_safe(it, false)) != NULL) {
-    hikari_config_warn_duplicate_key(cur, "actions");
-
-    const char *key = ucl_object_key(cur);
+  hikari_config_iter_init(&iter, L, actions_idx);
+  while (hikari_config_iter_next(&iter, L, &key, "actions")) {
     const char *command;
 
-    if (!parse_action(key, cur, &command)) {
+    if (!parse_action(key, L, iter.vidx, &command)) {
       goto done;
     }
 
@@ -932,22 +947,29 @@ parse_actions(
     wl_list_insert(&configuration->action_configs, &action_config->link);
   }
 
+  if (iter.failed) {
+    goto done;
+  }
+
   success = true;
 
 done:
+  hikari_config_iter_fini(&iter, L);
+
   return success;
 }
 
 static bool
 parse_layout(char layout_register,
-    const ucl_object_t *layout_obj,
+    lua_State *L,
+    int layout_idx,
     struct hikari_split **split)
 {
   struct hikari_split *ret = NULL;
 
-  if (!parse_split(layout_obj, &ret)) {
-    fprintf(stderr,
-        "configuration error: failed to parse layout for register \"%c\"\n",
+  if (!parse_split(L, layout_idx, &ret)) {
+    hikari_config_error("layouts",
+        "failed to parse layout for register \"%c\"",
         layout_register);
     return false;
   }
@@ -959,28 +981,25 @@ parse_layout(char layout_register,
 
 static bool
 parse_layouts(
-    struct hikari_configuration *configuration, const ucl_object_t *layouts_obj)
+    struct hikari_configuration *configuration, lua_State *L, int layouts_idx)
 {
   bool success = false;
   struct hikari_layout_config *layout_config;
   struct hikari_split *split;
+  struct hikari_config_iter iter;
+  const char *key;
 
-  const ucl_object_t *cur;
-  ucl_object_iter_t it = ucl_object_iterate_new(layouts_obj);
-  while ((cur = ucl_object_iterate_safe(it, false)) != NULL) {
-    hikari_config_warn_duplicate_key(cur, "layouts");
-
-    const char *key = ucl_object_key(cur);
-
+  hikari_config_iter_init(&iter, L, layouts_idx);
+  while (hikari_config_iter_next(&iter, L, &key, "layouts")) {
     if (strlen(key) > 1 ||
         !((key[0] >= 'a' && key[0] <= 'z') || isdigit(key[0]))) {
-      fprintf(stderr, "configuration error: expected layout register name\n");
+      hikari_config_error("layouts", "expected layout register name");
       goto done;
     }
 
     char layout_register = key[0];
 
-    if (!parse_layout(layout_register, cur, &split)) {
+    if (!parse_layout(layout_register, L, iter.vidx, &split)) {
       goto done;
     }
 
@@ -990,9 +1009,15 @@ parse_layouts(
     wl_list_insert(&configuration->layout_configs, &layout_config->link);
   }
 
+  if (iter.failed) {
+    goto done;
+  }
+
   success = true;
 
 done:
+  hikari_config_iter_fini(&iter, L);
+
   return success;
 }
 
@@ -1005,26 +1030,19 @@ be read as a register name and rejected with a misleading error, which is the
 whole reason the two live in different sections. */
 static bool
 parse_layout_policy(
-    struct hikari_configuration *configuration, const ucl_object_t *layout_obj)
+    struct hikari_configuration *configuration, lua_State *L, int layout_idx)
 {
   bool success = false;
   struct hikari_layout_policy *policy = &configuration->layout_policy;
+  struct hikari_config_iter iter;
+  const char *key;
 
-  const ucl_object_t *cur;
-  ucl_object_iter_t it = ucl_object_iterate_new(layout_obj);
-
-  while ((cur = ucl_object_iterate_safe(it, false)) != NULL) {
-    hikari_config_warn_duplicate_key(cur, "layout");
-
-    const char *key = ucl_object_key(cur);
-
+  hikari_config_iter_init(&iter, L, layout_idx);
+  while (hikari_config_iter_next(&iter, L, &key, "layout")) {
     if (!strcmp(key, "auto") || !strcmp(key, "reflow-on-close")) {
       bool value;
 
-      if (!ucl_object_toboolean_safe(cur, &value)) {
-        fprintf(stderr,
-            "configuration error: expected boolean for \"%s\"\n",
-            key);
+      if (!hikari_config_bool(L, iter.vidx, "layout", key, &value)) {
         goto done;
       }
 
@@ -1036,9 +1054,7 @@ parse_layout_policy(
     } else if (!strcmp(key, "insert")) {
       const char *value;
 
-      if (!ucl_object_tostring_safe(cur, &value)) {
-        fprintf(stderr,
-            "configuration error: expected string for \"insert\"\n");
+      if (!hikari_config_string(L, iter.vidx, "layout", key, &value)) {
         goto done;
       }
 
@@ -1047,19 +1063,15 @@ parse_layout_policy(
       } else if (!strcmp(value, "prepend")) {
         policy->insert = HIKARI_LAYOUT_INSERT_PREPEND;
       } else {
-        fprintf(stderr,
-            "configuration error: expected \"append\" or \"prepend\" for "
-            "\"insert\", got \"%s\"\n",
+        hikari_config_error("layout",
+            "expected \"append\" or \"prepend\" for \"insert\", got \"%s\"",
             value);
         goto done;
       }
     } else if (!strcmp(key, "default-register")) {
       const char *value;
 
-      if (!ucl_object_tostring_safe(cur, &value)) {
-        fprintf(stderr,
-            "configuration error: expected string for "
-            "\"default-register\"\n");
+      if (!hikari_config_string(L, iter.vidx, "layout", key, &value)) {
         goto done;
       }
 
@@ -1071,26 +1083,28 @@ parse_layout_policy(
       rather than failing the whole configuration. */
       if (strlen(value) != 1 ||
           !((value[0] >= 'a' && value[0] <= 'z') || isdigit(value[0]))) {
-        fprintf(stderr,
-            "configuration error: \"default-register\" must be a single "
-            "layout register (\"a\"-\"z\" or \"0\"-\"9\"), got "
-            "\"%s\"\n",
+        hikari_config_error("layout",
+            "\"default-register\" must be a single layout register "
+            "(\"a\"-\"z\" or \"0\"-\"9\"), got \"%s\"",
             value);
         goto done;
       }
 
       policy->default_register = value[0];
     } else {
-      fprintf(
-          stderr, "configuration error: unknown \"layout\" key \"%s\"\n", key);
+      hikari_config_error("layout", "unknown \"layout\" key \"%s\"", key);
       goto done;
     }
+  }
+
+  if (iter.failed) {
+    goto done;
   }
 
   success = true;
 
 done:
-  ucl_object_iterate_free(it);
+  hikari_config_iter_fini(&iter, L);
 
   return success;
 }
@@ -1124,19 +1138,16 @@ lookup_action(
 }
 
 static bool
-parse_keyboard_bindings(struct hikari_configuration *configuration,
-    const ucl_object_t *bindings_obj)
+parse_keyboard_bindings(
+    struct hikari_configuration *configuration, lua_State *L, int bindings_idx)
 {
   bool success = false;
-  const ucl_object_t *cur;
   struct hikari_binding_config *binding_config;
+  struct hikari_config_iter iter;
+  const char *key;
 
-  ucl_object_iter_t it = ucl_object_iterate_new(bindings_obj);
-  while ((cur = ucl_object_iterate_safe(it, false)) != NULL) {
-    hikari_config_warn_duplicate_key(cur, "bindings.keyboard");
-
-    const char *key = ucl_object_key(cur);
-
+  hikari_config_iter_init(&iter, L, bindings_idx);
+  while (hikari_config_iter_next(&iter, L, &key, "bindings.keyboard")) {
     binding_config = hikari_malloc(sizeof(struct hikari_binding_config));
     wl_list_insert(
         &configuration->keyboard_binding_configs, &binding_config->link);
@@ -1148,14 +1159,20 @@ parse_keyboard_bindings(struct hikari_configuration *configuration,
     struct hikari_action *action = &binding_config->action;
     hikari_action_init(action);
 
-    if (!hikari_action_parse(action, &configuration->action_configs, cur)) {
+    if (!hikari_action_parse(
+            action, &configuration->action_configs, L, iter.vidx)) {
       goto done;
     }
+  }
+
+  if (iter.failed) {
+    goto done;
   }
 
   success = true;
 
 done:
+  hikari_config_iter_fini(&iter, L);
 
   return success;
 }
@@ -1182,19 +1199,16 @@ finalize_keyboard_configs(struct hikari_configuration *configuration)
 }
 
 static bool
-parse_mouse_bindings(struct hikari_configuration *configuration,
-    const ucl_object_t *bindings_obj)
+parse_mouse_bindings(
+    struct hikari_configuration *configuration, lua_State *L, int bindings_idx)
 {
   bool success = false;
-  const ucl_object_t *cur;
   struct hikari_binding_config *binding_config;
+  struct hikari_config_iter iter;
+  const char *key;
 
-  ucl_object_iter_t it = ucl_object_iterate_new(bindings_obj);
-  while ((cur = ucl_object_iterate_safe(it, false)) != NULL) {
-    hikari_config_warn_duplicate_key(cur, "bindings.mouse");
-
-    const char *key = ucl_object_key(cur);
-
+  hikari_config_iter_init(&iter, L, bindings_idx);
+  while (hikari_config_iter_next(&iter, L, &key, "bindings.mouse")) {
     binding_config = hikari_malloc(sizeof(struct hikari_binding_config));
     wl_list_insert(
         &configuration->mouse_binding_configs, &binding_config->link);
@@ -1206,92 +1220,93 @@ parse_mouse_bindings(struct hikari_configuration *configuration,
     struct hikari_action *action = &binding_config->action;
     hikari_action_init(action);
 
-    if (!hikari_action_parse(action, &configuration->action_configs, cur)) {
+    if (!hikari_action_parse(
+            action, &configuration->action_configs, L, iter.vidx)) {
       goto done;
     }
+  }
+
+  if (iter.failed) {
+    goto done;
   }
 
   success = true;
 
 done:
+  hikari_config_iter_fini(&iter, L);
 
   return success;
 }
 
 static bool
-parse_bindings(struct hikari_configuration *configuration,
-    const ucl_object_t *bindings_obj)
+parse_bindings(
+    struct hikari_configuration *configuration, lua_State *L, int bindings_idx)
 {
   bool success = false;
-  const ucl_object_t *cur;
+  struct hikari_config_iter iter;
+  const char *key;
 
-  ucl_object_iter_t it = ucl_object_iterate_new(bindings_obj);
-  while ((cur = ucl_object_iterate_safe(it, false)) != NULL) {
-    hikari_config_warn_duplicate_key(cur, "bindings");
-
-    const char *key = ucl_object_key(cur);
-
+  hikari_config_iter_init(&iter, L, bindings_idx);
+  while (hikari_config_iter_next(&iter, L, &key, "bindings")) {
     if (!strcmp(key, "keyboard")) {
-      if (!parse_keyboard_bindings(configuration, cur)) {
+      if (!parse_keyboard_bindings(configuration, L, iter.vidx)) {
         goto done;
       }
     } else if (!strcmp(key, "mouse")) {
-      if (!parse_mouse_bindings(configuration, cur)) {
+      if (!parse_mouse_bindings(configuration, L, iter.vidx)) {
         goto done;
       }
     } else {
-      fprintf(stderr,
-          "configuration error: unexpected \"bindings\" section \"%s\"\n",
-          key);
+      hikari_config_error(
+          "bindings", "unexpected \"bindings\" section \"%s\"", key);
       goto done;
     }
+  }
+
+  if (iter.failed) {
+    goto done;
   }
 
   success = true;
 
 done:
-  ucl_object_iterate_free(it);
+  hikari_config_iter_fini(&iter, L);
 
   return success;
 }
 
 static bool
 parse_pointer_config(struct hikari_pointer_config *pointer_config,
-    const ucl_object_t *pointer_config_obj)
+    lua_State *L,
+    int pointer_config_idx)
 {
   bool success = false;
   const char *pointer_name = pointer_config->name;
-  const ucl_object_t *cur;
+  struct hikari_config_iter iter;
+  const char *key;
 
-  ucl_object_iter_t it = ucl_object_iterate_new(pointer_config_obj);
-  while ((cur = ucl_object_iterate_safe(it, false)) != NULL) {
-    hikari_config_warn_duplicate_key(cur, "an inputs.pointers entry");
-
-    const char *key = ucl_object_key(cur);
-
+  hikari_config_iter_init(&iter, L, pointer_config_idx);
+  while (hikari_config_iter_next(
+      &iter, L, &key, "an inputs.pointers entry")) {
     if (!strcmp(key, "accel")) {
       double accel;
-      if (!ucl_object_todouble_safe(cur, &accel)) {
-        fprintf(stderr,
-            "configuration error: expected float for \"%s\" \"accel\"\n",
-            pointer_name);
+      if (!hikari_config_double(
+              L, iter.vidx, "an inputs.pointers entry", key, &accel)) {
         goto done;
       }
 
       if (accel < -1.0 || accel > 1.0) {
-        fprintf(
-            stderr, "configuration error: expected float between -1 and 1\n");
+        hikari_config_error("an inputs.pointers entry",
+            "expected float between -1 and 1 for \"%s\" \"accel\"",
+            pointer_name);
         goto done;
       }
 
       hikari_pointer_config_set_accel(pointer_config, accel);
     } else if (!strcmp(key, "accel-profile")) {
       const char *accel_profile;
-      if (!ucl_object_tostring_safe(cur, &accel_profile)) {
-        fprintf(stderr,
-            "configuration error: expected string \"%s\" for "
-            "\"accel-profile\"\n",
-            pointer_name);
+      if (!hikari_config_string(
+              L, iter.vidx, "an inputs.pointers entry", key, &accel_profile)) {
         goto done;
       }
 
@@ -1305,19 +1320,16 @@ parse_pointer_config(struct hikari_pointer_config *pointer_config,
         hikari_pointer_config_set_accel_profile(
             pointer_config, LIBINPUT_CONFIG_ACCEL_PROFILE_ADAPTIVE);
       } else {
-        fprintf(stderr,
-            "configuration error: unkown \"accel-profile\" \"%s\" for \"%s\"\n",
+        hikari_config_error("an inputs.pointers entry",
+            "unkown \"accel-profile\" \"%s\" for \"%s\"",
             accel_profile,
             pointer_name);
         goto done;
       }
     } else if (!strcmp(key, "scroll-method")) {
       const char *scroll_method;
-      if (!ucl_object_tostring_safe(cur, &scroll_method)) {
-        fprintf(stderr,
-            "configuration error: expected string \"%s\" for "
-            "\"scroll-method\"\n",
-            pointer_name);
+      if (!hikari_config_string(
+              L, iter.vidx, "an inputs.pointers entry", key, &scroll_method)) {
         goto done;
       }
 
@@ -1328,8 +1340,8 @@ parse_pointer_config(struct hikari_pointer_config *pointer_config,
         hikari_pointer_config_set_scroll_method(
             pointer_config, LIBINPUT_CONFIG_SCROLL_NO_SCROLL);
       } else {
-        fprintf(stderr,
-            "configuration error: unkown \"scroll-method\" \"%s\" for \"%s\"\n",
+        hikari_config_error("an inputs.pointers entry",
+            "unkown \"scroll-method\" \"%s\" for \"%s\"",
             scroll_method,
             pointer_name);
         goto done;
@@ -1337,15 +1349,14 @@ parse_pointer_config(struct hikari_pointer_config *pointer_config,
     } else if (!strcmp(key, "scroll-button")) {
       const char *scroll_button;
       uint32_t scroll_button_keycode;
-      if (!ucl_object_tostring_safe(cur, &scroll_button)) {
-        fprintf(stderr,
-            "configuration error: expected string for \"scroll-button\"\n");
+      if (!hikari_config_string(
+              L, iter.vidx, "an inputs.pointers entry", key, &scroll_button)) {
         goto done;
       }
 
       if (!parse_mouse_button(scroll_button, &scroll_button_keycode)) {
-        fprintf(
-            stderr, "configuration error: failed to parse \"scroll-button\"\n");
+        hikari_config_error(
+            "an inputs.pointers entry", "failed to parse \"scroll-button\"");
         goto done;
       }
 
@@ -1353,10 +1364,11 @@ parse_pointer_config(struct hikari_pointer_config *pointer_config,
           pointer_config, scroll_button_keycode);
     } else if (!strcmp(key, "disable-while-typing")) {
       bool disable_while_typing;
-      if (!ucl_object_toboolean_safe(cur, &disable_while_typing)) {
-        fprintf(stderr,
-            "configuration error: expected boolean for "
-            "\"disable-while-typing\"\n");
+      if (!hikari_config_bool(L,
+              iter.vidx,
+              "an inputs.pointers entry",
+              key,
+              &disable_while_typing)) {
         goto done;
       }
 
@@ -1369,10 +1381,8 @@ parse_pointer_config(struct hikari_pointer_config *pointer_config,
       }
     } else if (!strcmp(key, "tap")) {
       bool tap;
-      if (!ucl_object_toboolean_safe(cur, &tap)) {
-        fprintf(stderr,
-            "configuration error: expected boolean for "
-            "\"tap\"\n");
+      if (!hikari_config_bool(
+              L, iter.vidx, "an inputs.pointers entry", key, &tap)) {
         goto done;
       }
 
@@ -1385,10 +1395,8 @@ parse_pointer_config(struct hikari_pointer_config *pointer_config,
       }
     } else if (!strcmp(key, "tap-drag")) {
       bool tap_drag;
-      if (!ucl_object_toboolean_safe(cur, &tap_drag)) {
-        fprintf(stderr,
-            "configuration error: expected boolean for "
-            "\"tap-drag\"\n");
+      if (!hikari_config_bool(
+              L, iter.vidx, "an inputs.pointers entry", key, &tap_drag)) {
         goto done;
       }
 
@@ -1401,10 +1409,8 @@ parse_pointer_config(struct hikari_pointer_config *pointer_config,
       }
     } else if (!strcmp(key, "tap-drag-lock")) {
       bool tap_drag_lock;
-      if (!ucl_object_toboolean_safe(cur, &tap_drag_lock)) {
-        fprintf(stderr,
-            "configuration error: expected boolean for "
-            "\"tap-drag-lock\"\n");
+      if (!hikari_config_bool(
+              L, iter.vidx, "an inputs.pointers entry", key, &tap_drag_lock)) {
         goto done;
       }
 
@@ -1417,10 +1423,11 @@ parse_pointer_config(struct hikari_pointer_config *pointer_config,
       }
     } else if (!strcmp(key, "middle-emulation")) {
       bool middle_emulation;
-      if (!ucl_object_toboolean_safe(cur, &middle_emulation)) {
-        fprintf(stderr,
-            "configuration error: expected boolean for "
-            "\"middle-emulation\"\n");
+      if (!hikari_config_bool(L,
+              iter.vidx,
+              "an inputs.pointers entry",
+              key,
+              &middle_emulation)) {
         goto done;
       }
 
@@ -1433,57 +1440,60 @@ parse_pointer_config(struct hikari_pointer_config *pointer_config,
       }
     } else if (!strcmp(key, "natural-scrolling")) {
       bool natural_scrolling;
-      if (!ucl_object_toboolean_safe(cur, &natural_scrolling)) {
-        fprintf(stderr,
-            "configuration error: expected boolean for "
-            "\"natural-scrolling\"\n");
+      if (!hikari_config_bool(L,
+              iter.vidx,
+              "an inputs.pointers entry",
+              key,
+              &natural_scrolling)) {
         goto done;
       }
 
       hikari_pointer_config_set_natural_scrolling(
           pointer_config, natural_scrolling);
     } else {
-      fprintf(stderr,
-          "configuration error: unknown \"pointer\" configuration key \"%s\" "
-          "for "
-          "\"%s\"\n",
+      hikari_config_error("an inputs.pointers entry",
+          "unknown \"pointer\" configuration key \"%s\" for \"%s\"",
           key,
           pointer_name);
       goto done;
     }
   }
 
+  if (iter.failed) {
+    goto done;
+  }
+
   success = true;
 
 done:
-  ucl_object_iterate_free(it);
+  hikari_config_iter_fini(&iter, L);
 
   return success;
 }
 
 static bool
-parse_pointers(struct hikari_configuration *configuration,
-    const ucl_object_t *pointers_obj)
+parse_pointers(
+    struct hikari_configuration *configuration, lua_State *L, int pointers_idx)
 {
   bool success = false;
-
-  ucl_object_iter_t it = ucl_object_iterate_new(pointers_obj);
   struct hikari_pointer_config *pointer_config;
+  struct hikari_config_iter iter;
+  const char *pointer_name;
 
-  const ucl_object_t *cur;
-  while ((cur = ucl_object_iterate_safe(it, true)) != NULL) {
-    hikari_config_warn_duplicate_key(cur, "inputs.pointers");
-
-    const char *pointer_name = ucl_object_key(cur);
-
+  hikari_config_iter_init(&iter, L, pointers_idx);
+  while (hikari_config_iter_next(&iter, L, &pointer_name, "inputs.pointers")) {
     pointer_config = hikari_malloc(sizeof(struct hikari_pointer_config));
     hikari_pointer_config_init(pointer_config, pointer_name);
 
     wl_list_insert(&configuration->pointer_configs, &pointer_config->link);
 
-    if (!parse_pointer_config(pointer_config, cur)) {
+    if (!parse_pointer_config(pointer_config, L, iter.vidx)) {
       goto done;
     }
+  }
+
+  if (iter.failed) {
+    goto done;
   }
 
   struct hikari_pointer_config *default_config =
@@ -1500,34 +1510,35 @@ parse_pointers(struct hikari_configuration *configuration,
   success = true;
 
 done:
-
-  ucl_object_iterate_free(it);
+  hikari_config_iter_fini(&iter, L);
 
   return success;
 }
 
 static bool
-parse_keyboards(struct hikari_configuration *configuration,
-    const ucl_object_t *keyboards_obj)
+parse_keyboards(
+    struct hikari_configuration *configuration, lua_State *L, int keyboards_idx)
 {
   bool success = false;
-  const ucl_object_t *cur;
   struct hikari_keyboard_config *keyboard_config;
+  struct hikari_config_iter iter;
+  const char *keyboard_name;
 
-  ucl_object_iter_t it = ucl_object_iterate_new(keyboards_obj);
-  while ((cur = ucl_object_iterate_safe(it, true)) != NULL) {
-    hikari_config_warn_duplicate_key(cur, "inputs.keyboards");
-
-    const char *keyboard_name = ucl_object_key(cur);
-
+  hikari_config_iter_init(&iter, L, keyboards_idx);
+  while (
+      hikari_config_iter_next(&iter, L, &keyboard_name, "inputs.keyboards")) {
     keyboard_config = hikari_malloc(sizeof(struct hikari_keyboard_config));
     hikari_keyboard_config_init(keyboard_config, keyboard_name);
 
     wl_list_insert(&configuration->keyboard_configs, &keyboard_config->link);
 
-    if (!hikari_keyboard_config_parse(keyboard_config, cur)) {
+    if (!hikari_keyboard_config_parse(keyboard_config, L, iter.vidx)) {
       goto done;
     }
+  }
+
+  if (iter.failed) {
+    goto done;
   }
 
   struct hikari_keyboard_config *default_config =
@@ -1548,42 +1559,51 @@ parse_keyboards(struct hikari_configuration *configuration,
   success = true;
 
 done:
-  ucl_object_iterate_free(it);
+  hikari_config_iter_fini(&iter, L);
 
   return success;
 }
 
 static bool
-parse_switches(struct hikari_configuration *configuration,
-    const ucl_object_t *switches_obj)
+parse_switches(
+    struct hikari_configuration *configuration, lua_State *L, int switches_idx)
 {
   bool success = false;
-  const ucl_object_t *cur;
   struct hikari_switch_config *switch_config;
+  struct hikari_config_iter iter;
+  const char *key;
 
-  ucl_object_iter_t it = ucl_object_iterate_new(switches_obj);
-  while ((cur = ucl_object_iterate_safe(it, true)) != NULL) {
-    hikari_config_warn_duplicate_key(cur, "inputs.switches");
-
-    const char *key = ucl_object_key(cur);
-
+  hikari_config_iter_init(&iter, L, switches_idx);
+  while (hikari_config_iter_next(&iter, L, &key, "inputs.switches")) {
     switch_config = hikari_malloc(sizeof(struct hikari_switch_config));
     wl_list_insert(&configuration->switch_configs, &switch_config->link);
 
     switch_config->switch_name = strdup(key);
 
-    if (!hikari_action_parse(
-            &switch_config->action, &configuration->action_configs, cur)) {
+    /* Action purpose: Every other hikari_action_parse() call site initialises
+    its action first, and this one did not -- so a switch whose entry set only
+    `begin` left `end` holding whatever the allocation came with, and toggling
+    the switch back called it. */
+    hikari_action_init(&switch_config->action);
+
+    if (!hikari_action_parse(&switch_config->action,
+            &configuration->action_configs,
+            L,
+            iter.vidx)) {
       goto done;
     }
+  }
+
+  if (iter.failed) {
+    goto done;
   }
 
   success = true;
 
 done:
-  // [COMMENT] Action purpose: releases the UCL iterator on both the
-  // successful and failed parsing paths.
-  ucl_object_iterate_free(it);
+  // [COMMENT] Action purpose: releases the iterator on both the successful and
+  // failed parsing paths.
+  hikari_config_iter_fini(&iter, L);
 
   return success;
 }
@@ -1591,19 +1611,16 @@ done:
 /* Function purpose: Parse the `inputs { gestures {} }` block into the
 configuration's gesture binding list. */
 static bool
-parse_gestures(struct hikari_configuration *configuration,
-    const ucl_object_t *gestures_obj)
+parse_gestures(
+    struct hikari_configuration *configuration, lua_State *L, int gestures_idx)
 {
   bool success = false;
-  const ucl_object_t *cur;
   struct hikari_gesture_binding_config *gesture_binding_config;
+  struct hikari_config_iter iter;
+  const char *key;
 
-  ucl_object_iter_t it = ucl_object_iterate_new(gestures_obj);
-  while ((cur = ucl_object_iterate_safe(it, true)) != NULL) {
-    hikari_config_warn_duplicate_key(cur, "inputs.gestures");
-
-    const char *key = ucl_object_key(cur);
-
+  hikari_config_iter_init(&iter, L, gestures_idx);
+  while (hikari_config_iter_next(&iter, L, &key, "inputs.gestures")) {
     gesture_binding_config =
         hikari_malloc(sizeof(struct hikari_gesture_binding_config));
     wl_list_insert(&configuration->gesture_binding_configs,
@@ -1613,97 +1630,108 @@ parse_gestures(struct hikari_configuration *configuration,
             &gesture_binding_config->type,
             &gesture_binding_config->direction,
             &gesture_binding_config->fingers)) {
-      fprintf(stderr,
-          "configuration error: invalid gesture binding \"%s\"\n",
-          key);
+      hikari_config_error(
+          "inputs.gestures", "invalid gesture binding \"%s\"", key);
       goto done;
     }
 
     struct hikari_action *action = &gesture_binding_config->action;
     hikari_action_init(action);
 
-    if (!hikari_action_parse(action, &configuration->action_configs, cur)) {
+    if (!hikari_action_parse(
+            action, &configuration->action_configs, L, iter.vidx)) {
       goto done;
     }
+  }
+
+  if (iter.failed) {
+    goto done;
   }
 
   success = true;
 
 done:
-  ucl_object_iterate_free(it);
+  hikari_config_iter_fini(&iter, L);
 
   return success;
 }
 
 static bool
 parse_inputs(
-    struct hikari_configuration *configuration, const ucl_object_t *inputs_obj)
+    struct hikari_configuration *configuration, lua_State *L, int inputs_idx)
 {
   bool success = false;
-  ucl_object_iter_t it = ucl_object_iterate_new(inputs_obj);
+  struct hikari_config_iter iter;
+  const char *key;
 
-  const ucl_object_t *cur;
-  while ((cur = ucl_object_iterate_safe(it, true)) != NULL) {
-    hikari_config_warn_duplicate_key(cur, "inputs");
-
-    const char *key = ucl_object_key(cur);
-
+  hikari_config_iter_init(&iter, L, inputs_idx);
+  while (hikari_config_iter_next(&iter, L, &key, "inputs")) {
     if (!strcmp(key, "pointers")) {
-      if (!parse_pointers(configuration, cur)) {
+      if (!parse_pointers(configuration, L, iter.vidx)) {
         goto done;
       }
     } else if (!strcmp(key, "keyboards")) {
-      if (!parse_keyboards(configuration, cur)) {
+      if (!parse_keyboards(configuration, L, iter.vidx)) {
         goto done;
       }
     } else if (!strcmp(key, "switches")) {
-      if (!parse_switches(configuration, cur)) {
+      if (!parse_switches(configuration, L, iter.vidx)) {
         goto done;
       }
     } else if (!strcmp(key, "gestures")) {
-      if (!parse_gestures(configuration, cur)) {
+      if (!parse_gestures(configuration, L, iter.vidx)) {
         goto done;
       }
     } else {
-      fprintf(stderr,
-          "configuration error: unknown \"inputs\" configuration key \"%s\"",
-          key);
+      hikari_config_error(
+          "inputs", "unknown \"inputs\" configuration key \"%s\"", key);
       goto done;
     }
+  }
+
+  if (iter.failed) {
+    goto done;
   }
 
   success = true;
 
 done:
-  ucl_object_iterate_free(it);
+  hikari_config_iter_fini(&iter, L);
 
   return success;
 }
 
 static bool
-parse_background(const ucl_object_t *background_obj,
+parse_background(lua_State *L,
+    int background_idx,
     char **background,
     enum hikari_background_fit *fit)
 {
   bool success = false;
-
-  ucl_object_iter_t it = ucl_object_iterate_new(background_obj);
   bool has_background = false;
+  struct hikari_config_iter iter;
+  const char *key;
 
-  const ucl_object_t *cur;
-  while ((cur = ucl_object_iterate_safe(it, true)) != NULL) {
-    hikari_config_warn_duplicate_key(cur, "an outputs background");
-
-    const char *key = ucl_object_key(cur);
+  hikari_config_iter_init(&iter, L, background_idx);
+  while (hikari_config_iter_next(&iter, L, &key, "an outputs background")) {
     if (!strcmp(key, "path")) {
+      /* Action purpose: copy_in_config_string() returns NULL when the value is
+      not a string, having already printed the diagnostic. Without this test
+      the walk continued, iter.failed stayed false, and the function returned
+      true after reporting an error -- the one "error printed, success
+      returned" path left in this rewrite. has_background is set only once the
+      copy succeeded, so a NULL can never be handed to
+      hikari_output_config_set_background(). */
+      *background =
+          copy_in_config_string(L, iter.vidx, "an outputs background", key);
+      if (*background == NULL) {
+        goto done;
+      }
       has_background = true;
-      *background = copy_in_config_string(cur);
     } else if (!strcmp(key, "fit")) {
       const char *fit_value;
-      if (!ucl_object_tostring_safe(cur, &fit_value)) {
-        fprintf(stderr,
-            "configuration error: expected string for \"background\" "
-            "\"fit\"\n");
+      if (!hikari_config_string(
+              L, iter.vidx, "an outputs background", key, &fit_value)) {
         goto done;
       }
       if (!strcmp(fit_value, "center")) {
@@ -1713,82 +1741,89 @@ parse_background(const ucl_object_t *background_obj,
       } else if (!strcmp(fit_value, "tile")) {
         *fit = HIKARI_BACKGROUND_TILE;
       } else {
-        fprintf(stderr,
-            "configuration error: unexpected \"background\" \"fit\" \"%s\"\n",
+        hikari_config_error("an outputs background",
+            "unexpected \"background\" \"fit\" \"%s\"",
             fit_value);
         goto done;
       }
     } else {
-      fprintf(stderr,
-          "configuration error: unknown \"background\" configuration key "
-          "\"%s\"\n",
+      hikari_config_error("an outputs background",
+          "unknown \"background\" configuration key \"%s\"",
           key);
       goto done;
     }
   }
 
+  if (iter.failed) {
+    goto done;
+  }
+
   if (!has_background) {
-    fprintf(
-        stderr, "configuration error: missing \"path\" for \"background\"\n");
+    hikari_config_error(
+        "an outputs background", "missing \"path\" for \"background\"");
     goto done;
   }
 
   success = true;
 
 done:
-  ucl_object_iterate_free(it);
+  hikari_config_iter_fini(&iter, L);
 
   return success;
 }
 
 static bool
 parse_output_config(struct hikari_output_config *output_config,
-    const ucl_object_t *output_config_obj)
+    lua_State *L,
+    int output_config_idx)
 
 {
   bool success = false;
-  ucl_object_iter_t it = ucl_object_iterate_new(output_config_obj);
+  struct hikari_config_iter iter;
+  const char *key;
 
-  const ucl_object_t *cur;
-  while ((cur = ucl_object_iterate_safe(it, true)) != NULL) {
-    hikari_config_warn_duplicate_key(cur, "an outputs entry");
-
-    const char *key = ucl_object_key(cur);
-
+  hikari_config_iter_init(&iter, L, output_config_idx);
+  while (hikari_config_iter_next(&iter, L, &key, "an outputs entry")) {
     if (!strcmp(key, "background")) {
-      ucl_type_t type = ucl_object_type(cur);
+      int type = lua_type(L, iter.vidx);
 
-      if (type == UCL_STRING) {
-        char *background = copy_in_config_string(cur);
+      if (type == LUA_TSTRING) {
+        char *background =
+            copy_in_config_string(L, iter.vidx, "an outputs entry", key);
 
         if (background == NULL) {
-          fprintf(
-              stderr, "configuration error: invalid \"background\" value\n");
+          hikari_config_error(
+              "an outputs entry", "invalid \"background\" value");
           goto done;
         }
 
         hikari_output_config_set_background(output_config, background);
-      } else if (type == UCL_OBJECT) {
+      } else if (type == LUA_TTABLE) {
         char *background;
-        enum hikari_background_fit background_fit;
+        /* Action purpose: parse_background() writes through this pointer only
+        inside its "fit" branch, so a background table that sets just a path
+        leaves it indeterminate -- and it is stored unconditionally below.
+        Initialised to the same default the scalar-string form uses, so the two
+        spellings of a background agree. */
+        enum hikari_background_fit background_fit = HIKARI_BACKGROUND_STRETCH;
 
-        if (!parse_background(cur, &background, &background_fit)) {
+        if (!parse_background(L, iter.vidx, &background, &background_fit)) {
           goto done;
         }
 
         hikari_output_config_set_background(output_config, background);
         hikari_output_config_set_background_fit(output_config, background_fit);
       } else {
-        fprintf(stderr,
-            "configuration error: expected string or object for "
-            "\"background\"\n");
+        hikari_config_error("an outputs entry",
+            "expected string or table for \"background\", got %s",
+            lua_typename(L, type));
         goto done;
       }
     } else if (!strcmp(key, "position")) {
       struct hikari_position_config position;
-      if (!hikari_position_config_absolute_parse(&position, cur)) {
-        fprintf(stderr,
-            "configuration error: could not parse \"output\" \"position\"");
+      if (!hikari_position_config_absolute_parse(&position, L, iter.vidx)) {
+        hikari_config_error(
+            "an outputs entry", "could not parse \"output\" \"position\"");
         goto done;
       }
 
@@ -1798,46 +1833,50 @@ parse_output_config(struct hikari_output_config *output_config,
       // just log -- silently accepting typos (e.g. "postion") would leave a
       // running compositor that ignores the intended rule. This matches the
       // strict behaviour of every other unknown-key branch in this parser.
-      fprintf(stderr,
-          "configuration error: unknown \"outputs\" configuration key \"%s\"\n",
+      hikari_config_error("an outputs entry",
+          "unknown \"outputs\" configuration key \"%s\"",
           key);
       goto done;
     }
   }
 
+  if (iter.failed) {
+    goto done;
+  }
+
   success = true;
 
 done:
-  ucl_object_iterate_free(it);
+  hikari_config_iter_fini(&iter, L);
 
   return success;
 }
 
 static bool
 parse_outputs(
-    struct hikari_configuration *configuration, const ucl_object_t *outputs_obj)
+    struct hikari_configuration *configuration, lua_State *L, int outputs_idx)
 {
   bool success = false;
-
-  ucl_object_iter_t it = ucl_object_iterate_new(outputs_obj);
   struct hikari_output_config *output_config;
+  struct hikari_config_iter iter;
+  const char *output_name;
 
-  const ucl_object_t *cur;
-  while ((cur = ucl_object_iterate_safe(it, true)) != NULL) {
-    hikari_config_warn_duplicate_key(cur, "outputs");
-
-    const char *output_name = ucl_object_key(cur);
-
+  hikari_config_iter_init(&iter, L, outputs_idx);
+  while (hikari_config_iter_next(&iter, L, &output_name, "outputs")) {
     output_config = hikari_malloc(sizeof(struct hikari_output_config));
     hikari_output_config_init(output_config, output_name);
 
     wl_list_insert(&configuration->output_configs, &output_config->link);
 
-    if (!parse_output_config(output_config, cur)) {
-      fprintf(stderr,
-          "configuration error: failed to parse \"outputs\" configuration\n");
+    if (!parse_output_config(output_config, L, iter.vidx)) {
+      hikari_config_error(
+          "outputs", "failed to parse \"outputs\" configuration");
       goto done;
     }
+  }
+
+  if (iter.failed) {
+    goto done;
   }
 
   success = true;
@@ -1854,19 +1893,18 @@ parse_outputs(
   }
 
 done:
-  ucl_object_iterate_free(it);
+  hikari_config_iter_fini(&iter, L);
 
   return success;
 }
 
 static bool
 parse_border(
-    struct hikari_configuration *configuration, const ucl_object_t *border_obj)
+    struct hikari_configuration *configuration, lua_State *L, int border_idx)
 {
   int64_t border;
 
-  if (!ucl_object_toint_safe(border_obj, &border)) {
-    fprintf(stderr, "configuration error: expected integer for \"border\"\n");
+  if (!hikari_config_int(L, border_idx, "ui", "border", &border)) {
     return false;
   }
 
@@ -1878,8 +1916,7 @@ parse_border(
   once here is far simpler than auditing and widening every downstream
   site that multiplies it. */
   if (border < 0 || border > 100000) {
-    fprintf(stderr, "configuration error: \"border\" must be between 0 and "
-                     "100000\n");
+    hikari_config_error("ui", "\"border\" must be between 0 and 100000");
     return false;
   }
 
@@ -1889,13 +1926,11 @@ parse_border(
 }
 
 static bool
-parse_gap(
-    struct hikari_configuration *configuration, const ucl_object_t *gap_obj)
+parse_gap(struct hikari_configuration *configuration, lua_State *L, int gap_idx)
 {
   int64_t gap;
 
-  if (!ucl_object_toint_safe(gap_obj, &gap)) {
-    fprintf(stderr, "configuration error: expected integer for \"gap\"\n");
+  if (!hikari_config_int(L, gap_idx, "ui", "gap", &gap)) {
     return false;
   }
 
@@ -1903,8 +1938,7 @@ parse_gap(
   gap * row_gaps / gap * col_gaps arithmetic from overflowing, not a
   realistic gap size. */
   if (gap < 0 || gap > 100000) {
-    fprintf(
-        stderr, "configuration error: \"gap\" must be between 0 and 100000\n");
+    hikari_config_error("ui", "\"gap\" must be between 0 and 100000");
     return false;
   }
 
@@ -1915,12 +1949,11 @@ parse_gap(
 
 static bool
 parse_step(
-    struct hikari_configuration *configuration, const ucl_object_t *step_obj)
+    struct hikari_configuration *configuration, lua_State *L, int step_idx)
 {
   int64_t step;
 
-  if (!ucl_object_toint_safe(step_obj, &step)) {
-    fprintf(stderr, "configuration error: expected integer for \"step\"\n");
+  if (!hikari_config_int(L, step_idx, "ui", "step", &step)) {
     return false;
   }
 
@@ -1931,12 +1964,11 @@ parse_step(
 
 static bool
 parse_font(
-    struct hikari_configuration *configuration, const ucl_object_t *font_obj)
+    struct hikari_configuration *configuration, lua_State *L, int font_idx)
 {
   const char *font;
 
-  if (!ucl_object_tostring_safe(font_obj, &font)) {
-    fprintf(stderr, "configuration error: expected string for \"font\"\n");
+  if (!hikari_config_string(L, font_idx, "ui", "font", &font)) {
     return false;
   }
 
@@ -1953,13 +1985,16 @@ and tuning it use the same key: `blur = false` disables it outright, while
 to say "off" would have forced a second key that could contradict it. */
 static bool
 parse_lock_blur(
-    struct hikari_lock_config *lock_config, const ucl_object_t *blur_obj)
+    struct hikari_lock_config *lock_config, lua_State *L, int blur_idx)
 {
-  if (ucl_object_type(blur_obj) == UCL_BOOLEAN) {
+  bool success = false;
+  struct hikari_config_iter iter;
+  const char *key;
+
+  if (lua_type(L, blur_idx) == LUA_TBOOLEAN) {
     bool blur;
 
-    if (!ucl_object_toboolean_safe(blur_obj, &blur)) {
-      fprintf(stderr, "configuration error: expected boolean for \"blur\"\n");
+    if (!hikari_config_bool(L, blur_idx, "ui.lock", "blur", &blur)) {
       return false;
     }
 
@@ -1968,28 +2003,25 @@ parse_lock_blur(
     return true;
   }
 
-  if (ucl_object_type(blur_obj) != UCL_OBJECT) {
-    fprintf(stderr,
-        "configuration error: expected boolean or object for \"blur\"\n");
+  if (lua_type(L, blur_idx) != LUA_TTABLE) {
+    hikari_config_error("ui.lock",
+        "expected boolean or table for \"blur\", got %s",
+        lua_typename(L, lua_type(L, blur_idx)));
     return false;
   }
 
-  bool success = false;
-  ucl_object_iter_t it = ucl_object_iterate_new(blur_obj);
-
-  const ucl_object_t *cur;
-  while ((cur = ucl_object_iterate_safe(it, false)) != NULL) {
-    hikari_config_warn_duplicate_key(cur, "ui.lock.blur");
-
-    const char *key = ucl_object_key(cur);
-
+  hikari_config_iter_init(&iter, L, blur_idx);
+  while (hikari_config_iter_next(&iter, L, &key, "ui.lock.blur")) {
     if (!strcmp(key, "radius") || !strcmp(key, "passes")) {
       int64_t value;
 
-      if (!ucl_object_toint_safe(cur, &value) || value < 0 || value > 512) {
-        fprintf(stderr,
-            "configuration error: expected integer between 0 and 512 for "
-            "\"%s\"\n",
+      if (!hikari_config_int(L, iter.vidx, "ui.lock.blur", key, &value)) {
+        goto done;
+      }
+
+      if (value < 0 || value > 512) {
+        hikari_config_error("ui.lock.blur",
+            "expected integer between 0 and 512 for \"%s\"",
             key);
         goto done;
       }
@@ -2000,15 +2032,19 @@ parse_lock_blur(
         lock_config->blur_passes = (int)value;
       }
     } else {
-      fprintf(stderr, "configuration error: unknown \"blur\" key \"%s\"\n", key);
+      hikari_config_error("ui.lock.blur", "unknown \"blur\" key \"%s\"", key);
       goto done;
     }
+  }
+
+  if (iter.failed) {
+    goto done;
   }
 
   success = true;
 
 done:
-  ucl_object_iterate_free(it);
+  hikari_config_iter_fini(&iter, L);
 
   return success;
 }
@@ -2016,27 +2052,27 @@ done:
 /* [COMMENT] Function purpose: Parse the `ui { bar { ... } }` block -- how long a
 top bar block may be before it is capped and scrolled, and how fast. */
 static bool
-parse_bar(struct hikari_bar_config *bar_config, const ucl_object_t *bar_obj)
+parse_bar(struct hikari_bar_config *bar_config, lua_State *L, int bar_idx)
 {
   bool success = false;
-  ucl_object_iter_t it = ucl_object_iterate_new(bar_obj);
+  struct hikari_config_iter iter;
+  const char *key;
 
-  const ucl_object_t *cur;
-  while ((cur = ucl_object_iterate_safe(it, false)) != NULL) {
-    hikari_config_warn_duplicate_key(cur, "ui.bar");
-
-    const char *key = ucl_object_key(cur);
-
+  hikari_config_iter_init(&iter, L, bar_idx);
+  while (hikari_config_iter_next(&iter, L, &key, "ui.bar")) {
     if (!strcmp(key, "max-block-chars")) {
       int64_t chars;
 
       /* [COMMENT] Action purpose: 256 is HIKARI_BAR_MAX_CAP_CHARS in
       src/bar.c, which sizes the per-block scroll buffer. The two must not
       drift. 0 disables capping and scrolling entirely. */
-      if (!ucl_object_toint_safe(cur, &chars) || chars < 0 || chars > 256) {
-        fprintf(stderr,
-            "configuration error: expected integer 0-256 for "
-            "\"max-block-chars\"\n");
+      if (!hikari_config_int(L, iter.vidx, "ui.bar", key, &chars)) {
+        goto done;
+      }
+
+      if (chars < 0 || chars > 256) {
+        hikari_config_error(
+            "ui.bar", "expected integer 0-256 for \"max-block-chars\"");
         goto done;
       }
 
@@ -2048,11 +2084,13 @@ parse_bar(struct hikari_bar_config *bar_config, const ucl_object_t *bar_obj)
       bar on every step, so an unbounded value here is a way to make the
       compositor busy-render itself; below this the motion is not readable
       anyway. */
-      if (!ucl_object_toint_safe(cur, &interval) || interval < 50 ||
-          interval > 10000) {
-        fprintf(stderr,
-            "configuration error: expected integer 50-10000 for "
-            "\"scroll-interval\"\n");
+      if (!hikari_config_int(L, iter.vidx, "ui.bar", key, &interval)) {
+        goto done;
+      }
+
+      if (interval < 50 || interval > 10000) {
+        hikari_config_error(
+            "ui.bar", "expected integer 50-10000 for \"scroll-interval\"");
         goto done;
       }
 
@@ -2060,9 +2098,7 @@ parse_bar(struct hikari_bar_config *bar_config, const ucl_object_t *bar_obj)
     } else if (!strcmp(key, "scroll-separator")) {
       const char *separator;
 
-      if (!ucl_object_tostring_safe(cur, &separator)) {
-        fprintf(stderr,
-            "configuration error: expected string for \"scroll-separator\"\n");
+      if (!hikari_config_string(L, iter.vidx, "ui.bar", key, &separator)) {
         goto done;
       }
 
@@ -2070,17 +2106,19 @@ parse_bar(struct hikari_bar_config *bar_config, const ucl_object_t *bar_obj)
       bar_config->scroll_separator = hikari_malloc(strlen(separator) + 1);
       strcpy(bar_config->scroll_separator, separator);
     } else {
-      fprintf(stderr,
-          "configuration error: unknown \"bar\" key \"%s\"\n",
-          key);
+      hikari_config_error("ui.bar", "unknown \"bar\" key \"%s\"", key);
       goto done;
     }
+  }
+
+  if (iter.failed) {
+    goto done;
   }
 
   success = true;
 
 done:
-  ucl_object_iterate_free(it);
+  hikari_config_iter_fini(&iter, L);
 
   return success;
 }
@@ -2089,7 +2127,7 @@ done:
 blur, and how long the screen stays lit while locked. */
 static bool
 parse_lock(
-    struct hikari_configuration *configuration, const ucl_object_t *lock_obj)
+    struct hikari_configuration *configuration, lua_State *L, int lock_idx)
 {
   /* [COMMENT] Action purpose: Takes the whole configuration rather than just
   the lock block, because `clock-color` accepts a palette reference and the
@@ -2098,23 +2136,19 @@ parse_lock(
   struct hikari_lock_config *lock_config = &configuration->lock;
 
   bool success = false;
-  ucl_object_iter_t it = ucl_object_iterate_new(lock_obj);
+  struct hikari_config_iter iter;
+  const char *key;
 
-  const ucl_object_t *cur;
-  while ((cur = ucl_object_iterate_safe(it, false)) != NULL) {
-    hikari_config_warn_duplicate_key(cur, "ui.lock");
-
-    const char *key = ucl_object_key(cur);
-
+  hikari_config_iter_init(&iter, L, lock_idx);
+  while (hikari_config_iter_next(&iter, L, &key, "ui.lock")) {
     if (!strcmp(key, "blur")) {
-      if (!parse_lock_blur(lock_config, cur)) {
+      if (!parse_lock_blur(lock_config, L, iter.vidx)) {
         goto done;
       }
     } else if (!strcmp(key, "clock")) {
       bool clock;
 
-      if (!ucl_object_toboolean_safe(cur, &clock)) {
-        fprintf(stderr, "configuration error: expected boolean for \"clock\"\n");
+      if (!hikari_config_bool(L, iter.vidx, "ui.lock", key, &clock)) {
         goto done;
       }
 
@@ -2122,16 +2156,13 @@ parse_lock(
     } else if (!strcmp(key, "clock-format") || !strcmp(key, "date-format")) {
       const char *format;
 
-      if (!ucl_object_tostring_safe(cur, &format)) {
-        fprintf(stderr,
-            "configuration error: expected string for \"%s\"\n",
-            key);
+      if (!hikari_config_string(L, iter.vidx, "ui.lock", key, &format)) {
         goto done;
       }
 
-      /* [COMMENT] Action purpose: Copy rather than borrow. The ucl_object_t is
-      released when the parser is torn down at the end of the load, while these
-      strings are read every minute for the life of the session. */
+      /* [COMMENT] Action purpose: Copy rather than borrow. The Lua state that
+      owns this string is destroyed at the end of the load, while these strings
+      are read every minute for the life of the session. */
       char **target = !strcmp(key, "clock-format") ? &lock_config->clock_format
                                                    : &lock_config->date_format;
 
@@ -2141,10 +2172,7 @@ parse_lock(
     } else if (!strcmp(key, "clock-font") || !strcmp(key, "date-font")) {
       const char *font;
 
-      if (!ucl_object_tostring_safe(cur, &font)) {
-        fprintf(stderr,
-            "configuration error: expected string for \"%s\"\n",
-            key);
+      if (!hikari_config_string(L, iter.vidx, "ui.lock", key, &font)) {
         goto done;
       }
 
@@ -2155,7 +2183,8 @@ parse_lock(
       hikari_font_fini(target);
       hikari_font_init(target, font);
     } else if (!strcmp(key, "clock-color")) {
-      if (!parse_color(configuration, cur, key, lock_config->clock_color)) {
+      if (!parse_color(
+              configuration, L, iter.vidx, key, lock_config->clock_color)) {
         goto done;
       }
     } else if (!strcmp(key, "blank-timeout-ac") ||
@@ -2166,11 +2195,13 @@ parse_lock(
       choice now that there is something worth looking at on the lock screen.
       The upper bound is a day -- anything longer is indistinguishable from
       never and is more likely a typo. */
-      if (!ucl_object_toint_safe(cur, &seconds) || seconds < 0 ||
-          seconds > 86400) {
-        fprintf(stderr,
-            "configuration error: expected integer between 0 and 86400 for "
-            "\"%s\"\n",
+      if (!hikari_config_int(L, iter.vidx, "ui.lock", key, &seconds)) {
+        goto done;
+      }
+
+      if (seconds < 0 || seconds > 86400) {
+        hikari_config_error("ui.lock",
+            "expected integer between 0 and 86400 for \"%s\"",
             key);
         goto done;
       }
@@ -2181,15 +2212,19 @@ parse_lock(
         lock_config->blank_timeout_battery = (int)seconds;
       }
     } else {
-      fprintf(stderr, "configuration error: unknown \"lock\" key \"%s\"\n", key);
+      hikari_config_error("ui.lock", "unknown \"lock\" key \"%s\"", key);
       goto done;
     }
+  }
+
+  if (iter.failed) {
+    goto done;
   }
 
   success = true;
 
 done:
-  ucl_object_iterate_free(it);
+  hikari_config_iter_fini(&iter, L);
 
   return success;
 }
@@ -2203,26 +2238,21 @@ feels broken -- both are far more likely to be a typo than an intention. 0 is
 accepted and means instant, which is the same as `enabled = false` but reachable
 without editing two keys. */
 static bool
-parse_animation(
-    struct hikari_configuration *configuration, const ucl_object_t *animation_obj)
+parse_animation(struct hikari_configuration *configuration,
+    lua_State *L,
+    int animation_idx)
 {
   bool success = false;
   struct hikari_animation_config *config = &configuration->animation;
+  struct hikari_config_iter iter;
+  const char *key;
 
-  const ucl_object_t *cur;
-  ucl_object_iter_t it = ucl_object_iterate_new(animation_obj);
-
-  while ((cur = ucl_object_iterate_safe(it, false)) != NULL) {
-    hikari_config_warn_duplicate_key(cur, "ui.animation");
-
-    const char *key = ucl_object_key(cur);
-
+  hikari_config_iter_init(&iter, L, animation_idx);
+  while (hikari_config_iter_next(&iter, L, &key, "ui.animation")) {
     if (!strcmp(key, "enabled")) {
       bool enabled;
 
-      if (!ucl_object_toboolean_safe(cur, &enabled)) {
-        fprintf(stderr,
-            "configuration error: expected boolean for \"enabled\"\n");
+      if (!hikari_config_bool(L, iter.vidx, "ui.animation", key, &enabled)) {
         goto done;
       }
 
@@ -2230,11 +2260,13 @@ parse_animation(
     } else if (!strcmp(key, "duration")) {
       int64_t duration;
 
-      if (!ucl_object_toint_safe(cur, &duration) || duration < 0 ||
-          duration > 1000) {
-        fprintf(stderr,
-            "configuration error: expected integer between 0 and 1000 for "
-            "\"duration\"\n");
+      if (!hikari_config_int(L, iter.vidx, "ui.animation", key, &duration)) {
+        goto done;
+      }
+
+      if (duration < 0 || duration > 1000) {
+        hikari_config_error("ui.animation",
+            "expected integer between 0 and 1000 for \"duration\"");
         goto done;
       }
 
@@ -2242,9 +2274,7 @@ parse_animation(
     } else if (!strcmp(key, "easing")) {
       const char *easing;
 
-      if (!ucl_object_tostring_safe(cur, &easing)) {
-        fprintf(stderr,
-            "configuration error: expected string for \"easing\"\n");
+      if (!hikari_config_string(L, iter.vidx, "ui.animation", key, &easing)) {
         goto done;
       }
 
@@ -2255,83 +2285,85 @@ parse_animation(
       } else if (!strcmp(easing, "ease-in-out")) {
         config->easing = HIKARI_EASING_EASE_IN_OUT;
       } else {
-        fprintf(stderr,
-            "configuration error: expected \"linear\", \"ease-out\" or "
-            "\"ease-in-out\" for \"easing\", got \"%s\"\n",
+        hikari_config_error("ui.animation",
+            "expected \"linear\", \"ease-out\" or \"ease-in-out\" for "
+            "\"easing\", got \"%s\"",
             easing);
         goto done;
       }
     } else {
-      fprintf(stderr,
-          "configuration error: unknown \"animation\" key \"%s\"\n",
-          key);
+      hikari_config_error(
+          "ui.animation", "unknown \"animation\" key \"%s\"", key);
       goto done;
     }
+  }
+
+  if (iter.failed) {
+    goto done;
   }
 
   success = true;
 
 done:
-  ucl_object_iterate_free(it);
+  hikari_config_iter_fini(&iter, L);
 
   return success;
 }
 
 static bool
-parse_ui(struct hikari_configuration *configuration, const ucl_object_t *ui_obj)
+parse_ui(struct hikari_configuration *configuration, lua_State *L, int ui_idx)
 {
   bool success = false;
+  struct hikari_config_iter iter;
+  const char *key;
+  int entry_top = lua_gettop(L);
 
   /* [COMMENT] Action purpose: The palette is resolved BEFORE the iteration
   below, not as one of its cases. Every other colour in this block may be
-  written as a palette reference, and UCL yields keys in file order -- so
+  written as a palette reference, and a Lua table has no order at all -- so
   parsing the palette in sequence would make a configuration's meaning depend on
-  whether the user happened to put `palette` above `colorscheme`. Looking it up
-  explicitly first is the same idiom hikari_configuration_load() uses for
-  `actions` and `layouts`, and for the same reason. */
-  const ucl_object_t *palette_obj = ucl_object_lookup(ui_obj, "palette");
-  if (palette_obj != NULL && !parse_palette(configuration, palette_obj)) {
+  which key the traversal happened to reach first. Looking it up explicitly
+  first is the same idiom read_configuration() uses for `actions` and
+  `layouts`, and for the same reason. */
+  if (hikari_config_field(L, ui_idx, "palette") != LUA_TNIL &&
+      !parse_palette(configuration, L, lua_gettop(L))) {
+    lua_settop(L, entry_top);
     return false;
   }
 
-  ucl_object_iter_t it = ucl_object_iterate_new(ui_obj);
+  lua_settop(L, entry_top);
 
-  const ucl_object_t *cur;
-  while ((cur = ucl_object_iterate_safe(it, false)) != NULL) {
-    hikari_config_warn_duplicate_key(cur, "ui");
-
-    const char *key = ucl_object_key(cur);
-
+  hikari_config_iter_init(&iter, L, ui_idx);
+  while (hikari_config_iter_next(&iter, L, &key, "ui")) {
     if (!strcmp(key, "palette")) {
       // [COMMENT] Action purpose: Already handled above; accepted here so the
       // unknown-key branch does not reject it.
       continue;
     } else if (!strcmp(key, "colorscheme")) {
-      if (!parse_colorscheme(configuration, cur)) {
+      if (!parse_colorscheme(configuration, L, iter.vidx)) {
         goto done;
       }
     } else if (!strcmp(key, "animation")) {
-      if (!parse_animation(configuration, cur)) {
+      if (!parse_animation(configuration, L, iter.vidx)) {
         goto done;
       }
     } else if (!strcmp(key, "font")) {
       hikari_font_fini(&configuration->font);
-      if (!parse_font(configuration, cur)) {
+      if (!parse_font(configuration, L, iter.vidx)) {
         goto done;
       }
     } else if (!strcmp(key, "border")) {
-      if (!parse_border(configuration, cur)) {
+      if (!parse_border(configuration, L, iter.vidx)) {
         goto done;
       }
     } else if (!strcmp(key, "gap")) {
-      if (!parse_gap(configuration, cur)) {
+      if (!parse_gap(configuration, L, iter.vidx)) {
         goto done;
       }
     } else if (!strcmp(key, "spill")) {
       const char *spill;
 
-      if (!ucl_object_tostring_safe(cur, &spill)) {
-        fprintf(stderr, "configuration error: expected string for \"spill\"\n");
+      if (!hikari_config_string(L, iter.vidx, "ui", key, &spill)) {
         goto done;
       }
 
@@ -2342,132 +2374,106 @@ parse_ui(struct hikari_configuration *configuration, const ucl_object_t *ui_obj)
       } else if (!strcmp(spill, "never")) {
         configuration->spill = HIKARI_SPILL_NEVER;
       } else {
-        fprintf(stderr,
-            "configuration error: expected \"always\", \"drag\" or \"never\" "
-            "for \"spill\", got \"%s\"\n",
+        hikari_config_error("ui",
+            "expected \"always\", \"drag\" or \"never\" for \"spill\", got "
+            "\"%s\"",
             spill);
         goto done;
       }
     } else if (!strcmp(key, "step")) {
-      if (!parse_step(configuration, cur)) {
+      if (!parse_step(configuration, L, iter.vidx)) {
         goto done;
       }
     } else if (!strcmp(key, "lock")) {
-      if (!parse_lock(configuration, cur)) {
+      if (!parse_lock(configuration, L, iter.vidx)) {
         goto done;
       }
     } else if (!strcmp(key, "bar")) {
-      if (!parse_bar(&configuration->bar_config, cur)) {
+      if (!parse_bar(&configuration->bar_config, L, iter.vidx)) {
         goto done;
       }
     } else {
-      fprintf(
-          stderr, "configuration error: unknown key \"%s\" for \"ui\"\n", key);
+      hikari_config_error("ui", "unknown key \"%s\" for \"ui\"", key);
       goto done;
     }
+  }
+
+  if (iter.failed) {
+    goto done;
   }
 
   success = true;
 
 done:
-  ucl_object_iterate_free(it);
+  hikari_config_iter_fini(&iter, L);
 
   return success;
 }
 
+/* Function purpose: Read the table the configuration file returned into the
+configuration being built. Called by hikari_config_lua_read() with that table
+already on the stack, from inside a protected call, so that a raise anywhere
+below is a diagnostic rather than a panic. */
 static bool
-set_env_vars(struct ucl_parser *parser)
+read_configuration(lua_State *L, int root, void *ud)
 {
-  for (char **current_var = environ; *current_var != NULL; ++current_var) {
-    const char *separator = strchr(*current_var, '=');
-    if (separator == NULL) {
-      continue;
-    }
-
-    const size_t name_length = separator - *current_var;
-    char *name = hikari_malloc(name_length + 1);
-    if (name == NULL) {
-      fprintf(stderr, "Could not allocate enough memory :(\n");
-      return false;
-    }
-    strncpy(name, *current_var, name_length);
-    name[name_length] = '\0';
-    ucl_parser_register_variable(parser, name, separator + 1);
-    hikari_free(name);
-  }
-
-  return true;
-}
-
-bool
-hikari_configuration_load(
-    struct hikari_configuration *configuration, char *config_path)
-{
-  struct ucl_parser *parser = ucl_parser_new(0);
-  if (!set_env_vars(parser)) {
-    ucl_parser_free(parser);
-    return false;
-  }
+  struct hikari_configuration *configuration = ud;
   bool success = false;
-  const ucl_object_t *cur;
+  struct hikari_config_iter iter;
+  const char *key;
+  int entry_top = lua_gettop(L);
 
-  ucl_parser_add_file(parser, config_path);
-  ucl_object_t *configuration_obj = ucl_parser_get_object(parser);
-
-  if (configuration_obj == NULL) {
-    const char *error = ucl_parser_get_error(parser);
-    fprintf(stderr, "%s\n", error);
-    ucl_parser_free(parser);
+  /* Action purpose: `actions` and `layouts` are resolved ahead of the walk
+  below, because a binding may name an action and a sheet may name a layout
+  register, and a table traversal gives no guarantee about which section it
+  reaches first. The two explicit lookups make the order a property of this
+  function rather than of the file. */
+  if (hikari_config_field(L, root, "actions") != LUA_TNIL &&
+      !parse_actions(configuration, L, lua_gettop(L))) {
+    hikari_config_error("the configuration", "failed to parse \"actions\"");
+    lua_settop(L, entry_top);
     return false;
   }
 
-  ucl_object_iter_t it = ucl_object_iterate_new(configuration_obj);
+  lua_settop(L, entry_top);
 
-  const ucl_object_t *actions_obj =
-      ucl_object_lookup(configuration_obj, "actions");
-  if (actions_obj != NULL && !parse_actions(configuration, actions_obj)) {
-    fprintf(stderr, "configuration error: failed to parse \"actions\"\n");
-    goto done;
+  if (hikari_config_field(L, root, "layouts") != LUA_TNIL &&
+      !parse_layouts(configuration, L, lua_gettop(L))) {
+    hikari_config_error("the configuration", "failed to parse \"layouts\"");
+    lua_settop(L, entry_top);
+    return false;
   }
 
-  const ucl_object_t *layouts_obj =
-      ucl_object_lookup(configuration_obj, "layouts");
-  if (layouts_obj != NULL && !parse_layouts(configuration, layouts_obj)) {
-    fprintf(stderr, "configuration error: failed to parse \"layouts\"\n");
-    goto done;
-  }
+  lua_settop(L, entry_top);
 
-  while ((cur = ucl_object_iterate_safe(it, false)) != NULL) {
-    hikari_config_warn_duplicate_key(cur, "the configuration");
-
-    const char *key = ucl_object_key(cur);
-
+  hikari_config_iter_init(&iter, L, root);
+  while (hikari_config_iter_next(&iter, L, &key, "the configuration")) {
     if (!strcmp(key, "ui")) {
-      if (!parse_ui(configuration, cur)) {
+      if (!parse_ui(configuration, L, iter.vidx)) {
         goto done;
       }
     } else if (!strcmp(key, "views")) {
-      if (!parse_view_configs(configuration, cur)) {
+      if (!parse_view_configs(configuration, L, iter.vidx)) {
         goto done;
       }
     } else if (!strcmp(key, "marks")) {
-      if (!parse_execute(configuration, cur)) {
+      if (!parse_execute(configuration, L, iter.vidx)) {
         goto done;
       }
     } else if (!strcmp(key, "bindings")) {
-      if (!parse_bindings(configuration, cur)) {
+      if (!parse_bindings(configuration, L, iter.vidx)) {
         goto done;
       }
     } else if (!strcmp(key, "outputs")) {
-      if (!parse_outputs(configuration, cur)) {
+      if (!parse_outputs(configuration, L, iter.vidx)) {
         goto done;
       }
     } else if (!strcmp(key, "inputs")) {
-      if (!parse_inputs(configuration, cur)) {
+      if (!parse_inputs(configuration, L, iter.vidx)) {
         goto done;
       }
     } else if (!strcmp(key, "layout")) {
-      if (!parse_layout_policy(configuration, cur)) {
+      if (!parse_layout_policy(configuration, L, iter.vidx)) {
         goto done;
       }
     } else if (!strcmp(key, "output_management_overrides_config")) {
@@ -2480,20 +2486,21 @@ hikari_configuration_load(
       taken as an output name. */
       bool overrides;
 
-      if (!ucl_object_toboolean_safe(cur, &overrides)) {
-        fprintf(stderr,
-            "configuration error: expected boolean for "
-            "\"output_management_overrides_config\"\n");
+      if (!hikari_config_bool(
+              L, iter.vidx, "the configuration", key, &overrides)) {
         goto done;
       }
 
       configuration->output_management_overrides_config = overrides;
     } else if (!!strcmp(key, "actions") && !!strcmp(key, "layouts")) {
-      fprintf(stderr,
-          "configuration error: unkown configuration section \"%s\"\n",
-          key);
+      hikari_config_error(
+          "the configuration", "unkown configuration section \"%s\"", key);
       goto done;
     }
+  }
+
+  if (iter.failed) {
+    goto done;
   }
 
   if (!finalize_keyboard_configs(configuration)) {
@@ -2503,11 +2510,16 @@ hikari_configuration_load(
   success = true;
 
 done:
-  ucl_object_iterate_free(it);
-  ucl_object_unref(configuration_obj);
-  ucl_parser_free(parser);
+  hikari_config_iter_fini(&iter, L);
 
   return success;
+}
+
+bool
+hikari_configuration_load(
+    struct hikari_configuration *configuration, char *config_path)
+{
+  return hikari_config_lua_read(config_path, read_configuration, configuration);
 }
 
 bool

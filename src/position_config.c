@@ -1,5 +1,5 @@
 #include <hikari/position_config.h>
-#include <hikari/config_key.h>
+#include <hikari/config_lua.h>
 
 #include <string.h>
 
@@ -64,7 +64,7 @@ hikari_position_config_relative_parse(
     relative_config = HIKARI_POSITION_CONFIG_RELATIVE_TOP_RIGHT;
     success = true;
   } else {
-    fprintf(stderr, "configuration error: failed to parse \"position\"\n");
+    hikari_config_error(NULL, "failed to parse \"position\" \"%s\"", str);
   }
 
   if (success) {
@@ -75,55 +75,55 @@ hikari_position_config_relative_parse(
 }
 
 static bool
-parse_position(const ucl_object_t *position_obj, int *x, int *y)
+parse_position(lua_State *L, int idx, int *x, int *y)
 {
   bool success = false;
-  ucl_object_iter_t it = ucl_object_iterate_new(position_obj);
+  struct hikari_config_iter iter;
+  const char *key;
 
   int64_t ret_x = 0;
   int64_t ret_y = 0;
   bool parsed_x = false;
   bool parsed_y = false;
 
-  const ucl_object_t *cur;
-  while ((cur = ucl_object_iterate_safe(it, false)) != NULL) {
-    hikari_config_warn_duplicate_key(cur, "a position block");
-
-    const char *key = ucl_object_key(cur);
-
+  hikari_config_iter_init(&iter, L, idx);
+  while (hikari_config_iter_next(&iter, L, &key, "a position block")) {
     if (!strcmp(key, "x")) {
-      if (!ucl_object_toint_safe(cur, &ret_x)) {
-        fprintf(stderr,
-            "configuration error: expected integer for \"x\"-coordinate\n");
+      if (!hikari_config_int(L, iter.vidx, "a position block", key, &ret_x)) {
         goto done;
       }
 
       parsed_x = true;
     } else if (!strcmp(key, "y")) {
-      if (!ucl_object_toint_safe(cur, &ret_y)) {
-        fprintf(stderr,
-            "configuration error: expected integer for \"y\"-coordinate\n");
+      if (!hikari_config_int(L, iter.vidx, "a position block", key, &ret_y)) {
         goto done;
       }
 
       parsed_y = true;
     } else {
-      fprintf(stderr,
-          "configuration error: unknown \"position\" key \"%s\"\n",
-          key);
+      hikari_config_error(
+          "a position block", "unknown \"position\" key \"%s\"", key);
       goto done;
     }
   }
 
+  /* Action purpose: the loop also ends when a malformed entry abandoned the
+  walk, and only iter.failed tells that apart from reaching the end of the
+  block. Without this test a reported error would be followed by a report of
+  the two coordinates missing, and then by success. */
+  if (iter.failed) {
+    goto done;
+  }
+
   if (!parsed_x) {
-    fprintf(stderr,
-        "configuration error: missing \"x\"-coordinate in \"position\"\n");
+    hikari_config_error(
+        "a position block", "missing \"x\"-coordinate in \"position\"");
     goto done;
   }
 
   if (!parsed_y) {
-    fprintf(stderr,
-        "configuration error: missing \"y\"-coordinate in \"position\"\n");
+    hikari_config_error(
+        "a position block", "missing \"y\"-coordinate in \"position\"");
     goto done;
   }
 
@@ -133,22 +133,21 @@ parse_position(const ucl_object_t *position_obj, int *x, int *y)
   *y = ret_y;
 
 done:
-  ucl_object_iterate_free(it);
+  hikari_config_iter_fini(&iter, L);
 
   return success;
 }
 
 bool
 hikari_position_config_absolute_parse(
-    struct hikari_position_config *position_config,
-    const ucl_object_t *position_config_obj)
+    struct hikari_position_config *position_config, lua_State *L, int idx)
 {
   int x;
   int y;
   bool success = false;
 
-  if (!parse_position(position_config_obj, &x, &y)) {
-    fprintf(stderr, "configuration error: failed to parse \"position\"\n");
+  if (!parse_position(L, idx, &x, &y)) {
+    hikari_config_error(NULL, "failed to parse \"position\"");
     goto done;
   }
 
@@ -162,31 +161,31 @@ done:
 }
 
 bool
-hikari_position_config_parse(struct hikari_position_config *position_config,
-    const ucl_object_t *position_config_obj)
+hikari_position_config_parse(
+    struct hikari_position_config *position_config, lua_State *L, int idx)
 {
-  ucl_type_t type = ucl_object_type(position_config_obj);
+  int type = lua_type(L, idx);
   const char *relative;
   bool success = false;
 
   switch (type) {
-    case UCL_OBJECT:
-      if (!hikari_position_config_absolute_parse(
-              position_config, position_config_obj)) {
+    case LUA_TTABLE:
+      if (!hikari_position_config_absolute_parse(position_config, L, idx)) {
         goto done;
       }
       break;
 
-    case UCL_STRING:
-      if (!ucl_object_tostring_safe(position_config_obj, &relative) ||
+    case LUA_TSTRING:
+      if (!hikari_config_string(L, idx, NULL, "position", &relative) ||
           !hikari_position_config_relative_parse(position_config, relative)) {
         goto done;
       }
       break;
 
     default:
-      fprintf(stderr,
-          "configuration error: expected string or object for \"position\"\n");
+      hikari_config_error(NULL,
+          "expected string or table for \"position\", got %s",
+          lua_typename(L, type));
       goto done;
   }
 

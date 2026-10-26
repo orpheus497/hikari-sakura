@@ -2,11 +2,16 @@
 #define HIKARI_KEYBOARD_CONFIG_H
 
 #include <stdbool.h>
-#include <ucl.h>
 #include <wayland-util.h>
 #include <xkbcommon/xkbcommon.h>
 
 #include <hikari/option.h>
+
+/* Action purpose: the parser below takes a value by its index on a Lua stack.
+This header reaches most of the tree through keyboard.h, so the state is
+forward declared rather than pulling <lua.h> in behind it; "struct lua_State *"
+is the same type as lua.h's lua_State and needs no typedef. */
+struct lua_State;
 
 struct hikari_xkb_config {
   HIKARI_OPTION(rules, char *);
@@ -63,7 +68,8 @@ hikari_keyboard_config_merge(struct hikari_keyboard_config *keyboard_config,
 
 bool
 hikari_keyboard_config_parse(struct hikari_keyboard_config *keyboard_config,
-    const ucl_object_t *keyboard_config_obj);
+    struct lua_State *L,
+    int idx);
 
 bool
 hikari_keyboard_config_compile_keymap(

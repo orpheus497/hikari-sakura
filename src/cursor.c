@@ -6,7 +6,7 @@
 #include <errno.h>
 #include <math.h>
 
-#include <dev/evdev/input-event-codes.h>
+#include <hikari/evdev.h>
 
 #include <wlr/types/wlr_seat.h>
 #include <wlr/types/wlr_xcursor_manager.h>

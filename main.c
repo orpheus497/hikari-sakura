@@ -77,11 +77,11 @@ get_user_autostart(void)
 static char *
 get_user_config_path(void)
 {
-  return get_default_path("hikari.conf");
+  return get_default_path("hikari.lua");
 }
 
 #define STR(s) #s
-#define DEFAULT_CONFIG(s) STR(s) "/etc/hikari/hikari.conf"
+#define DEFAULT_CONFIG(s) STR(s) "/etc/hikari/hikari.lua"
 #define DEFAULT_CONFIG_FILE DEFAULT_CONFIG(HIKARI_ETC_PREFIX)
 
 /* [COMMENT] Function purpose: Returns the default system-wide configuration

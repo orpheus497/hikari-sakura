@@ -37,9 +37,9 @@ PKG_CONFIG ?= pkg-config
 #
 # Empty is deliberate rather than literal "/etc": the sites below all append
 # /etc themselves, and the same variable feeds -DHIKARI_ETC_PREFIX, whose
-# stringified expansion in main.c appends "/etc/hikari/hikari.conf". Verified
+# stringified expansion in main.c appends "/etc/hikari/hikari.lua". Verified
 # that an empty -D value stringifies to "" and yields exactly
-# /etc/hikari/hikari.conf under -std=c11 -Wall -Wextra -pedantic.
+# /etc/hikari/hikari.lua under -std=c11 -Wall -Wextra -pedantic.
 #
 # Still `?=`, so a distribution packager can override it as before.
 .if ${OS} == "Linux"
@@ -61,6 +61,7 @@ OBJS = \
 	command.o \
 	completion.o \
 	configuration.o \
+	config_lua.o \
 	cursor.o \
 	decoration.o \
 	dnd_mode.o \
@@ -306,8 +307,29 @@ WAYLAND_LIBS != ${PKG_CONFIG} --libs wayland-server
 LIBINPUT_CFLAGS != ${PKG_CONFIG} --cflags libinput
 LIBINPUT_LIBS != ${PKG_CONFIG} --libs libinput
 
-UCL_CFLAGS != ${PKG_CONFIG} --cflags libucl
-UCL_LIBS != ${PKG_CONFIG} --libs libucl
+# [COMMENT] Action purpose: Locate Lua 5.4, which replaced libucl as the
+# configuration language. The module name is NOT portable: FreeBSD's lang/lua54
+# installs lua-5.4.pc, while Debian and Ubuntu ship lua5.4.pc plus lua-5.4,
+# lua54 and a bare lua as aliases, and other distributions pick differently
+# again. Probing in order and taking the first hit is what keeps one Makefile
+# working everywhere; hardcoding any single spelling breaks at least one target.
+#
+# The loop is a `!=` shell assignment rather than a .for over .if ${PKG_CONFIG}
+# because bmake evaluates `!=` once at parse time, so pkg-config runs at most
+# four times for the whole build rather than once per expansion.
+LUA_PKG != for m in lua-5.4 lua5.4 lua54 lua; do \
+	if ${PKG_CONFIG} --exists $$m 2>/dev/null; then echo $$m; break; fi; \
+	done
+
+# [COMMENT] Action purpose: Fail at parse time with a sentence a human can act
+# on. Without this the two assignments below expand to empty, the compile dies
+# on a missing lua.h, and nothing says which package is absent.
+.if empty(LUA_PKG)
+.error Lua 5.4 development files not found. Tried pkg-config modules lua-5.4, lua5.4, lua54 and lua. Install FreeBSD lang/lua54, Debian/Ubuntu liblua5.4-dev, Fedora lua-devel or Arch lua.
+.endif
+
+LUA_CFLAGS != ${PKG_CONFIG} --cflags ${LUA_PKG}
+LUA_LIBS != ${PKG_CONFIG} --libs ${LUA_PKG}
 
 .if ${OS} == "FreeBSD"
 EPOLL_SHIM_CFLAGS != ${PKG_CONFIG} --cflags epoll-shim
@@ -322,7 +344,7 @@ CFLAGS += \
 	${XKBCOMMON_CFLAGS} \
 	${WAYLAND_CFLAGS} \
 	${LIBINPUT_CFLAGS} \
-	${UCL_CFLAGS} \
+	${LUA_CFLAGS} \
 	${EPOLL_SHIM_CFLAGS}
 
 LIBS = \
@@ -333,7 +355,7 @@ LIBS = \
 	${XKBCOMMON_LIBS} \
 	${WAYLAND_LIBS} \
 	${LIBINPUT_LIBS} \
-	${UCL_LIBS} \
+	${LUA_LIBS} \
 	${EPOLL_SHIM_LIBS}
 
 PROTOCOL_HEADERS = xdg-shell-protocol.h
@@ -491,7 +513,7 @@ DIST_FILES = \
 		share/wayland-sessions/hikari.desktop \
 		share/wayland-sessions/hikari-sakura.desktop \
 		share/xdg-desktop-portal/sakura-portals.conf \
-		etc/hikari/hikari.conf \
+		etc/hikari/hikari.lua \
 		etc/pam.d/hikari-unlocker.*
 
 # [COMMENT] Action purpose: The `dist` tarball rewrites every member path to sit
@@ -550,8 +572,8 @@ install: hikari hikari-unlocker hikari-topbar share/man/man1/hikari.1
 	mkdir -p ${DESTDIR}/${PREFIX}/share/xdg-desktop-portal
 	mkdir -p ${DESTDIR}/${ETC_PREFIX}/etc/hikari
 	mkdir -p ${DESTDIR}/${ETC_PREFIX}/etc/pam.d
-	sed "s,PREFIX,${PREFIX}," etc/hikari/hikari.conf > ${DESTDIR}/${ETC_PREFIX}/etc/hikari/hikari.conf
-	chmod 644 ${DESTDIR}/${ETC_PREFIX}/etc/hikari/hikari.conf
+	sed "s,PREFIX,${PREFIX}," etc/hikari/hikari.lua > ${DESTDIR}/${ETC_PREFIX}/etc/hikari/hikari.lua
+	chmod 644 ${DESTDIR}/${ETC_PREFIX}/etc/hikari/hikari.lua
 	install -m ${PERMS} hikari ${DESTDIR}/${PREFIX}/bin
 	install -m 555 start-hikari.sh ${DESTDIR}/${PREFIX}/bin/start-hikari
 	install -m 4555 hikari-unlocker ${DESTDIR}/${PREFIX}/bin
@@ -604,7 +626,7 @@ uninstall:
 	-rm ${DESTDIR}/${PREFIX}/share/wayland-sessions/hikari-sakura.desktop
 	-rm ${DESTDIR}/${PREFIX}/share/xdg-desktop-portal/sakura-portals.conf
 	-rm ${DESTDIR}/${ETC_PREFIX}/etc/pam.d/hikari-unlocker
-	-rm ${DESTDIR}/${ETC_PREFIX}/etc/hikari/hikari.conf
+	-rm ${DESTDIR}/${ETC_PREFIX}/etc/hikari/hikari.lua
 	-rmdir ${DESTDIR}/${ETC_PREFIX}/etc/hikari
 	-rmdir ${DESTDIR}/${PREFIX}/share/backgrounds/hikari
 	# [COMMENT] Action purpose: Only this desktop's own directory is removed,
@@ -617,26 +639,26 @@ uninstall:
 # user (run as yourself, no sudo/DESTDIR -- this writes into $HOME). Copies
 # the wallpaper next to the config and pre-substitutes its path so the
 # background renders out of the box; unlike `install`, it never overwrites an
-# existing ~/.config/hikari/hikari.conf.
-install-user: share/backgrounds/hikari/hikari_wallpaper.png etc/hikari/hikari.conf
+# existing ~/.config/hikari/hikari.lua.
+install-user: share/backgrounds/hikari/hikari_wallpaper.png etc/hikari/hikari.lua
 	@test -n "${HOME}" || { echo "error: HOME is not set" >&2; exit 1; }
 	mkdir -p "${HOME}/.config/hikari"
 	install -m 644 share/backgrounds/hikari/hikari_wallpaper.png "${HOME}/.config/hikari/hikari_wallpaper.png"
-	@if [ -e "${HOME}/.config/hikari/hikari.conf" ]; then \
-		echo "install-user: ${HOME}/.config/hikari/hikari.conf already exists -- leaving it untouched"; \
+	@if [ -e "${HOME}/.config/hikari/hikari.lua" ]; then \
+		echo "install-user: ${HOME}/.config/hikari/hikari.lua already exists -- leaving it untouched"; \
 	else \
-		tmp=$$(mktemp "${HOME}/.config/hikari/hikari.conf.XXXXXX") && \
-		sed "s,PREFIX,${PREFIX}," etc/hikari/hikari.conf | \
+		tmp=$$(mktemp "${HOME}/.config/hikari/hikari.lua.XXXXXX") && \
+		sed "s,PREFIX,${PREFIX}," etc/hikari/hikari.lua | \
 		  sed "s,/share/backgrounds/hikari,${HOME}/.config/hikari," > "$$tmp" && \
 		chmod 644 "$$tmp" && \
-		mv -f "$$tmp" "${HOME}/.config/hikari/hikari.conf" && \
-		echo "install-user: wrote ${HOME}/.config/hikari/hikari.conf"; \
+		mv -f "$$tmp" "${HOME}/.config/hikari/hikari.lua" && \
+		echo "install-user: wrote ${HOME}/.config/hikari/hikari.lua"; \
 	fi
 
 uninstall-user:
 	@test -n "${HOME}" || { echo "error: HOME is not set" >&2; exit 1; }
 	-rm "${HOME}/.config/hikari/hikari_wallpaper.png"
-	@echo "uninstall-user: ${HOME}/.config/hikari/hikari.conf left in place -- remove it manually if desired"
+	@echo "uninstall-user: ${HOME}/.config/hikari/hikari.lua left in place -- remove it manually if desired"
 
 # [COMMENT] Action purpose: Read back the dependency files -MMD wrote on the
 # previous build, which is what turns them into actual rules. Kept at the very
