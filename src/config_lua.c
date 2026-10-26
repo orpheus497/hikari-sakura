@@ -36,6 +36,17 @@ return false instead of raising. */
 #include <lauxlib.h>
 #include <lualib.h>
 
+/* [COMMENT] Action purpose: refuse to compile against anything but Lua 5.4.
+The Makefile probes for a 5.4 pkg-config module, but LUA_CFLAGS can be set by
+hand and a distribution's unversioned `lua` module is whatever that
+distribution ships. Lua 5.5 changed lua_newstate to take a third seed
+argument, which hikari_config_lua_read() does not pass, so without this guard a
+mismatched toolchain produces a wrong-argument-count error pointing at a call
+site that looks correct, instead of a sentence naming the real problem. */
+#if LUA_VERSION_NUM != 504
+#error "hikari's configuration reader requires Lua 5.4"
+#endif
+
 /* Four orders of magnitude above any real configuration, and the only thing
 that stops string.rep("x", 1e9): the instruction hook cannot see an allocation.
 */
@@ -771,6 +782,138 @@ same string, table and math metatables the host holds, and retrieving one is
 only a step away from mutating shared state mid-load.
 
 The shipped configuration uses none of the three. */
+/* Action purpose: ceilings for the two string operations whose work happens
+inside a single C call, where the instruction-count hook cannot reach.
+
+CONFIG_STRING_REP_MAX bounds string.rep's repeat COUNT, not its result size.
+The distinction is the bug: Lua's own guard rejects a rep whose result would
+exceed MAXSIZE, but `string.rep("", math.maxinteger)` produces a zero-length
+result, passes that guard, and then runs its copy loop nearly maxinteger times.
+It allocates nothing, so the memory cap does not catch it either. Measured: with
+a count hook armed at interval 1000 it ran past 25 seconds without the hook ever
+firing once. A configuration containing that one line hung the compositor at
+startup, permanently.
+
+CONFIG_PATTERN_SUBJECT_MAX bounds the subject handed to the pattern functions.
+Lua's matcher backtracks, and the work is superlinear in subject length, so an
+unbounded subject is the same class of hazard with a less obvious trigger.
+Bounding the subject does not make pathological backtracking impossible -- a
+pattern with several non-greedy quantifiers can still be slow on a short
+string -- and that residual is accepted rather than hidden: it is bounded work
+on bounded input, where the rep case was unbounded work outright.
+
+Both ceilings are far above any plausible configuration. A separator built with
+string.rep("-", 80) uses 80 of a million; a config string long enough to reach
+64 KiB is not one anybody writes by hand. */
+#define CONFIG_STRING_REP_MAX (1 << 20)
+#define CONFIG_PATTERN_SUBJECT_MAX (1 << 16)
+
+/* Function purpose: Delegate to the real string function held as upvalue 1,
+having already checked whatever the caller's guard checked. Shared by both
+wrappers because the delegation is the fiddly half: the original has to be
+moved BELOW the arguments it is being given, which is what lua_insert does
+here. */
+static int
+config_string_delegate(lua_State *L)
+{
+  int nargs = lua_gettop(L);
+
+  lua_pushvalue(L, lua_upvalueindex(1));
+  lua_insert(L, 1);
+  lua_call(L, nargs, LUA_MULTRET);
+
+  return lua_gettop(L);
+}
+
+/* Function purpose: string.rep with its repeat count bounded. */
+static int
+config_string_rep(lua_State *L)
+{
+  lua_Integer n = luaL_optinteger(L, 2, 0);
+
+  if (n > CONFIG_STRING_REP_MAX) {
+    return luaL_error(L,
+        "string.rep count %I exceeds the configuration limit of %d",
+        (lua_Integer)n, CONFIG_STRING_REP_MAX);
+  }
+
+  return config_string_delegate(L);
+}
+
+/* Function purpose: a pattern function with its subject length bounded.
+Installed over find, match, gmatch and gsub, each of which takes the subject as
+its first argument. */
+static int
+config_string_pattern(lua_State *L)
+{
+  size_t len = 0;
+
+  if (lua_type(L, 1) == LUA_TSTRING) {
+    lua_tolstring(L, 1, &len);
+  }
+
+  if (len > CONFIG_PATTERN_SUBJECT_MAX) {
+    return luaL_error(L,
+        "a configuration string of %d bytes exceeds the %d byte limit for "
+        "pattern matching",
+        (int)len, CONFIG_PATTERN_SUBJECT_MAX);
+  }
+
+  return config_string_delegate(L);
+}
+
+/* Function purpose: Build the guarded replacement for the string library and
+leave it on the stack.
+
+Action purpose: the guarded table must also become the string METATABLE's
+__index, which the function does before returning. Replacing only the sandbox's
+`string` global would leave the method-call form reaching straight past it:
+("x"):rep(n) does not read the global at all, it goes through the metatable
+Lua installs for every string, whose __index is the real library. Closing one
+route and not the other would be no fix. Mutating that metatable is contained
+because hikari_config_lua_read() builds a fresh lua_State for each load and
+destroys it afterwards, so nothing outside this load can observe it. */
+static void
+config_push_guarded_string(lua_State *L)
+{
+  static const char *const bounded[] = { "find", "match", "gmatch", "gsub",
+    NULL };
+  size_t i;
+
+  lua_getglobal(L, LUA_STRLIBNAME);
+  lua_newtable(L);
+
+  /* Copy every entry, then override the ones that need a ceiling. Copying
+  first means a future Lua release adding a function still reaches the
+  configuration, rather than silently disappearing from the sandbox. */
+  lua_pushnil(L);
+  while (lua_next(L, -3) != 0) {
+    lua_pushvalue(L, -2);
+    lua_insert(L, -2);
+    lua_settable(L, -4);
+  }
+
+  lua_getfield(L, -2, "rep");
+  lua_pushcclosure(L, config_string_rep, 1);
+  lua_setfield(L, -2, "rep");
+
+  for (i = 0; bounded[i] != NULL; i++) {
+    lua_getfield(L, -2, bounded[i]);
+    lua_pushcclosure(L, config_string_pattern, 1);
+    lua_setfield(L, -2, bounded[i]);
+  }
+
+  lua_remove(L, -2);
+
+  lua_pushliteral(L, "");
+  if (lua_getmetatable(L, -1)) {
+    lua_pushvalue(L, -3);
+    lua_setfield(L, -2, "__index");
+    lua_pop(L, 1);
+  }
+  lua_pop(L, 1);
+}
+
 static const char *const config_whitelist[] = { "assert", "error", "ipairs",
   "next", "pairs", "print", "rawequal", "rawget", "rawlen", "rawset",
   "select", "tonumber", "tostring", "type",
@@ -807,6 +950,12 @@ config_prepare(lua_State *L)
     lua_getglobal(L, config_whitelist[i]);
     lua_setfield(L, -2, config_whitelist[i]);
   }
+
+  /* Action purpose: replace the `string` the whitelist loop just copied with
+  the bounded version, and point the string metatable at it too. See
+  config_push_guarded_string(). */
+  config_push_guarded_string(L);
+  lua_setfield(L, -2, LUA_STRLIBNAME);
 
   config_push_env(L);
   lua_setfield(L, -2, "env");
