@@ -73,6 +73,11 @@ depend on, and describes it as a lossy wrapper around statfs(). See
 #endif
 #include <time.h>
 #include <ifaddrs.h>
+#if defined(__linux__)
+/* Action purpose: stat(2) for the sysfs wireless probe in get_net_status().
+Linux only -- the FreeBSD path there needs no filesystem lookup. */
+#include <sys/stat.h>
+#endif
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <net/if.h>
@@ -373,12 +378,55 @@ static void get_net_status(char *buf) {
         if (ifa->ifa_flags & IFF_LOOPBACK) continue;
         if ((ifa->ifa_flags & (IFF_UP | IFF_RUNNING)) !=
             (IFF_UP | IFF_RUNNING)) continue;
-        /* Only the wireless prefix is driver-derived on FreeBSD; every other
-         * running non-loopback interface counts as wired, so the many
-         * Ethernet drivers (igb, igc, ix, bge, ...) are covered without an
-         * allowlist. */
-        if (strncmp(ifa->ifa_name, "wlan", 4) == 0) wifi = 1;
-        else                                        eth  = 1;
+        /* Action purpose: classify the interface as wireless or wired. Every
+         * running non-loopback interface that is not wireless counts as wired,
+         * so the many Ethernet drivers (igb, igc, ix, bge, ...) are covered
+         * without an allowlist. Only the wireless test is platform specific,
+         * and it has to be: the two systems name wireless interfaces by
+         * different rules.
+         *
+         * On FreeBSD the name is the test. wlan(4) is the single interface
+         * driver every 802.11 device is cloned onto, so a wireless interface
+         * is always wlanN and the prefix is driver-derived rather than a
+         * guess. Unchanged from before this split.
+         *
+         * On Linux the name is NOT the test, and using it was a real defect.
+         * systemd's predictable interface names give wlp3s0, wlo1 and similar,
+         * none of which begin with "wlan" -- so the prefix test failed and
+         * every Wi-Fi-only laptop fell through to the wired branch and had its
+         * top bar report ETHERNET. The kernel exposes the property directly
+         * instead: a wireless interface carries a `wireless` directory, and a
+         * cfg80211 one additionally a `phy80211` link, under
+         * /sys/class/net/<ifname>/. Both are tested because `wireless` covers
+         * the older wireless-extensions drivers as well.
+         *
+         * Honesty note on sourcing: the kernel's own
+         * ABI/testing/sysfs-class-net page could not be retrieved from this
+         * environment to quote (404 at the documented URL, while other
+         * docs.kernel.org pages served normally), so this is the conventional
+         * test rather than one quoted from the ABI document, and it is
+         * untested here because the container exposes no wireless device.
+         * It is nonetheless strictly better than the name prefix, which is
+         * known-wrong on Linux rather than merely uncited. A failure of the
+         * probe degrades to "wired", which is the same answer the old code
+         * gave, so the worst case is unchanged behaviour. */
+        int is_wifi;
+#if defined(__linux__)
+        char wpath[sizeof("/sys/class/net//phy80211") + IFNAMSIZ];
+        struct stat wst;
+
+        is_wifi = (snprintf(wpath, sizeof(wpath), "/sys/class/net/%s/wireless",
+                       ifa->ifa_name) < (int)sizeof(wpath) &&
+                      stat(wpath, &wst) == 0) ||
+                  (snprintf(wpath, sizeof(wpath), "/sys/class/net/%s/phy80211",
+                       ifa->ifa_name) < (int)sizeof(wpath) &&
+                      stat(wpath, &wst) == 0);
+#else
+        is_wifi = strncmp(ifa->ifa_name, "wlan", 4) == 0;
+#endif
+
+        if (is_wifi) wifi = 1;
+        else         eth  = 1;
     }
     freeifaddrs(ifaddr);
 
