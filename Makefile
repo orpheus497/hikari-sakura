@@ -22,7 +22,31 @@ OS != uname
 VERSION ?= "CURRENT"
 PREFIX ?= /usr/local
 PKG_CONFIG ?= pkg-config
+# [COMMENT] Action purpose: Where this install writes etc/. On FreeBSD that is
+# under the prefix -- /usr/local/etc -- which is both the port convention and a
+# path OpenPAM searches, so ETC_PREFIX tracks PREFIX and nothing more is needed.
+#
+# Linux is the exception, and not for style reasons: Linux-PAM resolves a
+# service policy under /etc/pam.d, and that location is compiled into the
+# library rather than being relocatable by whoever installs a consumer. A
+# policy written to /usr/local/etc/pam.d is never read, so hikari-unlocker --
+# which is the entire screen-unlock path -- would fail to authenticate with
+# nothing to indicate why. An empty ETC_PREFIX makes every ${ETC_PREFIX}/etc
+# site below resolve to /etc, which is also where FHS puts configuration
+# regardless of the binary prefix.
+#
+# Empty is deliberate rather than literal "/etc": the sites below all append
+# /etc themselves, and the same variable feeds -DHIKARI_ETC_PREFIX, whose
+# stringified expansion in main.c appends "/etc/hikari/hikari.conf". Verified
+# that an empty -D value stringifies to "" and yields exactly
+# /etc/hikari/hikari.conf under -std=c11 -Wall -Wextra -pedantic.
+#
+# Still `?=`, so a distribution packager can override it as before.
+.if ${OS} == "Linux"
+ETC_PREFIX ?=
+.else
 ETC_PREFIX ?= ${PREFIX}
+.endif
 
 OBJS = \
 	action.o \
@@ -384,8 +408,10 @@ doc:
 # `doc` is phony and always regenerates, so the page in the archive matches the
 # VERSION the archive is named for. This is why `dist` needs pandoc while
 # `install` deliberately does not.
-hikari-${VERSION}.tar.gz: version.h doc
-	@tar -s "#^#hikari-${VERSION}/#" -czf hikari-${VERSION}.tar.gz \
+# [COMMENT] Action purpose: The archive member list, lifted out of the recipe
+# so the tar invocation below can be written once per platform without
+# duplicating twenty-four paths. Nothing here may ever contain a `#`.
+DIST_FILES = \
 		version.h \
 		main.c \
 		hikari_unlocker.c \
@@ -393,6 +419,7 @@ hikari-${VERSION}.tar.gz: version.h doc
 		src/*.c \
 		protocol/*.xml \
 		Makefile \
+		GNUmakefile \
 		test.mk \
 		compile_flags.txt \
 		.clang-format \
@@ -408,6 +435,33 @@ hikari-${VERSION}.tar.gz: version.h doc
 		share/xdg-desktop-portal/sakura-portals.conf \
 		etc/hikari/hikari.conf \
 		etc/pam.d/hikari-unlocker.*
+
+# [COMMENT] Action purpose: The `dist` tarball rewrites every member path to sit
+# under a hikari-${VERSION}/ directory. `-s` is a bsdtar substitution flag and is
+# what FreeBSD's base tar understands; GNU tar, which is what a Linux system has,
+# spells the same operation --transform and takes a sed expression. Selecting
+# here rather than requiring bsdtar on Linux keeps `make dist` working with the
+# tar that is already installed.
+#
+# This is branched at the RECIPE rather than hoisted into a variable, and that
+# is the whole point: make(1) COMMENTS says a comment begins "anywhere but in a
+# shell command line", so the `#` delimiters are literal here but would start a
+# comment in an assignment -- truncating the expression to `--transform "s` with
+# no error. Escaping as `\#` does work, but make(1) documents no such escape, so
+# the recipe form is preferred as the one the manual actually guarantees.
+#
+# The FreeBSD line is byte-identical to the one that preceded this change. Only
+# the Linux line is new. Double quotes are not optional on either: VERSION
+# carries its own literal quotes (`VERSION ?= "CURRENT"`), and only under double
+# quotes does the shell concatenate the adjacent segments and strip the inner
+# pair -- single quotes would name the archive root hikari-"CURRENT"/. Verified
+# that both tars emit byte-identical member lists.
+hikari-${VERSION}.tar.gz: version.h doc
+.if ${OS} == "Linux"
+	@tar --transform "s#^#hikari-${VERSION}/#" -czf hikari-${VERSION}.tar.gz ${DIST_FILES}
+.else
+	@tar -s "#^#hikari-${VERSION}/#" -czf hikari-${VERSION}.tar.gz ${DIST_FILES}
+.endif
 
 # [COMMENT] Action purpose: version.h is regenerated on every build by the
 # FORCE rule above, so removing it here is always safe. It used to be guarded on
