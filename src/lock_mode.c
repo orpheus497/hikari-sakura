@@ -10,12 +10,17 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-// [COMMENT] Action purpose: Portability shim — on FreeBSD, explicit_bzero is
-// declared in <strings.h>. On Linux (used only for IDE analysis, not builds),
-// it requires _DEFAULT_SOURCE. Provide a fallback declaration so clangd works.
-#if !defined(__FreeBSD__) && !defined(HAVE_EXPLICIT_BZERO)
-extern void explicit_bzero(void *, size_t);
-#endif
+// [COMMENT] Action purpose: Supplies explicit_bzero() and closefrom() on
+// Linux; expands to the two base-system headers and nothing else on FreeBSD.
+// It replaces a bare `extern void explicit_bzero(void *, size_t);` that was
+// only ever true of glibc: on a C library that does not export the symbol that
+// declaration promises a function which is not there, and the build fails at
+// link rather than at compile, with no hint of which header lied.
+//
+// Position is load-bearing. <string.h>, <strings.h> and <unistd.h> above are
+// the headers that declare these two names, and compat.h must come after all
+// of them so its Linux definitions never collide with a libc declaration.
+#include <hikari/compat.h>
 
 #include <wlr/types/wlr_seat.h>
 #include <errno.h>

@@ -18,6 +18,13 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+/* [COMMENT] Action purpose: closefrom() is a base-system call on FreeBSD and
+absent on Linux, where compat.h supplies it. It adds nothing on FreeBSD. Placed
+directly after <unistd.h>, the header that declares closefrom() there, because
+compat.h's Linux definitions must not precede a libc declaration of the same
+name. */
+#include <hikari/compat.h>
+
 #include <cairo/cairo.h>
 #include <pango/pangocairo.h>
 

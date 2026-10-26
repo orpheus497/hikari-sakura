@@ -156,7 +156,37 @@ CFLAGS += -DNDEBUG
 # include paths are appended to CFLAGS below. The `:=` is load-bearing: with a
 # deferred `=` this would expand at use time and the topbar build would inherit
 # every -DHAVE_* and every wlroots/pango include it has no use for.
-TOPBAR_CFLAGS := ${CFLAGS} -std=gnu11 -Wall
+#
+# -Iinclude is appended by hand rather than inherited, and it is the ONLY
+# include path this binary gets. CFLAGS does not carry it yet at this point in
+# the file -- the `-I. -Iinclude` line sits further down, next to the feature
+# macros this snapshot exists to keep out -- but topbar.c and the two sensor
+# translation units all include <hikari/topbar_sensors.h>, so without it the
+# compile cannot find the project's own header. `-Iinclude` and not `-I.`: the
+# contract header is the single project header this binary needs, and leaving
+# the tree root off the search path keeps a stray top-level header from being
+# picked up by a bare #include in a libc-only program.
+TOPBAR_CFLAGS := ${CFLAGS} -std=gnu11 -Wall -Iinclude
+
+# [COMMENT] Action purpose: Select the platform half of the top bar's sensor
+# contract. include/hikari/topbar_sensors.h declares five functions; exactly
+# one implementation of it is compiled, chosen here by ${OS}, and src/topbar.c
+# holds everything portable. FreeBSD is the default branch rather than a tested
+# one, so a platform this file has never seen gets the sysctl implementation
+# and a link error naming the missing symbol -- which is the honest outcome --
+# instead of silently building against Linux's /proc and /sys.
+#
+# The object names are derived from the source names with `:.c=.o` so the two
+# can never drift apart, and the pair is collected into TOPBAR_OBJS for the
+# link rule and the `clean` target to share.
+.if ${OS} == "Linux"
+TOPBAR_SENSORS_SRC = topbar_sensors_linux.c
+.else
+TOPBAR_SENSORS_SRC = topbar_sensors_freebsd.c
+.endif
+
+TOPBAR_SENSORS_OBJ = ${TOPBAR_SENSORS_SRC:.c=.o}
+TOPBAR_OBJS = topbar.o ${TOPBAR_SENSORS_OBJ}
 
 .if defined(WITH_XWAYLAND) && ${WITH_XWAYLAND:tu} != "NO"
 CFLAGS += -DHAVE_XWAYLAND=1
@@ -347,8 +377,29 @@ hikari-unlocker: hikari_unlocker.c
 # wlroots include paths. Note that topbar.c relies on __BSD_VISIBLE staying set
 # for u_int, IFF_UP and usleep -- no feature-test macro may be defined for this
 # target (see the comment atop src/topbar.c).
-hikari-topbar: src/topbar.c
-	${CC} ${LDFLAGS} ${TOPBAR_CFLAGS} -o hikari-topbar src/topbar.c
+#
+# Two translation units since the platform sensor split: the portable half in
+# src/topbar.c and the ${OS}-selected half named by TOPBAR_SENSORS_SRC above.
+#
+# Both are compiled by the EXPLICIT rules below rather than by the built-in
+# .c.o suffix rule, and that is the whole reason the rules exist. `.PATH: src`
+# makes every source in src/ visible to the suffix rule, which compiles with
+# ${CFLAGS} -- the compositor's flags, carrying -DHAVE_*, -MMD -MP and the
+# wlroots/pango/pixman include paths. A rule with its own commands takes
+# precedence over the suffix rule in bmake, so naming these two objects here is
+# what keeps TOPBAR_CFLAGS, and therefore the libc-only property, intact.
+#
+# The header is a prerequisite because nothing else records that dependency:
+# -MMD lives in ${CFLAGS}, not in the snapshot, so these objects emit no .d
+# file and an edit to the sensor contract would otherwise not rebuild them.
+hikari-topbar: ${TOPBAR_OBJS}
+	${CC} ${LDFLAGS} ${TOPBAR_CFLAGS} -o ${.TARGET} ${TOPBAR_OBJS}
+
+topbar.o: src/topbar.c include/hikari/topbar_sensors.h
+	${CC} ${TOPBAR_CFLAGS} -c -o ${.TARGET} src/topbar.c
+
+${TOPBAR_SENSORS_OBJ}: src/${TOPBAR_SENSORS_SRC} include/hikari/topbar_sensors.h
+	${CC} ${TOPBAR_CFLAGS} -c -o ${.TARGET} src/${TOPBAR_SENSORS_SRC}
 
 # [COMMENT] Action purpose: hikari.1 is generated and .gitignore'd, so removing
 # it is exactly what `clean` should do. The `_darcs` test this replaces was a
@@ -364,6 +415,13 @@ clean: clean-doc
 	@rm ${PROTOCOL_HEADERS} 2> /dev/null ||:
 	@echo "cleaning object files"
 	@rm ${OBJS} 2> /dev/null ||:
+# [COMMENT] Action purpose: The top bar's objects are removed on their own
+# line, and both platform names are listed rather than just ${TOPBAR_OBJS}.
+# They are not in ${OBJS} -- they are compiled with TOPBAR_CFLAGS instead --
+# and ${TOPBAR_OBJS} names only the object for the ${OS} running the clean, so
+# a tree built on one platform and cleaned under `make OS=...` from the other
+# would otherwise keep a stale object that the next link silently reuses.
+	@rm topbar.o topbar_sensors_linux.o topbar_sensors_freebsd.o 2> /dev/null ||:
 	@echo "cleaning dependency files"
 	@rm ${OBJS:.o=.d} 2> /dev/null ||:
 	@echo "cleaning executables"

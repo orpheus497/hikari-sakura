@@ -31,16 +31,15 @@
  *   stdlib.h      malloc / free / getenv
  *   string.h      strcpy / strncmp / memcpy / strlen
  *   unistd.h      usleep
- *   sys/sysctl.h  sysctlbyname  (FreeBSD kernel interface)
  *   sys/types.h   size_t and friends
- *   sys/param.h   CPUSTATES / CP_IDLE / MAXPATHLEN
- *   sys/mount.h   getfsstat / statfs
- *   sys/vmmeter.h vmtotal (pulled in by sys/param.h on FreeBSD)
+ *   sys/param.h   BSD system parameters and limits
+ *   sys/mount.h   statfs            (sys/vfs.h on Linux)
  *   time.h        time / localtime / strftime
  *   ifaddrs.h     getifaddrs / freeifaddrs
  *   arpa/inet.h   AF_INET
  *   netinet/in.h  sockaddr_in
  *   net/if.h      IFF_UP
+ *   hikari/topbar_sensors.h  platform sensor contract (src/topbar_sensors_*.c)
  */
 
 /* [COMMENT] Action purpose: sys/types.h must precede sys/mount.h. FreeBSD's
@@ -56,16 +55,29 @@ errors for code that builds cleanly. */
 #include <string.h>
 #include <unistd.h>
 #include <sys/types.h>
-#include <sys/sysctl.h>
 #include <sys/param.h>
-#include <sys/resource.h>
+/* [COMMENT] Action purpose: get_home_usage() below calls statfs(2). Both
+platforms provide it with the f_blocks and f_bfree members that function reads,
+but from different headers -- <sys/mount.h> on FreeBSD, <sys/vfs.h> on Linux.
+Branching the include leaves the function body itself identical on both, which
+is why the disk sensor stays in this shared file instead of being duplicated
+per platform. FreeBSD keeps the native spelling here: statvfs(3) is the
+portable alternative and would delete this branch, but FreeBSD's own
+statvfs(3) manual calls its output garbage that portable applications must not
+depend on, and describes it as a lossy wrapper around statfs(). See
+.devdocs/research/libc.md section 7c and .devdocs/research/contract.md C.5. */
+#if defined(__linux__)
+#include <sys/vfs.h>
+#else
 #include <sys/mount.h>
-#include <sys/vmmeter.h>
+#endif
 #include <time.h>
 #include <ifaddrs.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <net/if.h>
+
+#include <hikari/topbar_sensors.h>
 
 /* ═══════════════════════════════════════════════════════════════════════════
  * JSON STRING ESCAPING
@@ -243,10 +255,11 @@ struct stats {
     double  mem_usage;
     int     bat_life;
     char    bat_state[32];
-    /* 1 when running on external power, 0 when on battery. Read from
-     * hw.acpi.acline where that exists, falling back to the raw ACPI charge
-     * flags -- never from bat_state, which collapses several distinct states
-     * onto one label. See get_bat_info(). */
+    /* 1 when running on external power, 0 when on battery. Written by
+     * get_bat_info(); each platform implementation documents its own source
+     * (hw.acpi.acline on FreeBSD, the `online` attribute of a type == "Mains"
+     * supply on Linux). Never derived from bat_state, which collapses several
+     * distinct states onto one label. */
     int     bat_external;
     char    net_status[32];
     double  home_usage;
@@ -306,163 +319,6 @@ static void get_mpris_info(char *buf, size_t size) {
         buf[0] = '\0';
     }
     pclose(fp);
-}
-
-/* ═══════════════════════════════════════════════════════════════════════════
- * CPU — usage (delta between successive kern.cp_time snapshots)
- *
- * The previous snapshot is kept in file-scope so get_cpu_usage() can be
- * called repeatedly without passing state explicitly.  A warm-up call in
- * main() discards the first (meaningless) 100% reading.
- * ═══════════════════════════════════════════════════════════════════════════ */
-
-static long last_cp_time[CPUSTATES];
-
-static double get_cpu_usage(void) {
-    long   cp_time[CPUSTATES];
-    size_t len = sizeof(cp_time);
-
-    /* cp_time is an array; pass it directly — no & needed */
-    if (sysctlbyname("kern.cp_time", cp_time, &len, NULL, 0) == -1)
-        return 0.0;
-
-    long sum = 0;
-    for (int i = 0; i < CPUSTATES; i++)
-        sum += cp_time[i] - last_cp_time[i];
-
-    double usage = 0.0;
-    if (sum > 0)
-        usage = 100.0 * (1.0 -
-            (double)(cp_time[CP_IDLE] - last_cp_time[CP_IDLE]) / sum);
-
-    memcpy(last_cp_time, cp_time, sizeof(cp_time));
-    return usage;
-}
-
-/* ═══════════════════════════════════════════════════════════════════════════
- * CPU — temperature
- *
- * Tries the per-core sysctl first (coretemp driver), then falls back to the
- * ACPI thermal zone.  Raw values > 1000 are in FreeBSD's tenths-of-Kelvin
- * format and are converted to °C.
- * ═══════════════════════════════════════════════════════════════════════════ */
-
-static int get_cpu_temp(void) {
-    int    temp;
-    size_t len = sizeof(temp);
-
-    if (sysctlbyname("dev.cpu.0.temperature", &temp, &len, NULL, 0) == -1) {
-        /* sysctlbyname writes the returned size back through len, so the
-         * failed first call can leave it inconsistent with sizeof(temp). */
-        len = sizeof(temp);
-        if (sysctlbyname("hw.acpi.thermal.tz0.temperature",
-                         &temp, &len, NULL, 0) == -1)
-            return -1;
-    }
-
-    return (temp > 1000) ? (temp - 2732) / 10 : temp;
-}
-
-/* ═══════════════════════════════════════════════════════════════════════════
- * MEMORY — usage
- *
- * active + wired pages represent genuinely committed memory.  Dividing by
- * total physical memory gives a reasonable real-usage percentage that is not
- * inflated by the page cache (as 'used' in top would be).
- * ═══════════════════════════════════════════════════════════════════════════ */
-
-static double get_mem_usage(void) {
-    long long    total;
-    unsigned int active, wire;
-    int          pagesize;
-    size_t       len;
-
-    len = sizeof(total);
-    if (sysctlbyname("hw.physmem", &total, &len, NULL, 0) == -1) return 0.0;
-    len = sizeof(pagesize);
-    if (sysctlbyname("hw.pagesize", &pagesize, &len, NULL, 0) == -1) return 0.0;
-    len = sizeof(active);
-    if (sysctlbyname("vm.stats.vm.v_active_count", &active, &len, NULL, 0) == -1) return 0.0;
-    len = sizeof(wire);
-    if (sysctlbyname("vm.stats.vm.v_wire_count", &wire, &len, NULL, 0) == -1) return 0.0;
-
-    if (total <= 0 || pagesize <= 0) return 0.0;
-
-    return 100.0 * (long long)(active + wire) * pagesize / total;
-}
-
-/* ═══════════════════════════════════════════════════════════════════════════
- * BATTERY — life percent and charge state
- * ═══════════════════════════════════════════════════════════════════════════ */
-
-static void get_bat_info(int *life, char *state, int *external) {
-    size_t len = sizeof(*life);
-    if (sysctlbyname("hw.acpi.battery.life", life, &len, NULL, 0) == -1)
-        *life = -1;
-
-    int s;
-    int inferred = 0;
-    len = sizeof(s);
-
-    if (sysctlbyname("hw.acpi.battery.state", &s, &len, NULL, 0) == 0) {
-        /* Action purpose: `inferred` is taken from the ACPI flags directly and
-         * NOT from the label beside them, because the label is lossy. The final
-         * `else` catches every flag combination that is neither charging nor
-         * discharging and calls all of them "AC" -- which includes CRITICAL
-         * (0x04) on its own. Treating that label as mains would paint a
-         * critically flat battery in the plugged-in colour, so only the two
-         * states that positively mean external power set the flag.
-         *
-         * DISCHARG (0x01) is deliberately tested BEFORE CHARGING (0x02), and
-         * that order must not be swapped to make s == 3 read as "Charging".
-         * FreeBSD names 0x03 ACPI_BATT_STAT_INVALID (sys/dev/acpica/acpiio.h)
-         * and its driver does not correct it -- acpi_cmbat.c:294 merely logs
-         * "battery reports simultaneous charging and discharging" and passes
-         * the value through -- so 0x03 reaches us as a firmware bug, not as a
-         * meaningful state. Deriving "on mains" from a reading the kernel calls
-         * invalid is exactly the inference this function refuses to make
-         * everywhere else, and it fails in the dangerous direction: a battery
-         * that is really draining would be painted plugged-in. Testing
-         * DISCHARG first resolves the impossible pair toward the safe reading.
-         *
-         * 0x07 is ACPI_BATT_STAT_NOT_PRESENT (no battery at all) and lands in
-         * the same branch for the same reason. It costs nothing: with no
-         * battery, hw.acpi.battery.life fails, *life stays -1, and the caller
-         * omits the block entirely.
-         *
-         * None of this is load-bearing while hw.acpi.acline answers -- it
-         * overrides `inferred` outright below. This is the fallback's fallback,
-         * and it is written to be safe rather than clever. */
-        if      (s == 0) { strcpy(state, "Full");        inferred = 1; }
-        else if (s &  1)   strcpy(state, "Discharging");
-        else if (s &  2) { strcpy(state, "Charging");    inferred = 1; }
-        else               strcpy(state, "AC");
-    } else {
-        strcpy(state, "Unknown");
-    }
-
-    /* Action purpose: hw.acpi.acline is the AUTHORITY on external power and
-     * overrides the inference above whenever it answers. It reports the AC line
-     * itself -- 1 on mains, 0 on battery -- rather than being deduced from what
-     * the battery is doing, and src/lock_config.c already reads the same sysctl
-     * to settle the same question.
-     *
-     * This closes a gap the inference alone cannot: a machine plugged in with a
-     * full battery whose firmware reports some flag combination other than 0
-     * lands in the "AC" branch above, which deliberately does NOT set
-     * `inferred` -- so it would have been coloured as though discharging. The
-     * AC line knows better.
-     *
-     * The fallback is kept, not replaced. A machine with no ACPI power source
-     * at all -- a desktop, or a VM -- has no such sysctl and the read fails;
-     * there the positive-only inference is still the best answer available, and
-     * it errs toward "on battery", which is the safe direction. */
-    int acline;
-    len = sizeof(acline);
-
-    *external = (sysctlbyname("hw.acpi.acline", &acline, &len, NULL, 0) == 0)
-                    ? (acline != 0)
-                    : inferred;
 }
 
 /* Function purpose: Choose the palette entry the battery block is drawn in.
@@ -565,27 +421,12 @@ static int get_volume(void) {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
- * BACKLIGHT — current brightness level
- * ═══════════════════════════════════════════════════════════════════════════ */
-
-static int get_backlight(void) {
-    FILE *fp = popen(
-        "backlight 2>/dev/null | grep brightness | awk '{print $2}'", "r");
-    if (!fp) return -1;
-    int level = -1;
-    fscanf(fp, "%d", &level);
-    pclose(fp);
-    return level;
-}
-
-/* ═══════════════════════════════════════════════════════════════════════════
  * MAIN
  * ═══════════════════════════════════════════════════════════════════════════ */
 
 int main(int argc, char **argv) {
     struct stats s;
     memset(&s, 0, sizeof(s));
-    memset(last_cp_time, 0, sizeof(last_cp_time));
 
     /* Prime the CPU delta accumulator so the first real reading is valid */
     get_cpu_usage();
