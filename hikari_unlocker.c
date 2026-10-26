@@ -178,15 +178,49 @@ check_password(const char *username)
 
   input_buffer[request.password_len] = '\0';
 
-  int pam_status = pam_authenticate(auth_handle, 0);
+  /* [COMMENT] Action purpose: PAM_DISALLOW_NULL_AUTHTOK refuses to authenticate
+  an account whose stored password is empty. Without it the flag argument is 0
+  and the decision is inherited from the system stack, which on every Linux
+  family checked says the wrong thing for a screen locker: Debian/Ubuntu's
+  common-auth, Fedora's authselect-rendered system-auth and Arch's pambase
+  system-auth all carry `pam_unix.so ... nullok`. nullok is defensible for a
+  console login on a machine with no password set; it is not defensible for
+  unlocking a session that is already running, where it means anyone walking
+  past can dismiss the lock screen by pressing Enter. FreeBSD is affected by
+  this change too, and deliberately so -- the reasoning is not platform
+  specific. */
+  int pam_status = pam_authenticate(auth_handle, PAM_DISALLOW_NULL_AUTHTOK);
 
   // [COMMENT] Action purpose: Zero out sensitive password buffer immediately after authentication attempt.
   explicit_bzero(input_buffer, INPUT_BUFFER_SIZE);
 
-  // [COMMENT] Action purpose: Distinguish fatal PAM errors from retryable
-  // authentication failures. PAM_AUTH_ERR is a normal wrong-password result
-  // that allows retry; all other non-success codes (PAM_ABORT, PAM_MAXTRIES,
-  // PAM_SERVICE_ERR, PAM_SYSTEM_ERR) indicate unrecoverable failures.
+  /* [COMMENT] Action purpose: Distinguish fatal PAM errors from retryable
+  authentication failures. PAM_AUTH_ERR is a normal wrong-password result that
+  allows retry; every other non-success code is treated as unrecoverable and
+  exits.
+
+  Two corrections to the earlier reading of this branch, both established by
+  running a probe against real stacks rather than from the documentation:
+
+  PAM_MAXTRIES does not arrive here. It was previously listed as the lockout
+  code, but pam_faillock(8) documents PAM_AUTH_ERR for "too many failed logins"
+  and that is what a locked tally actually returns -- so a lockout presents as
+  an ordinary wrong password and stays on the retryable path. The consequence
+  is user-visible and is NOT handled here: on a stack with pam_faillock in the
+  auth group (Arch ships one unconditionally; Fedora gates it behind
+  with-faillock), three wrong attempts lock the account, after which the
+  CORRECT password also returns PAM_AUTH_ERR until the timeout expires. PAM
+  explains this through PAM_TEXT_INFO, which conversation_handler above
+  discards, so the lock screen silently refuses a valid password. Relaying
+  those messages requires a message field in struct hikari_unlock_reply and a
+  matching change to the compositor's copy of the wire format.
+
+  PAM_PERM_DENIED (6) is reachable and was absent from this list. It is what a
+  structurally broken policy produces -- an `include` naming a stack that does
+  not exist returns it from pam_authenticate rather than failing at pam_start.
+  It is deliberately left on the fatal path: it signals a configuration fault,
+  not a bad password, and retrying would loop forever against a stack that can
+  never succeed. */
   if (pam_status != PAM_SUCCESS && pam_status != PAM_AUTH_ERR) {
     // [COMMENT] Action purpose: Deny explicitly before exiting, matching the
     // pam_start failure path above. This was the only terminal path in the
