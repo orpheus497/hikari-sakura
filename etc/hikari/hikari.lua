@@ -762,10 +762,26 @@ views = {
 },
 
 marks = {
+  -- This register and the `terminal` action below both spelled their value
+  -- `"$TERMINAL"` in the old configuration language, which expanded `$NAME`
+  -- from the environment while it parsed the file. A Lua string is literal
+  -- and expands nothing, so the lookup is written out: `env.TERMINAL` reads
+  -- the variable, and `or "foot"` supplies a default the old spelling had no
+  -- way to express. The timing is unchanged -- the value is fixed when this
+  -- file loads, so a TERMINAL exported after the compositor started is picked
+  -- up on the next reload (`LS+r`), not before.
+  --
+  -- One edge the fallback does not cover: TERMINAL exported but EMPTY. An
+  -- empty string is true in Lua, so `or` does not fire and the command
+  -- becomes "" -- the keypress then runs nothing. Unset the variable rather
+  -- than blanking it, or write
+  -- `(env.TERMINAL ~= "" and env.TERMINAL) or "foot"` to cover both cases.
   s = env.TERMINAL or "foot",
 },
 
 actions = {
+  -- Was `"$TERMINAL"`; see the note on `marks.s` above for the substitution
+  -- and its one edge case.
   terminal = env.TERMINAL or "foot",
   -- Screenshots. Both need `grim`; the second also needs `slurp`.
   --
