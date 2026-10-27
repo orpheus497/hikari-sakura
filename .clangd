@@ -14,6 +14,40 @@ CompileFlags:
     - "-I/usr/local/include/libpng16"
     - "-I/usr/local/include/glib-2.0"
     - "-I/usr/local/lib/glib-2.0/include"
+    # Lua 5.4 replaced libucl as the configuration language. The build finds
+    # it with pkg-config, which clangd does not run, so the path is spelled
+    # out. It is derived from the port rather than guessed: lang/lua54's
+    # pkg-plist lists the headers as "%%LUA_INCDIR%%/lua.h", and Mk/Uses/lua.mk
+    # defines "LUA_INCDIR=${LUA_BASE}/include/lua${LUA_VER_STR}" with
+    # LUA_BASE=${PREFIX} for the USES=lua:core,54 that lang/lua54 declares, and
+    # LUA_VER_STR=54 -- so ${PREFIX}/include/lua54, which is
+    # /usr/local/include/lua54 at the default prefix.
+    - "-I/usr/local/include/lua54"
+    #
+    # Linux (second-class target). The paths below are where a Debian or
+    # Ubuntu system puts the same headers the FreeBSD paths above name, taken
+    # from the -I flags this tree's own `bmake -n hikari` emits on Linux
+    # rather than from memory. They sit in the same list rather than behind a
+    # condition because clangd has no platform predicate, and because a -I
+    # naming a directory that does not exist is silently ignored by the clang
+    # driver -- verified here: `cc -I/definitely/not/here -Wall -Wextra -c`
+    # compiles with no diagnostic. So each platform sees its own headers and
+    # ignores the other's, and one file serves both.
+    #
+    # The wlroots, pixman, libdrm and top-level /usr/local paths are NOT
+    # repeated: this tree builds wlroots 0.20 from source on Linux, which
+    # installs to /usr/local, so the FreeBSD entries above already name them.
+    - "-I/usr/include/pango-1.0"
+    - "-I/usr/include/cairo"
+    - "-I/usr/include/fribidi"
+    - "-I/usr/include/harfbuzz"
+    - "-I/usr/include/freetype2"
+    - "-I/usr/include/libpng16"
+    - "-I/usr/include/glib-2.0"
+    - "-I/usr/lib/x86_64-linux-gnu/glib-2.0/include"
+    - "-I/usr/include/libmount"
+    - "-I/usr/include/blkid"
+    - "-I/usr/include/lua5.4"
     - "-DWLR_USE_UNSTABLE"
     - "-DHIKARI_ETC_PREFIX=/usr/local"
     - "-DHIKARI_PREFIX=/usr/local"
