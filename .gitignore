@@ -3,7 +3,15 @@
 # back by the `.sinclude` loop at the end of the Makefile -- one per object, so
 # roughly seventy of them appear in the tree root on the first build.
 *.o
-*.d
+# Anchored to the tree root, and that anchor is load-bearing. A pattern with no
+# slash matches at every level AND matches directory names, so a bare `*.d`
+# also matched the `pam.d` DIRECTORY -- silently excluding every new file under
+# etc/pam.d/ from the repository. The FreeBSD policy only survived because it
+# was already tracked; the Linux policies added later were invisible to `git
+# add`, and `make install` would have looked for a file no clone contains.
+# The objects these dependency files accompany are built with bare names in the
+# tree root (see OBJS), so the root anchor matches exactly what it should.
+/*.d
 
 # Linked binaries. Anchored to the root so that only the build outputs match,
 # never a same-named file somewhere under src/ or share/.

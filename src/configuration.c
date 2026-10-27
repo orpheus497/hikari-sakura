@@ -178,26 +178,52 @@ split_is_horizontal(int top, int bottom, int left, int right, int layout)
          right == LUA_TNIL && layout == LUA_TNIL;
 }
 
-static bool
-parse_vertical(lua_State *, int, struct hikari_split **);
+/* Action purpose: The bound on how deeply a layout may nest, counted in C
+stack frames because that is the resource which actually runs out. One level of
+the parse_split/parse_vertical recursion costs 272 bytes of C stack, so the
+8 MiB default stack is gone at roughly 30,000 levels -- and it goes without a
+diagnostic, as a SIGSEGV during startup. The Lua stack reserved per level
+(lua_checkstack below) is a different resource entirely and allows roughly
+142,000 levels, so it can never be the first to fail. A configuration reaches
+these depths easily: a loop nesting tables costs little memory and few VM
+instructions, so neither CONFIG_MEMORY_CAP nor CONFIG_INSTRUCTION_BUDGET stops
+it either. 64 is past any layout that can be rendered -- the shipped default
+nests two deep, and ten levels already divides a 4K axis into sub-pixel panes
+-- so no configuration that works today is refused. */
+#define HIKARI_SPLIT_DEPTH_MAX 64
 
 static bool
-parse_horizontal(lua_State *, int, struct hikari_split **);
+parse_vertical(lua_State *, int, struct hikari_split **, int);
 
 static bool
-parse_split(lua_State *L, int split_idx, struct hikari_split **split)
+parse_horizontal(lua_State *, int, struct hikari_split **, int);
+
+static bool
+parse_split(
+    lua_State *L, int split_idx, struct hikari_split **split, int depth)
 {
   bool success = false;
   struct hikari_split *ret = NULL;
   int entry_top = lua_gettop(L);
   int type = lua_type(L, split_idx);
 
-  /* Action purpose: A layout nests arbitrarily deep, and every level holds the
-  five discriminating lookups below plus an iterator cursor and value while it
-  descends. LUA_MINSTACK is only 20, so the guarantee has to be asked for
-  rather than assumed. */
-  if (!lua_checkstack(L, 8)) {
+  /* Action purpose: The C stack bound -- see HIKARI_SPLIT_DEPTH_MAX. The depth
+  travels as a parameter rather than in a file-scope counter: a parse abandoned
+  part way down never unwinds back through the decrements, which would leave a
+  static non-zero and refuse the next, shallower load. */
+  if (depth > HIKARI_SPLIT_DEPTH_MAX) {
     hikari_config_error(NULL, "layout is nested too deeply");
+    goto done;
+  }
+
+  /* Action purpose: The Lua stack bound, which is a separate resource from the
+  depth above: this level holds the five discriminating lookups below plus the
+  caller's iterator cursor and value while it descends, and LUA_MINSTACK is
+  only 20, so the slots have to be asked for rather than assumed. Reserving
+  slots says nothing about recursion depth, and running out of them is a
+  different failure, so it reads differently. */
+  if (!lua_checkstack(L, 8)) {
+    hikari_config_error(NULL, "cannot reserve Lua stack for a layout element");
     goto done;
   }
 
@@ -228,12 +254,12 @@ parse_split(lua_State *L, int split_idx, struct hikari_split **split)
     int layout = hikari_config_field(L, split_idx, "layout");
 
     if (split_is_vertical(top, bottom, left, right, layout)) {
-      if (!parse_vertical(L, split_idx, &ret)) {
+      if (!parse_vertical(L, split_idx, &ret, depth)) {
         hikari_config_error(NULL, "failed to parse vertical split");
         goto done;
       }
     } else if (split_is_horizontal(top, bottom, left, right, layout)) {
-      if (!parse_horizontal(L, split_idx, &ret)) {
+      if (!parse_horizontal(L, split_idx, &ret, depth)) {
         hikari_config_error(NULL, "failed to parse horizontal split");
         goto done;
       }
@@ -364,7 +390,7 @@ done:
 
 #define PARSE_SPLIT(name, NAME, first, FIRST, second, SECOND)                  \
   static bool parse_##name(                                                    \
-      lua_State *L, int name##_idx, struct hikari_split **name)                \
+      lua_State *L, int name##_idx, struct hikari_split **name, int depth)     \
   {                                                                            \
     bool success = false;                                                      \
     struct hikari_config_iter iter;                                            \
@@ -411,16 +437,13 @@ done:
           goto done;                                                           \
         }                                                                      \
       } else if (!strcmp(key, #first)) {                                       \
-        if (!parse_split(L, iter.vidx, &first)) {                              \
+        if (!parse_split(L, iter.vidx, &first, depth + 1)) {                   \
           hikari_config_error("a layout split",                                \
               "invalid \"" #first "\" for \"" #name "\" split");               \
           goto done;                                                           \
         }                                                                      \
       } else if (!strcmp(key, #second)) {                                      \
-        if (!parse_split(L, iter.vidx, &second)) {                             \
-          if (first != NULL) {                                                 \
-            hikari_split_free(first);                                          \
-          }                                                                    \
+        if (!parse_split(L, iter.vidx, &second, depth + 1)) {                  \
           hikari_config_error("a layout split",                                \
               "invalid \"" #second "\" for \"" #name "\" split");              \
           goto done;                                                           \
@@ -443,7 +466,6 @@ done:
     }                                                                          \
                                                                                \
     if (second == NULL) {                                                      \
-      hikari_split_free(first);                                                \
       hikari_config_error("a layout split",                                    \
           "missing \"" #second "\" for " #name " split");                      \
       goto done;                                                               \
@@ -452,10 +474,34 @@ done:
     ret = hikari_malloc(sizeof(struct hikari_split_##name));                   \
     hikari_split_##name##_init(ret, &scale, orientation, first, second);       \
                                                                                \
+    /* Action purpose: ret has just adopted both subtrees and is the only      \
+    owner from here on. Dropping this frame's pointers is the transfer: it     \
+    is what tells the cleanup below that there is nothing left to free,        \
+    instead of leaving that to be re-derived from success or from ret. */      \
+    first = NULL;                                                              \
+    second = NULL;                                                             \
+                                                                               \
     success = true;                                                            \
                                                                                \
   done:                                                                        \
     hikari_config_iter_fini(&iter, L);                                         \
+                                                                               \
+    /* Action purpose: Anything still held here is owned by this frame --      \
+    the success path above handed both subtrees to ret and NULLed them, so     \
+    this cannot double free. Every other path reaching this label was          \
+    abandoned mid-walk: a bad scale or orientation, an unknown or malformed    \
+    key, a half that failed to parse, a half that was never given. Any of      \
+    them can arrive with the sibling already built, because a Lua table has    \
+    no key order and the second half may well be walked before the first.      \
+    hikari_split_free() recurses over the whole subtree, and it dereferences   \
+    its argument, so NULL is checked here rather than passed. */               \
+    if (first != NULL) {                                                       \
+      hikari_split_free(first);                                                \
+    }                                                                          \
+                                                                               \
+    if (second != NULL) {                                                      \
+      hikari_split_free(second);                                               \
+    }                                                                          \
                                                                                \
     *name = (struct hikari_split *)ret;                                        \
                                                                                \
@@ -967,7 +1013,7 @@ parse_layout(char layout_register,
 {
   struct hikari_split *ret = NULL;
 
-  if (!parse_split(L, layout_idx, &ret)) {
+  if (!parse_split(L, layout_idx, &ret, 0)) {
     hikari_config_error("layouts",
         "failed to parse layout for register \"%c\"",
         layout_register);

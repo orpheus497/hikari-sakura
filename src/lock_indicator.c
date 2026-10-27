@@ -4,6 +4,9 @@
 
 #include <drm_fourcc.h>
 
+#include <cairo/cairo.h>
+#include <pango/pangocairo.h>
+
 #include <wlr/backend.h>
 #include <wlr/interfaces/wlr_buffer.h>
 #include <wlr/render/allocator.h>
@@ -91,6 +94,10 @@ hikari_lock_indicator_init(struct hikari_lock_indicator *lock_indicator)
 
   lock_indicator->current = NULL;
 
+  lock_indicator->message = NULL;
+  lock_indicator->message_width = 0;
+  lock_indicator->message_height = 0;
+
   lock_indicator->reset_state = wl_event_loop_add_timer(
       hikari_server.event_loop, reset_state_handler, lock_indicator);
   if (lock_indicator->reset_state == NULL) {
@@ -115,6 +122,15 @@ hikari_lock_indicator_fini(struct hikari_lock_indicator *lock_indicator)
       wlr_scene_node_destroy(&output->lock_indicator_node->node);
       output->lock_indicator_node = NULL;
     }
+
+    // [COMMENT] Action purpose: The message node goes the same way and for the
+    // same reason -- the lock layer is reused by the next lock rather than
+    // recreated, so a diagnostic left parented to it would reappear on the
+    // next lock screen explaining a refusal from the previous session.
+    if (output->lock_message_node != NULL) {
+      wlr_scene_node_destroy(&output->lock_message_node->node);
+      output->lock_message_node = NULL;
+    }
   }
 
   // [COMMENT] Action purpose: Guard each drop against NULL. init_indicator_circle
@@ -133,6 +149,10 @@ hikari_lock_indicator_fini(struct hikari_lock_indicator *lock_indicator)
   }
   if (lock_indicator->deny != NULL) {
     wlr_buffer_drop(lock_indicator->deny);
+  }
+  if (lock_indicator->message != NULL) {
+    wlr_buffer_drop(lock_indicator->message);
+    lock_indicator->message = NULL;
   }
 
   if (lock_indicator->reset_state != NULL) {
@@ -254,4 +274,248 @@ hikari_lock_indicator_damage(struct hikari_lock_indicator *lock_indicator)
       }
     }
   }
+}
+
+/* [COMMENT] Function purpose: Apply the one layout configuration the
+diagnostic line uses, so the measuring pass and the drawing pass cannot drift
+apart.
+
+[COMMENT] Action purpose: The wrap width and the three-line cap are the bound
+on a buffer whose content comes from a PAM module rather than from hikari.
+Measured with pangocairo on this host: with this configuration, 500 bytes of
+text -- one unbreakable 500-character word, a hundred short words, anything in
+between -- produce exactly 3 lines and a 600x51 pixel layout, and the ellipsis
+says that something was dropped.
+
+The cap holds only because the text cannot contain an explicit line break.
+pango_layout_set_height() with a negative value limits WRAPPED lines and does
+nothing about paragraph breaks: the same measurement gave 251 lines and a
+4267-pixel-tall layout for 250 repetitions of "x\n". sanitize_message() in
+src/lock_mode.c is what guarantees the input has none, and the two belong
+together. */
+static void
+configure_message_layout(PangoLayout *layout, const char *text)
+{
+  const int max_width = 600;
+  const int max_lines = 3;
+
+  pango_layout_set_font_description(
+      layout, hikari_configuration->lock.date_font.desc);
+  pango_layout_set_text(layout, text, -1);
+  pango_layout_set_width(layout, max_width * PANGO_SCALE);
+  pango_layout_set_wrap(layout, PANGO_WRAP_WORD_CHAR);
+  pango_layout_set_ellipsize(layout, PANGO_ELLIPSIZE_END);
+  pango_layout_set_height(layout, -max_lines);
+  pango_layout_set_alignment(layout, PANGO_ALIGN_CENTER);
+}
+
+/* [COMMENT] Function purpose: Render the diagnostic line into a single
+wlr_buffer, laid out the way the indicator circles above are: one buffer at
+logical scale, shared by every output and positioned per output, rather than
+re-rendered per output the way the clock is. A diagnostic line does not warrant
+the per-output scale handling the clock carries.
+
+Returns NULL and writes nothing on any failure, which the caller treats as
+"keep whatever was on screen" rather than as fatal.
+
+[COMMENT] Action purpose: The font and both colours are existing, already
+parsed, already reloadable configuration -- the date face and the clock colour
+from the lock block, and the conflict colour the deny circle is drawn in. No
+new configuration key is introduced for a diagnostic line.
+
+The text is drawn twice, offset black first. That is not decoration: the line
+sits over a blurred photograph of the user's own desktop whose brightness is
+unknown, and the shadow is what guarantees an edge against a pale wallpaper.
+The same reasoning and the same offset as draw_centred() in src/lock_clock.c. */
+static struct wlr_buffer *
+render_message(
+    const char *text, bool is_error, int *out_width, int *out_height)
+{
+  const int margin = 8;
+
+  cairo_surface_t *measure_surface =
+      cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 1, 1);
+  cairo_t *measure_cairo = cairo_create(measure_surface);
+  PangoLayout *measure_layout = pango_cairo_create_layout(measure_cairo);
+
+  configure_message_layout(measure_layout, text);
+  pango_cairo_update_layout(measure_cairo, measure_layout);
+
+  int text_width = 0;
+  int text_height = 0;
+  pango_layout_get_pixel_size(measure_layout, &text_width, &text_height);
+
+  g_object_unref(measure_layout);
+  cairo_destroy(measure_cairo);
+  cairo_surface_destroy(measure_surface);
+
+  if (text_width <= 0 || text_height <= 0) {
+    return NULL;
+  }
+
+  int width = text_width + margin * 2;
+  int height = text_height + margin * 2;
+
+  cairo_surface_t *surface =
+      cairo_image_surface_create(CAIRO_FORMAT_ARGB32, width, height);
+  if (cairo_surface_status(surface) != CAIRO_STATUS_SUCCESS) {
+    cairo_surface_destroy(surface);
+    return NULL;
+  }
+
+  cairo_t *cairo = cairo_create(surface);
+  PangoLayout *layout = pango_cairo_create_layout(cairo);
+
+  configure_message_layout(layout, text);
+  pango_cairo_update_layout(cairo, layout);
+
+  float *color = is_error ? hikari_configuration->indicator_conflict
+                          : hikari_configuration->lock.clock_color;
+
+  cairo_set_source_rgba(cairo, 0, 0, 0, 0.45);
+  cairo_move_to(cairo, margin + 2, margin + 2);
+  pango_cairo_show_layout(cairo, layout);
+
+  cairo_set_source_rgba(cairo, color[0], color[1], color[2], color[3]);
+  cairo_move_to(cairo, margin, margin);
+  pango_cairo_show_layout(cairo, layout);
+
+  cairo_surface_flush(surface);
+
+  unsigned char *data = cairo_image_surface_get_data(surface);
+  int stride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, width);
+
+  struct wlr_buffer *buffer =
+      hikari_buffer_create_argb8888(width, height, data, stride);
+
+  g_object_unref(layout);
+  cairo_destroy(cairo);
+  cairo_surface_destroy(surface);
+
+  if (buffer == NULL) {
+    return NULL;
+  }
+
+  *out_width = width;
+  *out_height = height;
+
+  return buffer;
+}
+
+/* [COMMENT] Function purpose: Point every output's message node at the current
+message buffer and place it, mirroring hikari_lock_indicator_damage() below for
+the circles. */
+static void
+damage_message(struct hikari_lock_indicator *lock_indicator)
+{
+  struct hikari_output *output;
+  wl_list_for_each (output, &hikari_server.outputs, server_outputs) {
+    if (output->lock_message_node == NULL) {
+      output->lock_message_node = wlr_scene_buffer_create(
+          hikari_server.layers.lock, lock_indicator->message);
+    } else {
+      wlr_scene_buffer_set_buffer(
+          output->lock_message_node, lock_indicator->message);
+    }
+
+    // [COMMENT] Action purpose: Guard against NULL from a failed
+    // wlr_scene_buffer_create before positioning or enabling, exactly as the
+    // circle path does. Losing the diagnostic is not a reason to skip the
+    // remaining outputs.
+    if (output->lock_message_node == NULL) {
+      continue;
+    }
+
+    /* [COMMENT] Action purpose: Centred horizontally and placed in the band
+    below the indicator. The indicator is 100px tall and centred on the output
+    (get_geometry() above), and the clock reserves the 40px above it and
+    everything higher (src/lock_clock.c), so the free space on this screen
+    starts 40px below the indicator's lower edge. Coordinates are
+    layout-absolute because the lock layer is parented to the scene root rather
+    than to a per-output tree.
+
+    Clamped to the output afterwards: the band is only free on a screen tall
+    enough to have one, and a short mode would otherwise push a three-line
+    message off the bottom where it cannot be read at all. */
+    int x = output->geometry.x +
+        (output->geometry.width - lock_indicator->message_width) / 2;
+    int y = output->geometry.y + output->geometry.height / 2 + 50 + 40;
+
+    int bottom = output->geometry.y + output->geometry.height;
+    if (y + lock_indicator->message_height > bottom) {
+      y = bottom - lock_indicator->message_height;
+    }
+    if (y < output->geometry.y) {
+      y = output->geometry.y;
+    }
+
+    wlr_scene_node_set_position(&output->lock_message_node->node, x, y);
+    wlr_scene_node_set_enabled(&output->lock_message_node->node, true);
+    wlr_scene_node_raise_to_top(&output->lock_message_node->node);
+  }
+}
+
+void
+hikari_lock_indicator_set_message(
+    struct hikari_lock_indicator *lock_indicator,
+    const char *text,
+    bool is_error)
+{
+  assert(lock_indicator != NULL);
+
+  if (text == NULL || text[0] == '\0') {
+    hikari_lock_indicator_clear_message(lock_indicator);
+    return;
+  }
+
+  int width = 0;
+  int height = 0;
+  struct wlr_buffer *buffer = render_message(text, is_error, &width, &height);
+
+  if (buffer == NULL) {
+    return;
+  }
+
+  /* [COMMENT] Action purpose: Repoint the scene nodes at the new buffer BEFORE
+  dropping the previous one. Each node holds its own reference, so the order is
+  not strictly required for correctness, but doing it this way means there is
+  never a moment at which a node is the last thing referring to a buffer this
+  code has already disowned. */
+  struct wlr_buffer *previous = lock_indicator->message;
+
+  lock_indicator->message = buffer;
+  lock_indicator->message_width = width;
+  lock_indicator->message_height = height;
+
+  damage_message(lock_indicator);
+
+  if (previous != NULL) {
+    wlr_buffer_drop(previous);
+  }
+}
+
+void
+hikari_lock_indicator_clear_message(
+    struct hikari_lock_indicator *lock_indicator)
+{
+  assert(lock_indicator != NULL);
+
+  if (lock_indicator->message == NULL) {
+    return;
+  }
+
+  // [COMMENT] Action purpose: Hide rather than destroy, matching how the
+  // circles are taken down. The nodes are reused by the next message and are
+  // destroyed for good in hikari_lock_indicator_fini().
+  struct hikari_output *output;
+  wl_list_for_each (output, &hikari_server.outputs, server_outputs) {
+    if (output->lock_message_node != NULL) {
+      wlr_scene_node_set_enabled(&output->lock_message_node->node, false);
+    }
+  }
+
+  wlr_buffer_drop(lock_indicator->message);
+  lock_indicator->message = NULL;
+  lock_indicator->message_width = 0;
+  lock_indicator->message_height = 0;
 }

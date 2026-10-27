@@ -30,6 +30,11 @@ struct hikari_output {
   Per-output because each has its own resolution and its own picture. */
   struct wlr_scene_buffer *lock_backdrop_node;
   struct wlr_scene_buffer *lock_clock_node;
+  /* [COMMENT] Class purpose: The relayed PAM diagnostic, drawn below the
+  password indicator. Per-output for the same reason the three nodes above
+  are, and NULL for the whole of an ordinary lock session -- it exists only
+  once a PAM module has something to say about a refusal. */
+  struct wlr_scene_buffer *lock_message_node;
   struct hikari_workspace *workspace;
 
   bool enabled;

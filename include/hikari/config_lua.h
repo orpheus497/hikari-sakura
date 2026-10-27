@@ -14,7 +14,34 @@ configuration outlives it, and it lives until hikari_config_lua_read() returns.
 A const char * handed back by hikari_config_string() points into a Lua string
 that the returned table keeps alive; Lua's collector does not move objects, so
 the pointer stays valid across a collection, but lua_close() frees it. A caller
-that needs the text afterwards copies it, exactly as it already does. */
+that needs the text afterwards copies it, exactly as it already does.
+
+WHAT BOUNDS A CONFIGURATION, AND WHAT DOES NOT. hikari_config_lua_read() runs
+the chunk under two limits: a 64 MiB allocator cap and a 10,000,000 VM
+instruction count hook. Between them they stop the two shapes that occur in
+practice -- `while true do end` is stopped by the hook, and
+`string.rep("x", 1e9)` by the cap, which is what bounds the allocating cases:
+that whole gigabyte is allocated inside one C call, during which the hook
+counts nothing.
+
+Neither bounds a single long-running C call, and that gap is reachable from the
+whitelisted standard library. The hook counts VM instructions, and no VM
+instruction is executed while a C function runs, so the hook cannot interrupt
+one; a C function that does not allocate is invisible to the cap as well. Two
+measured cases: `string.rep("", math.maxinteger)` loops inside one C call past
+25 seconds without the hook firing once and allocates nothing at all, so no cap
+can see it; and Lua's pattern matcher backtracks, so `string.find` over a few
+dozen characters with a dozen `.-` items runs for tens of seconds in one C
+call, with zero instructions counted and a few kilobytes allocated. Either line
+in a configuration file hangs the compositor at startup, before any output is
+lit. Measured, not inferred -- see .devdocs/research/outstanding-plan.md.
+
+This is an accepted limitation, not an oversight. Closing it needs a
+time-based watchdog rather than an instruction count, because a hook cannot
+interrupt a C call either, so it would mean a signal or a thread -- a different
+mechanism with its own hazards. A configuration file is code the user wrote and
+runs as themselves; these limits exist to turn a mistake into a diagnostic, not
+to sandbox a hostile author who already has their own shell. */
 
 #if !defined(HIKARI_CONFIG_LUA_H)
 #define HIKARI_CONFIG_LUA_H

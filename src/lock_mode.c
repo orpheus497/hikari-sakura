@@ -1,6 +1,7 @@
 #include <hikari/lock_mode.h>
 
 #include <assert.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -65,7 +66,21 @@ unlock based on a stale, unrelated result rather than the password the
 user had actually just typed. The `seq` field closes that: every reply is
 checked against the seq of the most recently submitted request, and
 anything else is a stale leftover from an earlier attempt and is
-discarded rather than acted on. */
+discarded rather than acted on.
+
+The reply also carries a bounded diagnostic line, so a refusal PAM can
+explain does not reach the user as a bare "denied". It is a FIXED-SIZE
+field rather than a length-framed trailer, and the whole reply is sized to
+exactly 512 bytes, because a write(2) of PIPE_BUF bytes or fewer is atomic
+on a pipe and PIPE_BUF is 512 on FreeBSD (4096 on Linux). At 512 the reply
+stays one atomic write in the helper and ONE EXACT-SIZE READ here -- which
+matters because that read happens on a blocking descriptor from inside a
+Wayland event-loop callback. A length-framed reply would force this
+callback to accumulate across partial reads, which is a way to hang the
+whole compositor. Truncating a diagnostic is acceptable; desynchronising
+this pipe is not. */
+#define HIKARI_UNLOCK_MESSAGE_MAX 500
+
 struct hikari_unlock_request {
   uint64_t seq;
   uint32_t password_len;
@@ -74,7 +89,39 @@ struct hikari_unlock_request {
 struct hikari_unlock_reply {
   uint64_t seq;
   uint8_t success;
+  uint8_t message_is_error;
+  uint16_t message_len;
+  char message[HIKARI_UNLOCK_MESSAGE_MAX];
 };
+
+/* [COMMENT] Action purpose: Pin the wire layout as literals. The two copies of
+these structs live in separate files on purpose -- hikari-unlocker builds with
+its own minimal rule and must not depend on the tree's headers -- and until now
+nothing but prose kept them in step. A silent divergence is invisible at
+runtime rather than loud: this process would read a wrong `seq`, discard every
+reply as stale, and the lock screen would refuse every password with no
+diagnostic whatsoever. A _Static_assert cannot compare two translation units,
+so each file pins the same numbers independently; change them here and in the
+matching block in hikari_unlocker.c together, or whichever file was not updated
+fails to build, which is the point.
+
+The 512 on the reply is also the FreeBSD PIPE_BUF atomicity bound described
+above, so that number is load-bearing twice over. */
+_Static_assert(sizeof(struct hikari_unlock_request) == 16, "wire format");
+_Static_assert(offsetof(struct hikari_unlock_request, seq) == 0, "wire format");
+_Static_assert(
+    offsetof(struct hikari_unlock_request, password_len) == 8, "wire format");
+
+_Static_assert(sizeof(struct hikari_unlock_reply) == 512, "wire format");
+_Static_assert(offsetof(struct hikari_unlock_reply, seq) == 0, "wire format");
+_Static_assert(
+    offsetof(struct hikari_unlock_reply, success) == 8, "wire format");
+_Static_assert(
+    offsetof(struct hikari_unlock_reply, message_is_error) == 9, "wire format");
+_Static_assert(
+    offsetof(struct hikari_unlock_reply, message_len) == 10, "wire format");
+_Static_assert(
+    offsetof(struct hikari_unlock_reply, message) == 12, "wire format");
 
 // [COMMENT] Action purpose: Resolve the unlock helper through a compile-time
 // absolute path rather than the inherited PATH. hikari-unlocker is installed
@@ -118,6 +165,19 @@ clear_buffer(void)
 {
   cursor = 0;
   explicit_bzero(input_buffer, BUFFER_SIZE);
+
+  /* [COMMENT] Action purpose: Drop any relayed PAM explanation along with the
+  password it belonged to, so the reason the LAST attempt was refused is not
+  still sitting under a fresh one.
+
+  Reached from hikari_lock_mode_init() before any indicator exists, which is
+  why the mode is taken directly rather than through get_mode() -- that asserts
+  lock mode is the current mode -- and why the indicator is NULL-checked. */
+  struct hikari_lock_mode *mode = &hikari_server.lock_mode;
+
+  if (mode->lock_indicator != NULL) {
+    hikari_lock_indicator_clear_message(mode->lock_indicator);
+  }
 }
 
 static void
@@ -371,6 +431,82 @@ reap_locker_deferred(struct hikari_lock_mode *mode)
   }
 }
 
+/* [COMMENT] Function purpose: Copy the helper's diagnostic line into a
+NUL-terminated local buffer, keeping only what is safe to hand to Pango.
+Returns the number of bytes written, or 0 when nothing usable survived.
+
+[COMMENT] Action purpose: Second line of defence, and deliberately NOT
+redundant with the identical filtering hikari-unlocker already performs. That
+helper is setuid root, so its output is a trust boundary: this process must not
+assume the bytes arriving on this pipe are bounded, terminated or well formed
+merely because the code on the other end intends them to be. Four rules follow
+from that.
+
+The length is clamped to the field, because message_len is attacker-influenced
+in exactly the same sense the text is -- it originates with PAM, not with
+hikari.
+
+The terminator is written HERE. The field is fixed-size and is not
+NUL-terminated on the wire; nothing read off this pipe may be passed to a
+string function before this function has terminated it.
+
+EVERY control codepoint is dropped, the newline included. That is what makes
+the renderer's three-line cap a hard bound rather than an intention: measured
+with pangocairo on this host, 500 bytes of text wrap to exactly 3 lines and
+600x51 pixels however they are spaced, while 250 repetitions of "x\n" produce
+251 lines and a 4267-pixel-tall layout, because pango_layout_set_height() caps
+wrapped lines and not explicit paragraph breaks. The helper already joins
+several PAM messages with a visible separator instead of a newline, and this is
+the check that does not depend on it having done so.
+
+Anything that is not valid UTF-8 is rejected outright rather than handed to
+Pango, and truncation happens on a character boundary, because a half-written
+sequence is precisely the malformed UTF-8 that rejection exists to exclude. */
+static size_t
+sanitize_message(
+    const struct hikari_unlock_reply *reply, char *out, size_t out_size)
+{
+  assert(out_size > 0);
+
+  size_t len = reply->message_len;
+
+  if (len > sizeof(reply->message)) {
+    len = sizeof(reply->message);
+  }
+
+  size_t written = 0;
+  size_t offset = 0;
+
+  while (offset < len) {
+    uint32_t codepoint;
+    size_t consumed =
+        utf8_decode(reply->message + offset, len - offset, &codepoint);
+
+    if (consumed == 0) {
+      out[0] = '\0';
+      return 0;
+    }
+
+    offset += consumed;
+
+    if (codepoint < 0x20 || codepoint == 0x7f ||
+        (codepoint >= 0x80 && codepoint <= 0x9f)) {
+      continue;
+    }
+
+    if (written + consumed + 1 > out_size) {
+      break;
+    }
+
+    memcpy(out + written, reply->message + offset - consumed, consumed);
+    written += consumed;
+  }
+
+  out[written] = '\0';
+
+  return written;
+}
+
 // [COMMENT] Function purpose: Handle the authentication result from hikari-unlocker
 // asynchronously via the Wayland event loop. This callback fires when data is
 // available on the locker result pipe, preventing the compositor from blocking
@@ -461,9 +597,39 @@ locker_result_handler(int fd, uint32_t mask, void *data)
     locker_pipe[0][1] = -1;
   }
 
+  /* [COMMENT] Action purpose: Sanitise once, before the verdict is acted on.
+  Only a reply that passed the seq filter above gets this far, so a diagnostic
+  belonging to an attempt the user has already superseded is discarded with the
+  attempt -- which is correct, and must not be "fixed" into showing stale
+  text. */
+  char message[HIKARI_UNLOCK_MESSAGE_MAX + 1];
+  size_t message_length = 0;
+
+  if (got_result && reply.message_len != 0) {
+    message_length = sanitize_message(&reply, message, sizeof(message));
+  }
+
   if (success) {
+    /* [COMMENT] Action purpose: An explanation arriving WITH a successful
+    unlock cannot be drawn: the lock screen is about to disappear. The one
+    case that produces it is pam_acct_mgmt() returning PAM_NEW_AUTHTOK_REQD
+    for an expired password, which the helper deliberately allows through
+    rather than stranding the user outside a running session -- so the warning
+    goes to the session log, which is the only place it can still be read
+    afterwards. */
+    if (message_length != 0) {
+      wlr_log(WLR_ERROR,
+          "lock_mode: unlocked, but PAM reports: %s",
+          message);
+    }
+
     hikari_server_enter_normal_mode(NULL);
   } else {
+    if (message_length != 0) {
+      hikari_lock_indicator_set_message(
+          mode->lock_indicator, message, reply.message_is_error != 0);
+    }
+
     hikari_lock_indicator_set_deny(mode->lock_indicator);
   }
 

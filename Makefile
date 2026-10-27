@@ -48,6 +48,36 @@ ETC_PREFIX ?=
 ETC_PREFIX ?= ${PREFIX}
 .endif
 
+# [COMMENT] Action purpose: The two knobs the Linux PAM policy selection in
+# `install` reads. Linux has no single system-wide authentication stack --
+# Debian, Ubuntu and openSUSE provide common-auth, Fedora, RHEL and Arch
+# provide system-auth -- so the recipe probes the machine rather than guessing
+# the distribution, which is the same principle src/platform.c applies.
+#
+# PAM_CONFDIR is the pam.d of the LIVE target system, deliberately NOT under
+# DESTDIR. DESTDIR is a staging root for package building; it holds no
+# common-auth to find. The probe reads the real system and the policy is still
+# written under DESTDIR.
+#
+# PAM_STACK names the stack outright and skips the probe. It is the documented
+# escape hatch for two cases. First, a distribution we do not recognise, where
+# the admin knows the answer and should not have to patch the build. Second,
+# and this is the one that matters: a CROSS-DISTRO PACKAGE BUILD, where probing
+# the build host is meaningless because the build host is not the target host.
+# A packager building a Fedora RPM on a Debian builder MUST pass
+# PAM_STACK=system-auth; nothing the probe can do will work that out for them.
+# This is a real, named limitation of install-time detection, not a bug in it.
+#
+# Valid values are the suffixes of the etc/pam.d/hikari-unlocker.Linux.* files:
+# common-auth and system-auth. Both `make install PAM_STACK=system-auth` and
+# `PAM_STACK=system-auth make install` work, because bmake imports the
+# environment.
+#
+# Neither variable has any effect on FreeBSD, which keeps its single
+# etc/pam.d/hikari-unlocker.FreeBSD policy selected by OS.
+PAM_CONFDIR ?= /etc/pam.d
+PAM_STACK ?=
+
 OBJS = \
 	action.o \
 	action_config.o \
@@ -317,8 +347,18 @@ LIBINPUT_LIBS != ${PKG_CONFIG} --libs libinput
 # The loop is a `!=` shell assignment rather than a .for over .if ${PKG_CONFIG}
 # because bmake evaluates `!=` once at parse time, so pkg-config runs at most
 # four times for the whole build rather than once per expansion.
+# The constraint is not decoration. --exists alone accepts whatever the module
+# happens to be, and the unversioned `lua` module at the end of this list is a
+# different version on different distributions. Lua 5.5 gave lua_newstate a
+# third seed argument, which src/config_lua.c does not pass, so an unconstrained
+# probe on such a machine selects a module that cannot compile and the build
+# dies on a wrong-argument-count error pointing at a call site that looks
+# correct -- not on the .error below, which exists to say something useful.
+# src/config_lua.c carries a matching #if LUA_VERSION_NUM guard for the case
+# where LUA_CFLAGS is set by hand and never reaches this probe at all.
 LUA_PKG != for m in lua-5.4 lua5.4 lua54 lua; do \
-	if ${PKG_CONFIG} --exists $$m 2>/dev/null; then echo $$m; break; fi; \
+	if ${PKG_CONFIG} --exists "$$m >= 5.4" "$$m < 5.5" 2>/dev/null; then \
+		echo $$m; break; fi; \
 	done
 
 # [COMMENT] Action purpose: Fail at parse time with a sentence a human can act
@@ -572,7 +612,13 @@ install: hikari hikari-unlocker hikari-topbar share/man/man1/hikari.1
 	mkdir -p ${DESTDIR}/${PREFIX}/share/xdg-desktop-portal
 	mkdir -p ${DESTDIR}/${ETC_PREFIX}/etc/hikari
 	mkdir -p ${DESTDIR}/${ETC_PREFIX}/etc/pam.d
-	sed "s,PREFIX,${PREFIX}," etc/hikari/hikari.lua > ${DESTDIR}/${ETC_PREFIX}/etc/hikari/hikari.lua
+	# [COMMENT] Action purpose: the trailing slash in the pattern is what keeps
+	# this from corrupting the file's own documentation. A bare `s,PREFIX,...,`
+	# also rewrites the `$${ETC_PREFIX}` named in the header comment, so the
+	# installed configuration told the reader it lived in `$${ETC_/usr/local}`.
+	# Every live use of the token is a path, so it is always followed by `/`,
+	# while the prose mentions are followed by `}` or a space.
+	sed "s,PREFIX/,${PREFIX}/," etc/hikari/hikari.lua > ${DESTDIR}/${ETC_PREFIX}/etc/hikari/hikari.lua
 	chmod 644 ${DESTDIR}/${ETC_PREFIX}/etc/hikari/hikari.lua
 	install -m ${PERMS} hikari ${DESTDIR}/${PREFIX}/bin
 	install -m 555 start-hikari.sh ${DESTDIR}/${PREFIX}/bin/start-hikari
@@ -613,7 +659,81 @@ install: hikari hikari-unlocker hikari-topbar share/man/man1/hikari.1
 	# Omitting it while the identity stays "Sakura" costs screen sharing and
 	# screenshots, with nothing logged to say why -- the two changes are a pair.
 	install -m 644 share/xdg-desktop-portal/sakura-portals.conf ${DESTDIR}/${PREFIX}/share/xdg-desktop-portal/sakura-portals.conf
+# [COMMENT] Action purpose: FreeBSD installs one policy chosen by OS and is
+# unchanged by this block. Linux cannot: the include target differs by family,
+# so the stack is detected on the target system and the matching template
+# installed. See PAM_CONFDIR and PAM_STACK at the top of this file.
+.if ${OS} == "Linux"
+	@set -u; \
+	pam_confdir="${PAM_CONFDIR}"; \
+	pam_stack="${PAM_STACK}"; \
+	pam_dest="${DESTDIR}/${ETC_PREFIX}/etc/pam.d/hikari-unlocker"; \
+	pam_usable() { \
+		[ -f "$$1" ] && [ -r "$$1" ] && \
+		grep -qE '^[[:space:]]*(-?[Aa][Uu][Tt][Hh][[:space:]]|@include[[:space:]])' "$$1"; \
+	}; \
+	pam_debian_family() { \
+		[ -x /usr/sbin/pam-auth-update ] || [ -d /usr/share/pam-configs ]; \
+	}; \
+	if [ -n "$$pam_stack" ]; then \
+		echo "install: PAM_STACK=$$pam_stack given; not probing $$pam_confdir"; \
+	elif [ ! -d "$$pam_confdir" ]; then \
+		echo "install: $$pam_confdir is not a directory, so this system does not use" >&2; \
+		echo "install: the Linux-PAM pam.d layout. Refusing to guess an unlock policy." >&2; \
+		echo "install: Re-run as  make install PAM_STACK=common-auth  (Debian, Ubuntu," >&2; \
+		echo "install: openSUSE) or  PAM_STACK=system-auth  (Fedora, RHEL, Arch)." >&2; \
+		exit 1; \
+	else \
+		if pam_usable "$$pam_confdir/common-auth"; then pam_common=yes; else pam_common=no; fi; \
+		if pam_usable "$$pam_confdir/system-auth"; then pam_system=yes; else pam_system=no; fi; \
+		if [ "$$pam_common" = yes ] && pam_debian_family; then \
+			pam_stack=common-auth; \
+		elif [ "$$pam_system" = yes ]; then \
+			pam_stack=system-auth; \
+		elif [ "$$pam_common" = yes ]; then \
+			pam_stack=common-auth; \
+		else \
+			echo "install: cannot identify this system's PAM authentication stack." >&2; \
+			echo "install: Looked for a usable $$pam_confdir/common-auth (Debian, Ubuntu," >&2; \
+			echo "install: openSUSE) and $$pam_confdir/system-auth (Fedora, RHEL, Arch)" >&2; \
+			echo "install: and found neither. A file that is empty, comment-only or a" >&2; \
+			echo "install: dangling symlink does not count as usable." >&2; \
+			echo "install:" >&2; \
+			echo "install: NOT installing a PAM policy, and NOT guessing one. A guess" >&2; \
+			echo "install: such as 'auth required pam_unix.so' would replace a working" >&2; \
+			echo "install: SSSD or LDAP stack with a narrower one. Leaving no policy is" >&2; \
+			echo "install: unsafe too: Linux-PAM then falls back to $$pam_confdir/other," >&2; \
+			echo "install: which denies every unlock on Fedora and Arch and silently" >&2; \
+			echo "install: hides this bug on Ubuntu." >&2; \
+			echo "install:" >&2; \
+			echo "install: Name the stack yourself, e.g.:" >&2; \
+			echo "install:     make install PAM_STACK=system-auth" >&2; \
+			echo "install: or hand-write $$pam_confdir/hikari-unlocker." >&2; \
+			exit 1; \
+		fi; \
+		echo "install: detected PAM stack '$$pam_stack' from $$pam_confdir"; \
+	fi; \
+	pam_src="etc/pam.d/hikari-unlocker.Linux.$$pam_stack"; \
+	if [ ! -f "$$pam_src" ]; then \
+		echo "install: no policy template $$pam_src for stack '$$pam_stack'." >&2; \
+		echo "install: PAM_STACK must name one of:" >&2; \
+		for pam_t in etc/pam.d/hikari-unlocker.Linux.*; do \
+			echo "install:     $${pam_t#etc/pam.d/hikari-unlocker.Linux.}" >&2; \
+		done; \
+		echo "install: or hand-write $$pam_confdir/hikari-unlocker." >&2; \
+		exit 1; \
+	fi; \
+	if [ -e "$$pam_dest" ]; then \
+		install -m 644 "$$pam_src" "$$pam_dest.new"; \
+		echo "install: $$pam_dest exists and was NOT replaced."; \
+		echo "install: wrote $$pam_dest.new instead -- merge it by hand if you want it."; \
+	else \
+		install -m 644 "$$pam_src" "$$pam_dest"; \
+		echo "install: wrote $$pam_dest (stack $$pam_stack)"; \
+	fi
+.else
 	install -m 644 etc/pam.d/hikari-unlocker.${OS} ${DESTDIR}/${ETC_PREFIX}/etc/pam.d/hikari-unlocker
+.endif
 
 uninstall:
 	-rm ${DESTDIR}/${PREFIX}/bin/hikari
@@ -648,8 +768,8 @@ install-user: share/backgrounds/hikari/hikari_wallpaper.png etc/hikari/hikari.lu
 		echo "install-user: ${HOME}/.config/hikari/hikari.lua already exists -- leaving it untouched"; \
 	else \
 		tmp=$$(mktemp "${HOME}/.config/hikari/hikari.lua.XXXXXX") && \
-		sed "s,PREFIX,${PREFIX}," etc/hikari/hikari.lua | \
-		  sed "s,/share/backgrounds/hikari,${HOME}/.config/hikari," > "$$tmp" && \
+		sed -e "s,PREFIX/share/backgrounds/hikari,${HOME}/.config/hikari," \
+		    -e "s,PREFIX/,${PREFIX}/," etc/hikari/hikari.lua > "$$tmp" && \
 		chmod 644 "$$tmp" && \
 		mv -f "$$tmp" "${HOME}/.config/hikari/hikari.lua" && \
 		echo "install-user: wrote ${HOME}/.config/hikari/hikari.lua"; \

@@ -53,27 +53,38 @@ $(HIKARI_FIRST): hikari-dispatch
 $(HIKARI_REST): $(HIKARI_FIRST)
 	@:
 
-# Action purpose: MAKEFLAGS is cleared for this one command, and without it
-# `make -j4` does not build this project at all.
+# Action purpose: hand bmake the options it shares with GNU make, and only
+# those. Without this filtering `make -j4` does not build the project at all.
 #
-# The paragraph above says -j is not forwarded. That was wrong, and the bug it
-# caused is worth recording rather than quietly deleting. GNU make does not pass
-# -j as an argument -- it EXPORTS it, along with its jobserver file descriptors,
-# in the MAKEFLAGS environment variable. Running `make -j4` here sets
-# MAKEFLAGS to " -j4 --jobserver-auth=3,4". bmake reads MAKEFLAGS as its own
-# options, understands -j, does not understand --jobserver-auth, and takes the
-# latter as -j's argument. The build then dies before Makefile is even read:
+# GNU make does not pass -j as an argument -- it EXPORTS it, with its jobserver
+# file descriptors, in the MAKEFLAGS environment variable. bmake reads MAKEFLAGS
+# as its own options, understands -j, does not understand --jobserver-auth, and
+# takes the latter as -j's argument. The build dies before Makefile is read:
 #
 #     bmake[1]: illegal argument to -j -- must be positive integer!
 #
-# Reproduced exactly that way, and `make -j4`, `make -j8 PREFIX=/opt` and a
-# plain `make` all verified working once MAKEFLAGS is cleared.
+# Clearing MAKEFLAGS outright fixes that and costs too much: it also discards
+# -e, so `WITH_ALL=NO make -e` would silently build with WITH_ALL=YES, and it
+# throws away -j entirely so every parallel build runs serially. Measured:
+# bmake accepts `-j4`, `e`, `ks` and `n` from MAKEFLAGS unchanged, and goes
+# genuinely parallel on the first, so there is no reason to drop them.
 #
-# Clearing it is the whole fix, and it is per-command rather than a global
-# `unexport`: the goals and the variable overrides are passed to bmake as real
-# arguments on the line below, so nothing is lost by emptying the variable, and
-# a global unexport would also hide MAKEFLAGS from anything else this makefile
-# might later run. Parallelism stays bmake's to schedule across the real
-# dependency graph, which only it can see.
+# What is removed, and why each:
+#   --jobserver-auth=% / --jobserver-fds=%  GNU-only, and the actual cause of
+#     the failure above.
+#   -j   the BARE form, which GNU make uses for "unlimited". bmake requires a
+#     number ("option requires an argument -- j"), and picking one here would
+#     be inventing a policy, so this degrades to serial. `-j4` and friends are
+#     kept and work.
+#   --   and $(MAKEOVERRIDES), the variable assignments, which are already
+#     passed to bmake as real arguments on the line below. Leaving them in
+#     MAKEFLAGS too would send each one twice and hand bmake a bare `--`.
+#
+# Expanded in the recipe, never with `:=`. At parse time MAKEFLAGS does not yet
+# carry the job flags -- measured: parse-time filtering of `make -j4` yields an
+# empty string where the recipe correctly yields `-j4` -- so an immediate
+# assignment here would silently reintroduce the serial build it is meant to
+# prevent.
 hikari-dispatch:
-	@MAKEFLAGS= $(BMAKE) $(MAKEOVERRIDES) $(HIKARI_GOALS)
+	@MAKEFLAGS='$(filter-out --jobserver-auth=% --jobserver-fds=% -j -- $(MAKEOVERRIDES),$(MAKEFLAGS))' \
+		$(BMAKE) $(MAKEOVERRIDES) $(HIKARI_GOALS)

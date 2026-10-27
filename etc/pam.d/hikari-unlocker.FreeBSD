@@ -1,1 +1,26 @@
+# Script function and purpose: OpenPAM policy for the hikari screen-unlock
+# helper on FreeBSD. Resuming a locked session, not starting a new one.
+
 auth include system
+
+# Action purpose: The account group is REQUIRED, not optional, now that
+# hikari-unlocker calls pam_acct_mgmt(). OpenPAM and Linux-PAM both fall back
+# to the "other" policy PER FACILITY when a service declares no modules for
+# one, and FreeBSD's base "other" is pam_deny for all four groups. Leaving
+# this line out therefore does not mean "skip the account check" -- it means
+# every unlock is refused, for every user, forever.
+#
+# Measured in the Linux container (pam_acct_mgmt against a service with an
+# auth group and no account group, with "other" set to the deny-by-default
+# form FreeBSD, Fedora and Arch all ship): PAM_AUTH_ERR, with no explanation
+# from any module. The user's correct password is refused with a bare
+# "Authentication failure" and retrying never helps.
+#
+# `include` rather than a module list, and `system` rather than `login`, both
+# to mirror the auth line above: OpenPAM's include imports only the matching
+# facility, so this takes the system account policy and nothing else. `login`
+# is rejected here for the reason recorded in D-19 -- it carries pam_nologin,
+# which governs STARTING a session, while unlocking RESUMES one, so a
+# /var/run/nologin written during shutdown would lock the user out of the
+# session they are trying to get back into.
+account include system

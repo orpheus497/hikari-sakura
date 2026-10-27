@@ -808,6 +808,25 @@ string.rep("-", 80) uses 80 of a million; a config string long enough to reach
 #define CONFIG_STRING_REP_MAX (1 << 20)
 #define CONFIG_PATTERN_SUBJECT_MAX (1 << 16)
 
+/* Action purpose: the same ceiling for table.move, which is the one function
+outside the string library with the same shape -- a C loop the instruction hook
+cannot enter.
+
+Lua guards the obvious spelling and not the real one. table.move(t, 1,
+math.maxinteger, 2, {}) is refused with "destination wrap around", which makes
+the function look bounded. Moving to destination 1 does not wrap, so
+table.move({}, 1, math.maxinteger, 1, {}) is accepted -- and because the source
+is empty it copies nils, growing nothing, so the memory cap never sees it
+either. Measured: hung past 30 seconds with the hook firing zero times. A
+50-million element move completed in 0.66s with zero hook calls, confirming the
+loop is genuinely uninterruptible rather than merely slow to interrupt.
+
+The rest of the library was checked rather than assumed: table.unpack raises
+"too many results to unpack", table.concat rejects a nil element, and
+string.format rejects an over-wide conversion. move is the only one that needs
+a ceiling. */
+#define CONFIG_TABLE_MOVE_MAX (1 << 20)
+
 /* Function purpose: Delegate to the real string function held as upvalue 1,
 having already checked whatever the caller's guard checked. Shared by both
 wrappers because the delegation is the fiddly half: the original has to be
@@ -860,6 +879,50 @@ config_string_pattern(lua_State *L)
   }
 
   return config_string_delegate(L);
+}
+
+/* Function purpose: table.move with its element count bounded. */
+static int
+config_table_move(lua_State *L)
+{
+  lua_Integer f = luaL_optinteger(L, 2, 0);
+  lua_Integer e = luaL_optinteger(L, 3, 0);
+
+  /* Action purpose: compare as the count, not as e - f, which overflows for
+  the very arguments this exists to refuse. e < f is an empty move and Lua's
+  own job to handle. */
+  if (e >= f && e - f >= (lua_Integer)CONFIG_TABLE_MOVE_MAX) {
+    return luaL_error(L,
+        "table.move of %I elements exceeds the configuration limit of %d",
+        (lua_Integer)(e - f + 1), CONFIG_TABLE_MOVE_MAX);
+  }
+
+  return config_string_delegate(L);
+}
+
+/* Function purpose: Build the guarded replacement for the table library and
+leave it on the stack. Unlike the string library this needs no metatable work:
+Lua installs a shared metatable for strings, which is what makes ("x"):rep()
+reach past a wrapped global, but tables have no default metatable, so replacing
+the sandbox's `table` field is the only route a configuration has. */
+static void
+config_push_guarded_table(lua_State *L)
+{
+  lua_getglobal(L, LUA_TABLIBNAME);
+  lua_newtable(L);
+
+  lua_pushnil(L);
+  while (lua_next(L, -3) != 0) {
+    lua_pushvalue(L, -2);
+    lua_insert(L, -2);
+    lua_settable(L, -4);
+  }
+
+  lua_getfield(L, -2, "move");
+  lua_pushcclosure(L, config_table_move, 1);
+  lua_setfield(L, -2, "move");
+
+  lua_remove(L, -2);
 }
 
 /* Function purpose: Build the guarded replacement for the string library and
@@ -956,6 +1019,9 @@ config_prepare(lua_State *L)
   config_push_guarded_string(). */
   config_push_guarded_string(L);
   lua_setfield(L, -2, LUA_STRLIBNAME);
+
+  config_push_guarded_table(L);
+  lua_setfield(L, -2, LUA_TABLIBNAME);
 
   config_push_env(L);
   lua_setfield(L, -2, "env");

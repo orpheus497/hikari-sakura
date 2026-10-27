@@ -1,0 +1,29 @@
+# Script function and purpose: Linux-PAM policy for the hikari screen-unlock
+# helper on systems whose system-wide authentication stack is common-auth --
+# Debian, Ubuntu and openSUSE. `make install` selects this file by probing the
+# target machine; see the PAM block in the Makefile. Resuming a locked session,
+# not starting a new one.
+
+# Action purpose: `include` rather than `@include`. Both spellings were measured
+# to behave identically here, jump structure included: Debian's common-auth
+# relies on `[success=1 default=ignore]` skipping pam_deny, and that count still
+# lines up across a flat include. They differ only when the target is missing --
+# `@include` aborts at pam_start, `include` denies at pam_authenticate -- and
+# both of those fail closed. `include` is preferred because it is the documented
+# control value; `@include` appears nowhere in pam.conf(5), and the FreeBSD
+# policy beside this one already uses the documented form.
+auth    include common-auth
+
+# Action purpose: The account group is required, not optional, the moment
+# hikari-unlocker calls pam_acct_mgmt(). Linux-PAM falls back to the `other`
+# policy PER FACILITY when a service declares no modules for one, and on a
+# distribution whose `other` is pam_deny for all four groups -- Fedora and Arch
+# both ship exactly that -- omitting this line does not mean "skip the account
+# check", it means every unlock is refused, for every user, forever. The line is
+# inert today because the helper does not yet call pam_acct_mgmt(); it costs
+# nothing, and it means that call will not silently lock anyone out.
+#
+# common-account, not common-auth: on Debian and Ubuntu the account stack is a
+# separate pam-auth-update-managed file, and it is also what this host's own
+# /etc/pam.d/other resolves the account group to.
+account include common-account
