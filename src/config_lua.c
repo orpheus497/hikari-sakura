@@ -888,13 +888,25 @@ config_table_move(lua_State *L)
   lua_Integer f = luaL_optinteger(L, 2, 0);
   lua_Integer e = luaL_optinteger(L, 3, 0);
 
-  /* Action purpose: compare as the count, not as e - f, which overflows for
-  the very arguments this exists to refuse. e < f is an empty move and Lua's
-  own job to handle. */
-  if (e >= f && e - f >= (lua_Integer)CONFIG_TABLE_MOVE_MAX) {
+  /* Action purpose: take the difference in UNSIGNED arithmetic. The previous
+  form computed `e - f` in lua_Integer directly beneath a comment saying it
+  must not, which is exactly the trap the comment described: for f = -2^62 and
+  e = 2^62 the subtraction overflows, and signed overflow is undefined
+  behaviour. It never leaked a hang -- Lua's own luaL_argcheck refuses that
+  range with "too many elements to move" -- but a guard that relies on
+  undefined behaviour is not a guard.
+
+  lua_Unsigned subtraction is defined to wrap, and for e >= f the result is
+  the exact difference, so the comparison is correct for every input the
+  earlier form was wrong for. e < f is an empty move and Lua's own job.
+
+  The message names only the limit. The true count can exceed lua_Integer, so
+  printing it would be the same overflow in the diagnostic. */
+  if (e >= f &&
+      (lua_Unsigned)e - (lua_Unsigned)f >= (lua_Unsigned)CONFIG_TABLE_MOVE_MAX) {
     return luaL_error(L,
-        "table.move of %I elements exceeds the configuration limit of %d",
-        (lua_Integer)(e - f + 1), CONFIG_TABLE_MOVE_MAX);
+        "table.move of more than %d elements exceeds the configuration limit",
+        CONFIG_TABLE_MOVE_MAX);
   }
 
   return config_string_delegate(L);

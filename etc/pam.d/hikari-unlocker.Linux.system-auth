@@ -29,8 +29,9 @@ auth    substack system-auth
 # policy PER FACILITY when a service declares no modules for one, and both
 # Fedora's and Arch's `other` are pam_deny for all four groups, so omitting this
 # line would not skip the account check -- it would refuse every unlock, for
-# every user, forever. The line is inert today because the helper does not yet
-# call pam_acct_mgmt().
+# every user, forever. The line is live rather than defensive: the helper does
+# call pam_acct_mgmt(), after a successful authentication and before it reports
+# success, so this is the stack that decides an expired or locked account.
 #
 # `include` here, not substack, matching Fedora's own login and su, which use
 # substack for auth and include for account.

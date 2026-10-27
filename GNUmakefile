@@ -72,6 +72,12 @@ $(HIKARI_REST): $(HIKARI_FIRST)
 # What is removed, and why each:
 #   --jobserver-auth=% / --jobserver-fds=%  GNU-only, and the actual cause of
 #     the failure above.
+#   -O% / --output-sync%  GNU's output synchronisation, which travels in
+#     MAKEFLAGS alongside -j and which bmake has no equivalent for. Measured:
+#     `make -j4 -Otarget` exports ` -j4 -Otarget --jobserver-auth=...`, and
+#     handing bmake the `-Otarget` that survived the jobserver filter makes it
+#     print its usage and stop -- the same class of failure as the jobserver
+#     flags, one option further along.
 #   -j   the BARE form, which GNU make uses for "unlimited". bmake requires a
 #     number ("option requires an argument -- j"), and picking one here would
 #     be inventing a policy, so this degrades to serial. `-j4` and friends are
@@ -86,5 +92,5 @@ $(HIKARI_REST): $(HIKARI_FIRST)
 # assignment here would silently reintroduce the serial build it is meant to
 # prevent.
 hikari-dispatch:
-	@MAKEFLAGS='$(filter-out --jobserver-auth=% --jobserver-fds=% -j -- $(MAKEOVERRIDES),$(MAKEFLAGS))' \
+	@MAKEFLAGS='$(filter-out --jobserver-auth=% --jobserver-fds=% -O% --output-sync% -j -- $(MAKEOVERRIDES),$(MAKEFLAGS))' \
 		$(BMAKE) $(MAKEOVERRIDES) $(HIKARI_GOALS)

@@ -767,9 +767,12 @@ marks = {
   -- from the environment while it parsed the file. A Lua string is literal
   -- and expands nothing, so the lookup is written out: `env.TERMINAL` reads
   -- the variable, and `or "foot"` supplies a default the old spelling had no
-  -- way to express. The timing is unchanged -- the value is fixed when this
-  -- file loads, so a TERMINAL exported after the compositor started is picked
-  -- up on the next reload (`LS+r`), not before.
+  -- way to express. Set TERMINAL before starting hikari. Exporting it in a
+  -- shell afterwards has no effect, and a reload does not rescue it: `env`
+  -- reads the COMPOSITOR's environment, which was fixed when it was executed
+  -- and which no later shell can reach into. `LS+r` re-reads this file in
+  -- that same process, so it sees the same environment it saw the first time.
+  -- To change it in a running session, edit the value here and reload.
   --
   -- One edge the fallback does not cover: TERMINAL exported but EMPTY. An
   -- empty string is true in Lua, so `or` does not fire and the command
