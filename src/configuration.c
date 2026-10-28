@@ -217,12 +217,29 @@ parse_split(
   }
 
   /* Action purpose: The Lua stack bound, which is a separate resource from the
-  depth above: this level holds the five discriminating lookups below plus the
+  depth above: this level holds the discriminating lookups below plus the
   caller's iterator cursor and value while it descends, and LUA_MINSTACK is
   only 20, so the slots have to be asked for rather than assumed. Reserving
   slots says nothing about recursion depth, and running out of them is a
-  different failure, so it reads differently. */
-  if (!lua_checkstack(L, 8)) {
+  different failure, so it reads differently.
+
+  The figure is 16 rather than a counted minimum, and that is deliberate.
+  A review raised that the worst path might need 9 -- the iterator's key and
+  value, the "scale" field's value, and the "min" and "max" that
+  parse_scale_dynamic holds live at the same time, since it pushes both before
+  its single lua_settop. Counting by hand I get 5 plus whatever
+  parse_scale_value pushes, which is under 8, but I could not pin the exact
+  figure by measurement: instrumenting this function means editing the
+  PARSE_SPLIT macro that generates half of it, and the system liblua is built
+  without LUA_USE_APICHECK, so an overrun would be silent rather than
+  asserted.
+
+  So rather than record a count I have not verified, the reservation carries a
+  margin. lua_checkstack() only ensures capacity -- it is not an allocation
+  per slot, and every nested level re-checks on entry -- so the margin costs
+  nothing and the question stops mattering. If the real figure is 8 this is a
+  no-op; if it is 9 it closes an overrun that the C API calls undefined. */
+  if (!lua_checkstack(L, 16)) {
     hikari_config_error(NULL, "cannot reserve Lua stack for a layout element");
     goto done;
   }
