@@ -1367,7 +1367,7 @@ parse_pointer_config(struct hikari_pointer_config *pointer_config,
             pointer_config, LIBINPUT_CONFIG_ACCEL_PROFILE_ADAPTIVE);
       } else {
         hikari_config_error("an inputs.pointers entry",
-            "unkown \"accel-profile\" \"%s\" for \"%s\"",
+            "unknown \"accel-profile\" \"%s\" for \"%s\"",
             accel_profile,
             pointer_name);
         goto done;
@@ -1387,7 +1387,7 @@ parse_pointer_config(struct hikari_pointer_config *pointer_config,
             pointer_config, LIBINPUT_CONFIG_SCROLL_NO_SCROLL);
       } else {
         hikari_config_error("an inputs.pointers entry",
-            "unkown \"scroll-method\" \"%s\" for \"%s\"",
+            "unknown \"scroll-method\" \"%s\" for \"%s\"",
             scroll_method,
             pointer_name);
         goto done;
@@ -2540,7 +2540,7 @@ read_configuration(lua_State *L, int root, void *ud)
       configuration->output_management_overrides_config = overrides;
     } else if (!!strcmp(key, "actions") && !!strcmp(key, "layouts")) {
       hikari_config_error(
-          "the configuration", "unkown configuration section \"%s\"", key);
+          "the configuration", "unknown configuration section \"%s\"", key);
       goto done;
     }
   }
