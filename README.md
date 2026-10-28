@@ -427,7 +427,7 @@ compositor start rather than on a reload.
 | CPU usage | `kern.cp_time` | `/proc/stat` | always |
 | RAM usage | `hw.physmem`, `vm.stats.vm.*` | `/proc/meminfo` | always |
 | CPU temperature | `dev.cpu.0.temperature`, falling back to `hw.acpi.thermal.tz0.temperature` | `/sys/class/hwmon`, falling back to `/sys/class/thermal` | a sensor is readable |
-| GPU usage, VRAM, temperature | `nvidia-smi` | `nvidia-smi` | an NVIDIA GPU is detected at startup |
+| GPU usage, VRAM, temperature | `nvidia-smi` | `nvidia-smi`, else `/sys/class/drm` for an `amdgpu` card | an NVIDIA GPU answers, or on Linux an AMD one does |
 | `$HOME` partition usage | `statfs(2)` | `statfs(2)` | always |
 | Media / now playing | `playerctl` | `playerctl` | always (shows `Idle` with nothing playing) |
 | Network | `getifaddrs(3)` | `getifaddrs(3)`, plus `/sys/class/net` to tell Wi-Fi from Ethernet | always |
@@ -460,8 +460,14 @@ the block that uses it.
 * `playerctl` — the media block. Without it, the block reads `Idle`.
 * `pactl` (PulseAudio or PipeWire-pulse) — the volume block.
 * `backlight(8)`, part of the FreeBSD base system — the backlight block.
-* `nvidia-smi` — the GPU blocks. Probed once at startup; absent on
-  integrated-only machines, where the GPU blocks never appear.
+* `nvidia-smi` — the GPU blocks on an NVIDIA machine. Probed once at startup.
+  No tool is needed for an AMD card on Linux: the blocks are read from
+  `/sys/class/drm` directly, and NVIDIA takes precedence when both are present,
+  so a machine that was showing its NVIDIA card keeps showing it. Intel is not
+  supported — not an omission, but because utilisation is only exposed through
+  the i915/xe perf PMU, which needs `CAP_PERFMON` on a default kernel, and
+  integrated graphics has no VRAM pool to report. On any machine where no GPU
+  answers, the three GPU blocks simply never appear.
 
 ### Long block text
 

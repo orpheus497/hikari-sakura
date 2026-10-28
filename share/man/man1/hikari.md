@@ -2097,10 +2097,11 @@ exactly one of the pair, so on Linux the same five blocks read *sysfs* and
 | CPU temperature | *dev.cpu.0.temperature*, then *hw.acpi.thermal.tz0.temperature* | */sys/class/hwmon*, then */sys/class/thermal* |
 | Backlight | **backlight**(8) | */sys/class/backlight* |
 | Battery | *hw.acpi.battery.\**, *hw.acpi.acline* | */sys/class/power\_supply* |
+| GPU (AMD) | not available | */sys/class/drm/cardN/device* |
 
 The remaining blocks are platform-neutral and are the same code on both: the
-GPU blocks, the partition, media, network, volume and clock blocks all use the
-interfaces named in the first table. The sentinels, units and ranges of the
+partition, media, network, volume and clock blocks all use the interfaces named
+in the first table, and so do the GPU blocks when an NVIDIA card answers. The sentinels, units and ranges of the
 five split sensors were taken from the FreeBSD implementation one function at a
 time, so a block that is omitted on one platform for want of a reading is
 omitted on the other for the same reason.
@@ -2122,10 +2123,28 @@ block that uses it.
 * A **Nerd Font**, installed and selected through *ui.font*. The blocks are
   labelled with private-use-area glyphs, so without one the bar renders boxes.
 
-* **playerctl** for the media block, **pactl** (PulseAudio or PipeWire-pulse)
-  for the volume block, and **nvidia-smi** for the GPU blocks. The NVIDIA probe
-  runs once at startup; on integrated-only machines the GPU blocks never appear
-  at all.
+* **playerctl** for the media block and **pactl** (PulseAudio or
+  PipeWire-pulse) for the volume block.
+
+* **nvidia-smi** for the GPU blocks on an NVIDIA machine, probed once at
+  startup. An AMD card on Linux needs no tool at all: *gpu\_busy\_percent*,
+  *mem\_info\_vram\_used*, *mem\_info\_vram\_total* and a hwmon temperature are
+  read from */sys/class/drm/cardN/device* directly, and all four must be
+  readable or the blocks are omitted, since a partial GPU reading is worse than
+  none. On a machine with several cards, the lowest-numbered one that answers
+  completely is used -- the card number says nothing about which GPU is
+  discrete, so the rule is chosen for stability rather than for guessing. When
+  an NVIDIA card and an AMD card are both present the NVIDIA reading wins,
+  because the bar has one GPU slot and changing which card an existing machine
+  reports would be a regression for its owner.
+
+  Intel is not supported, and that is a limitation of the interfaces rather
+  than an omission. Neither i915 nor xe exposes a utilisation figure in sysfs;
+  engine busyness is available only through their perf PMUs, which are
+  system-wide and therefore need *CAP\_PERFMON* on a kernel with the default
+  *perf\_event\_paranoid* of 2. Integrated graphics also has no VRAM pool to
+  report. Rather than show a different quantity under the same label, the
+  blocks are omitted, which is what they already do when no GPU answers.
 
 * **backlight**(8) for the backlight block, on FreeBSD only -- it is part of
   the FreeBSD base system, so there is nothing to install. The Linux build
