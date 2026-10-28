@@ -2,13 +2,16 @@
  * @file topbar_sensors_freebsd.c
  * @brief FreeBSD implementations of the hikari-topbar sensor contract.
  *
- * Script function and purpose: Supplies the five sensors declared in
+ * Script function and purpose: Supplies the six sensors declared in
  * include/hikari/topbar_sensors.h for FreeBSD -- CPU usage, CPU temperature,
- * memory usage, battery, and backlight. Each one was moved here verbatim from
- * src/topbar.c when the helper was split by platform (DECISIONS_LOG D-05,
- * .devdocs/research/contract.md); only the `static` keyword was dropped from
- * the five definitions so the shared translation unit can call them. The
- * snapshot get_cpu_usage() needs moved with it and stays private to this file.
+ * memory usage, battery, backlight, and AMD GPU telemetry. The first five were
+ * moved here verbatim from src/topbar.c when the helper was split by platform
+ * (DECISIONS_LOG D-05, .devdocs/research/contract.md); only the `static`
+ * keyword was dropped from the five definitions so the shared translation unit
+ * can call them. The snapshot get_cpu_usage() needs moved with it and stays
+ * private to this file. The sixth, get_amd_gpu_info(), is new and reports
+ * unavailable here -- see the comment above it for why that is the whole
+ * implementation and not a stub awaiting one.
  *
  * Everything that does not touch a FreeBSD kernel interface stayed in
  * src/topbar.c: the JSON escaping, the pywal palette, the swaybar emitter,
@@ -213,4 +216,37 @@ int get_backlight(void) {
     fscanf(fp, "%d", &level);
     pclose(fp);
     return level;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * GPU — AMD telemetry (not available on this platform)
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Function purpose: Report that no AMD GPU reading can be taken, which is the
+ * honest answer on FreeBSD and keeps this platform's bar byte-for-byte what it
+ * was before the sensor existed.
+ *
+ * Action purpose: a real implementation is deliberately NOT attempted. The
+ * Linux half reads gpu_busy_percent, mem_info_vram_used, mem_info_vram_total
+ * and a hwmon tempN_input out of /sys/class/drm/card<n>/device -- a sysfs
+ * tree FreeBSD does not have, and whose contents are documented only as the
+ * Linux amdgpu driver's own interface. FreeBSD's graphics/drm-kmod is a port
+ * of that driver, so an equivalent may well be reachable through sysctl(8) or
+ * a device node, but nothing in this project has verified what or where, and
+ * guessing at a kernel interface is exactly what this file does not do.
+ *
+ * Returning 0 is the whole contract: the header promises the four
+ * out-parameters are left untouched on a 0 return, and src/topbar.c's
+ * probe-once latch then stays clear for the lifetime of the process, so the
+ * GPU blocks are suppressed on an AMD FreeBSD box precisely as they were
+ * before. nvidia-smi is untouched by any of this and remains this platform's
+ * one working GPU source. */
+int get_amd_gpu_info(float *util, long *vram_used, long *vram_total, int *temp)
+{
+    (void)util;
+    (void)vram_used;
+    (void)vram_total;
+    (void)temp;
+
+    return 0;
 }

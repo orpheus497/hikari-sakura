@@ -1,7 +1,7 @@
 /**
  * @file topbar.c
  * @brief hikari top bar telemetry helper — FreeBSD system telemetry with
- *        optional NVIDIA GPU support.
+ *        optional NVIDIA and AMD GPU support.
  *
  * Built as the standalone `hikari-topbar` binary and installed to
  * ${PREFIX}/bin. The compositor spawns it during startup and reads this
@@ -16,9 +16,11 @@
  *
  * Output is display-only; no click events are handled.
  *
- * GPU blocks are shown only when an NVIDIA GPU is detected at startup via
- * nvidia-smi.  On purely integrated-GPU machines the blocks are suppressed
- * entirely — no dead placeholders, no error text.
+ * GPU blocks are shown only when a GPU is detected at startup: NVIDIA first
+ * via nvidia-smi, then — only if nvidia-smi said nothing — AMD via the
+ * platform sensor half's get_amd_gpu_info().  On machines where neither
+ * answers the blocks are suppressed entirely — no dead placeholders, no error
+ * text.
  *
  * Update cadence
  *   200 ms  — battery  (fast-changing, cheap sysctl)
@@ -310,6 +312,27 @@ static void update_nvidia_info(GPUInfo *gpu) {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
+ * GPU — AMD TELEMETRY  (platform sensor half, every ~1 s)
+ *
+ * No popen() and no second binary: on Linux this reads four sysfs attributes
+ * of the card's PCI device directly, which is why it lives behind the
+ * platform contract in include/hikari/topbar_sensors.h rather than beside
+ * update_nvidia_info() above.  nvidia-smi stays here because it is the same
+ * userland program on both platforms; amdgpu's attributes are a kernel
+ * interface and are not.
+ *
+ * The failure contract is update_nvidia_info()'s, deliberately: the sensor
+ * writes the four fields only when one card answered all four, so a partial
+ * reading sets available to 0 and the caller suppresses all three blocks
+ * rather than rendering some of them.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+static void update_amd_info(GPUInfo *gpu) {
+    gpu->available = get_amd_gpu_info(&gpu->util, &gpu->vram_used,
+                                      &gpu->vram_total, &gpu->temp);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
  * MPRIS — current track via playerctl
  * ═══════════════════════════════════════════════════════════════════════════ */
 
@@ -484,14 +507,33 @@ int main(int argc, char **argv) {
     if (argc > 1) read_compositor_colors(argv[1]);
     read_pywal_colors();
 
-    /* ── NVIDIA grace-detection ─────────────────────────────────────────
+    /* ── GPU grace-detection ────────────────────────────────────────────
      * Probe the dedicated GPU slot once.  If nvidia-smi cannot produce a
-     * parseable response the nvidia_present flag stays 0 and every GPU
-     * rendering branch below is skipped for the lifetime of the process.
-     * No GPU blocks will appear on machines without a dedicated NVIDIA GPU.
+     * parseable response the nvidia_present flag stays 0 and every NVIDIA
+     * branch below is skipped for the lifetime of the process.
+     *
+     * Action purpose: NVIDIA is probed FIRST and AMD only when NVIDIA did not
+     * answer, so a machine with an NVIDIA card behaves exactly as it did
+     * before AMD support existed -- same probe, same single nvidia-smi call
+     * per second, same numbers.  On the rare machine carrying both, NVIDIA
+     * therefore wins.  That is the conservative choice rather than a judgement
+     * about which card matters more: the bar has one GPU slot and three
+     * blocks, the NVIDIA reading is the one this program has always shown, and
+     * changing which card an existing machine reports would be a regression
+     * for its owner.  A machine with an AMD card and no NVIDIA driver falls
+     * through to the AMD probe and gains the blocks it never had.
+     *
+     * Both flags are latched here and never recomputed, which is the existing
+     * behaviour: a driver that appears mid-session is not picked up, and a
+     * card that stops answering empties the blocks rather than switching
+     * vendors.  On FreeBSD get_amd_gpu_info() always returns 0, so
+     * amd_present stays 0 and nothing about that platform changes.
      * ─────────────────────────────────────────────────────────────────── */
     update_nvidia_info(&s.gpu);
     const int nvidia_present = s.gpu.available;
+
+    if (!nvidia_present) update_amd_info(&s.gpu);
+    const int amd_present = !nvidia_present && s.gpu.available;
 
     /* swaybar protocol header — display-only, no click events */
     printf("{\"version\":1}\n[\n");
@@ -518,7 +560,8 @@ int main(int argc, char **argv) {
             s.home_usage = get_home_usage();
             get_net_status(s.net_status);
             get_mpris_info(s.mpris, sizeof(s.mpris));
-            if (nvidia_present) update_nvidia_info(&s.gpu);
+            if      (nvidia_present) update_nvidia_info(&s.gpu);
+            else if (amd_present)    update_amd_info(&s.gpu);
         }
 
         time_t     now = time(NULL);
@@ -543,8 +586,12 @@ int main(int argc, char **argv) {
                    s.cpu_temp, pywal_colors[4]);
         }
 
-        /* GPU blocks — emitted only on systems with a detected NVIDIA GPU */
-        if (nvidia_present && s.gpu.available) {
+        /* GPU blocks — emitted only on systems with a detected GPU, and only
+         * while that GPU is still answering.  The vendor is settled at
+         * startup; from here down the three blocks are identical either way,
+         * because GPUInfo carries the same four fields and the same units
+         * whichever sensor filled it. */
+        if ((nvidia_present || amd_present) && s.gpu.available) {
             printf("{\"full_text\":\" 󰢮 %.0f%% \",\"color\":\"%s\"},",
                    s.gpu.util, pywal_colors[1]);
             printf("{\"full_text\":\" %ld/%ld MiB \",\"color\":\"%s\"},",

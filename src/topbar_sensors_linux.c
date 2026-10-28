@@ -2,19 +2,26 @@
  * @file topbar_sensors_linux.c
  * @brief Linux implementations of the hikari-topbar sensor contract.
  *
- * Script function and purpose: Supplies the five sensors declared in
+ * Script function and purpose: Supplies the six sensors declared in
  * include/hikari/topbar_sensors.h for Linux -- CPU usage, CPU temperature,
- * memory usage, battery, and backlight -- by reading /proc and /sys directly.
- * src/topbar_sensors_freebsd.c supplies the same five from sysctl(3); the
- * Makefile links exactly one of the two by ${OS}. A caller in src/topbar.c
- * must not be able to tell which one it got: the sentinels, the units and the
- * ranges below were taken from the FreeBSD file function by function, and the
- * state label set is the closed five-literal set the header pins.
+ * memory usage, battery, backlight, and AMD GPU telemetry -- by reading /proc
+ * and /sys directly. src/topbar_sensors_freebsd.c supplies the same six from
+ * sysctl(3); the Makefile links exactly one of the two by ${OS}. A caller in
+ * src/topbar.c must not be able to tell which one it got: the sentinels, the
+ * units and the ranges below were taken from the FreeBSD file function by
+ * function, and the state label set is the closed five-literal set the header
+ * pins. get_amd_gpu_info() is the one exception in spirit rather than in
+ * form -- FreeBSD has no amdgpu sysfs to read, so its half answers
+ * "unavailable" and the caller sees the same suppressed blocks it saw before
+ * the sensor existed.
  *
  * Nothing that is portable lives here. The JSON escaping, the pywal palette,
  * the swaybar emitter, main(), the network and disk sensors and the
  * pactl / playerctl / nvidia-smi helpers all stay in src/topbar.c, exactly as
- * they do for the FreeBSD build.
+ * they do for the FreeBSD build. nvidia-smi in particular stays there even
+ * though its neighbour on the bar is implemented here: it is the same userland
+ * program on both platforms, which is the rule the header states, while
+ * amdgpu's attributes are a Linux kernel interface.
  *
  * Every read goes through read_sysfile() below: no fork, no shell, no
  * allocation, nothing that can block on a wedged daemon. Any file may be
@@ -69,6 +76,7 @@
 #define HWMON_DIR     "/sys/class/hwmon"
 #define THERMAL_DIR   "/sys/class/thermal"
 #define BACKLIGHT_DIR "/sys/class/backlight"
+#define DRM_DIR       "/sys/class/drm"
 
 /* ═══════════════════════════════════════════════════════════════════════════
  * FILE ACCESS — the only way this file touches the kernel
@@ -1015,4 +1023,366 @@ int get_backlight(void)
         return -1;
 
     return (int)((current * 100) / maximum);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * GPU — AMD telemetry from the amdgpu driver's sysfs attributes
+ *
+ * The one sensor here with no FreeBSD counterpart worth the name. It exists
+ * because src/topbar.c's only GPU source is nvidia-smi, so an AMD machine
+ * shows no GPU blocks at all; everything below is read with the same open and
+ * read this file already uses for /proc and /sys, so it costs no fork, no
+ * shell and no new library -- which is precisely why it belongs here and not
+ * beside the nvidia-smi helper in the shared file.
+ *
+ * Four attributes, all on the card's PCI device, all quoted from the kernel:
+ *
+ *   gpu_busy_percent      "The amdgpu driver provides a sysfs API for reading
+ *                         how busy the GPU is as a percentage. The file
+ *                         gpu_busy_percent is used for this."
+ *                         (drivers/gpu/drm/amd/pm/amdgpu_pm.c, DOC:
+ *                         gpu_busy_percent)
+ *   mem_info_vram_total   "returns the total amount of VRAM in bytes"
+ *   mem_info_vram_used    "returns the total amount of currently used VRAM in
+ *                         bytes"
+ *                         (drivers/gpu/drm/amd/amdgpu/amdgpu_vram_mgr.c)
+ *   hwmon tempN_input     "temp[1-3]_input: the on die GPU temperature in
+ *                         millidegrees Celsius"
+ *                         (drivers/gpu/drm/amd/pm/amdgpu_pm.c, DOC: hwmon)
+ *
+ * BYTES, not MiB: the two VRAM attributes are documented in bytes and the
+ * contract is MiB, so the division happens in amd_read_card() below.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Function purpose: Test whether the driver bound to the device directory
+ * `dir` is `driver`, by reading the DRIVER= line out of its uevent file.
+ *
+ * Action purpose: uevent and not the card number, and uevent rather than the
+ * basename of the `driver` symlink beside it. Both are written by the driver
+ * core from the same string -- drivers/base/core.c adds
+ * add_uevent_var(env, "DRIVER=%s", drv->name) under the comment "Add
+ * "DRIVER=%s" variable if the device is bound to a driver", and
+ * drivers/base/dd.c builds the symlink with sysfs_create_link(&dev->kobj,
+ * &dev->driver->p->kobj, "driver") -- so they agree, and both are absent when
+ * nothing is bound. The uevent file is chosen because it is an ordinary file:
+ * it goes through read_sysfile() like every other read in this translation
+ * unit, where the symlink would need readlink(2) and its own truncation
+ * handling for no extra information. The card index is NOT usable for this:
+ * drm_sysfs_minor_alloc() names minors "card%d" from an allocation counter
+ * with no relation to the driver, so card0 is whichever GPU probed first. */
+static int uevent_driver_is(const char *dir, const char *driver)
+{
+    char path[SYSPATH_MAX];
+    char buf[4096];
+
+    if (!join_path(path, sizeof(path), dir, "uevent"))
+        return 0;
+    if (!read_sysfile(path, buf, sizeof(buf)))
+        return 0;
+
+    size_t dlen = strlen(driver);
+
+    for (char *line = buf; line != NULL; ) {
+        char *nl = strchr(line, '\n');
+
+        /* uevent_show() emits every variable with a trailing newline, so an
+         * unterminated tail is a truncated read and not a line. */
+        if (nl == NULL)
+            break;
+        *nl = '\0';
+
+        /* The whole value must match, not a prefix: "amdgpu" and a
+         * hypothetical "amdgpu_foo" are different drivers. */
+        if (strncmp(line, "DRIVER=", 7) == 0 &&
+            strncmp(line + 7, driver, dlen) == 0 && line[7 + dlen] == '\0')
+            return 1;
+
+        line = nl + 1;
+    }
+
+    return 0;
+}
+
+/* Function purpose: Pick the right temperature channel of one amdgpu hwmon
+ * node and read it as whole degrees Celsius. */
+static int amd_hwmon_channel(const char *dir, int *out)
+{
+    DIR *d = opendir(dir);
+    if (d == NULL)
+        return 0;
+
+    unsigned lowest = 0, edge = 0;
+    int have_lowest = 0, have_edge = 0;
+
+    const struct dirent *e;
+    while ((e = readdir(d)) != NULL) {
+        unsigned n;
+        int      pos = -1;
+
+        /* The same exact-match idiom hwmon_read_cpu_channel() uses: %n is
+         * assigned only once "_input" has matched and does not count toward
+         * the return value, so "temp1_input" is accepted and "temp1_label"
+         * is not. */
+        if (sscanf(e->d_name, "temp%u_input%n", &n, &pos) != 1)
+            continue;
+        if (pos < 0 || e->d_name[pos] != '\0')
+            continue;
+
+        if (!have_lowest || n < lowest) {
+            lowest      = n;
+            have_lowest = 1;
+        }
+
+        /* Action purpose: prefer the channel LABELLED "edge", by label and
+         * not by number. amdgpu's three channels are fixed in the driver --
+         * temp_label[] = {PP_TEMP_EDGE, "edge"}, {PP_TEMP_JUNCTION,
+         * "junction"}, {PP_TEMP_MEM, "mem"} -- and "edge" is the die
+         * temperature that corresponds to what nvidia-smi's
+         * temperature.gpu reports, so the two vendors put the same quantity
+         * in the same block. The number cannot be assumed: the driver's
+         * hwmon_attributes_visible() hides temp1_input entirely on multi-AID
+         * parts, under the comment "hotspot temperature for gc 9,4,3", which
+         * leaves temp2 (junction) as the lowest channel on that hardware.
+         * Falling back to the lowest-numbered channel is therefore a
+         * fallback and not the rule, and the lowest is taken rather than the
+         * first so that readdir() order cannot make the bar alternate
+         * between two sensors. */
+        if (!have_edge || n < edge) {
+            char leaf[32], label[64];
+
+            snprintf(leaf, sizeof(leaf), "temp%u_label", n);
+            if (read_attr(dir, leaf, label, sizeof(label)) &&
+                strcmp(label, "edge") == 0) {
+                edge      = n;
+                have_edge = 1;
+            }
+        }
+    }
+    closedir(d);
+
+    unsigned pick;
+    if (have_edge)
+        pick = edge;
+    else if (have_lowest)
+        pick = lowest;
+    else
+        return 0;
+
+    char leaf[32];
+    snprintf(leaf, sizeof(leaf), "temp%u_input", pick);
+
+    /* Already millidegrees here, exactly as for the CPU sensors: the amdgpu
+     * hwmon doc and the hwmon class ABI give tempY_input the same unit. */
+    return read_millidegrees(dir, leaf, out);
+}
+
+/* Function purpose: Read the die temperature from the hwmon node amdgpu
+ * registers beneath the card's PCI device.
+ *
+ * Action purpose: the node is looked up UNDER the device rather than by
+ * scanning /sys/class/hwmon for name == "amdgpu", which would be ambiguous on
+ * a two-AMD-card machine and would need a second walk to tie a node back to
+ * its card. amdgpu registers it with hwmon_device_register_with_groups(
+ * adev->dev, DRIVER_NAME, ...), i.e. parented to the PCI device, and the
+ * driver core files a class device with a non-class parent inside a glue
+ * directory named after the class -- kobject_add(&dir->kobj, parent_kobj,
+ * "%s", sp->class->name) in drivers/base/core.c, under the comment
+ * "Class-devices with a non class-device as parent, live in a "glue"
+ * directory to prevent namespace collisions". So the node is always at
+ * <device>/hwmon/hwmon<i>, and anything found there belongs to this card by
+ * construction; no name check is needed and none is made. The lowest index
+ * that yields a reading wins, for the determinism reason above. */
+static int amd_hwmon_temp(const char *devdir, int *out)
+{
+    char hwdir[SYSPATH_MAX];
+
+    if (!join_path(hwdir, sizeof(hwdir), devdir, "hwmon"))
+        return 0;
+
+    DIR *d = opendir(hwdir);
+    if (d == NULL)
+        return 0;
+
+    unsigned long best_index = 0;
+    int           best_temp  = 0;
+    int           have_best  = 0;
+
+    const struct dirent *e;
+    while ((e = readdir(d)) != NULL) {
+        unsigned long index;
+        if (!parse_indexed(e->d_name, "hwmon", &index))
+            continue;
+        if (have_best && index >= best_index)
+            continue;
+
+        char dir[SYSPATH_MAX];
+        if (!join_path(dir, sizeof(dir), hwdir, e->d_name))
+            continue;
+
+        int celsius;
+        if (!amd_hwmon_channel(dir, &celsius))
+            continue;
+
+        best_index = index;
+        best_temp  = celsius;
+        have_best  = 1;
+    }
+    closedir(d);
+
+    if (!have_best)
+        return 0;
+
+    *out = best_temp;
+    return 1;
+}
+
+/* Function purpose: Take a complete reading from one amdgpu card, given its
+ * PCI device directory. Writes nothing and returns 0 unless all four values
+ * are present and sane, which is the header's all-or-nothing contract. */
+static int amd_read_card(const char *devdir, float *util, long *vram_used,
+                         long *vram_total, int *temp)
+{
+    long long busy, used, total;
+    int       celsius;
+
+    /* Action purpose: gpu_busy_percent may be missing on a perfectly working
+     * card and that is not an error to report. amdgpu_pm_sysfs_init() returns
+     * before creating any of its attributes when "adev->pm.dpm_enabled == 0",
+     * and every entry in its table is additionally gated on an attribute mask
+     * that is zeroed under multi-VF SRIOV -- so on such a card the file
+     * simply does not exist. The read failing is also how a card whose
+     * firmware cannot answer presents itself: amdgpu_get_gpu_busy_percent()
+     * returns the sensor's error code, read(2) fails, and read_sysfile()
+     * reports the same 0 as an absent file. Both end here, with the GPU
+     * blocks suppressed rather than a fabricated zero shown. */
+    if (!read_attr_ll(devdir, "gpu_busy_percent", &busy))
+        return 0;
+
+    /* Action purpose: the kernel-doc says "a percentage" and pins no range,
+     * so the range is enforced here rather than assumed. A value outside
+     * 0..100 disqualifies the card instead of being clamped, which is the
+     * same judgement get_bat_info() makes about an out-of-range capacity:
+     * a driver reporting nonsense should cost the block, not be dressed up
+     * as a plausible number. */
+    if (busy < 0 || busy > 100)
+        return 0;
+
+    if (!read_attr_ll(devdir, "mem_info_vram_used", &used))
+        return 0;
+    if (!read_attr_ll(devdir, "mem_info_vram_total", &total))
+        return 0;
+
+    /* A zero total would render " 0/0 MiB" and would divide by nothing
+     * meaningful if the block ever became a percentage; a negative byte count
+     * is a driver bug. Either disqualifies the card. */
+    if (used < 0 || total <= 0)
+        return 0;
+
+    if (!amd_hwmon_temp(devdir, &celsius))
+        return 0;
+
+    *util = (float)busy;
+
+    /* Action purpose: bytes to MiB, truncating. Both attributes are
+     * documented in bytes and the caller's field is MiB, so the shift happens
+     * exactly once, here. Truncation matches read_millidegrees() above and
+     * matches nvidia-smi, whose memory.used/memory.total are already whole
+     * MiB. long long throughout: a 192 GiB card overflows a 32-bit byte
+     * count, while the MiB result fits a long on either word size. */
+    *vram_used  = (long)(used  / (1024LL * 1024));
+    *vram_total = (long)(total / (1024LL * 1024));
+    *temp       = celsius;
+
+    return 1;
+}
+
+int get_amd_gpu_info(float *util, long *vram_used, long *vram_total, int *temp)
+{
+    DIR *d = opendir(DRM_DIR);
+    if (d == NULL)
+        return 0;
+
+    unsigned long best_index = 0;
+    int           have_best  = 0;
+    float         b_util     = 0.0f;
+    long          b_used     = 0;
+    long          b_total    = 0;
+    int           b_temp     = 0;
+
+    const struct dirent *e;
+    while ((e = readdir(d)) != NULL) {
+        unsigned long index;
+
+        /* Action purpose: an EXACT "card<n>" match, which is what keeps the
+         * other inhabitants of this directory out. drm_sysfs_connector_add()
+         * registers every connector in the same class with
+         * dev_set_name(kdev, "card%d-%s", dev->primary->index,
+         * connector->name), so /sys/class/drm also holds card0-DP-1 and
+         * friends, and render nodes are named "renderD%d". parse_indexed()
+         * demands end-of-string after the digits, so only the card minors
+         * themselves survive this test. */
+        if (!parse_indexed(e->d_name, "card", &index))
+            continue;
+
+        /* Action purpose: the selection rule, and it is the whole of it --
+         * the LOWEST-numbered card that is an amdgpu AND answers completely.
+         *
+         * A hybrid machine really does expose several cards: each DRM device
+         * gets its own card minor, so an APU plus a discrete GPU is card0 and
+         * card1. Nothing in the DRM ABI says which of them is the discrete
+         * one. boot_vga, VRAM size and the card number itself are all
+         * correlates, not statements, and keying on one would be inventing an
+         * interface -- so this does not try to. Lowest-numbered is chosen
+         * because it is stable: readdir() order is filesystem-dependent and
+         * a bar that switched cards between ticks would flicker between two
+         * utilisation figures.
+         *
+         * "and answers completely" is doing real work, not padding the rule.
+         * The common two-AMD-card machine is an APU plus a dGPU, and the APU
+         * is usually the lower minor while being the one whose
+         * gpu_busy_percent is absent; skipping a card that cannot fill all
+         * four fields lands on the card that can, and still picks the lowest
+         * whenever both answer. It costs nothing when there is one card.
+         * This mirrors thermal_cpu_temp()'s "lowest zone whose temp actually
+         * reads" rather than introducing a new policy. */
+        if (have_best && index >= best_index)
+            continue;
+
+        char carddir[SYSPATH_MAX], devdir[SYSPATH_MAX];
+        if (!join_path(carddir, sizeof(carddir), DRM_DIR, e->d_name))
+            continue;
+        if (!join_path(devdir, sizeof(devdir), carddir, "device"))
+            continue;
+
+        if (!uevent_driver_is(devdir, "amdgpu"))
+            continue;
+
+        float u;
+        long  vu, vt;
+        int   t;
+        if (!amd_read_card(devdir, &u, &vu, &vt, &t))
+            continue;
+
+        best_index = index;
+        have_best  = 1;
+        b_util     = u;
+        b_used     = vu;
+        b_total    = vt;
+        b_temp     = t;
+    }
+    closedir(d);
+
+    /* Nothing is written unless a card answered in full -- the header
+     * promises the caller's GPUInfo is untouched on a 0 return, exactly as
+     * update_nvidia_info() leaves it untouched when nvidia-smi says nothing.
+     * */
+    if (!have_best)
+        return 0;
+
+    *util       = b_util;
+    *vram_used  = b_used;
+    *vram_total = b_total;
+    *temp       = b_temp;
+
+    return 1;
 }

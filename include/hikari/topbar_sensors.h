@@ -66,4 +66,37 @@ arithmetic, while a platform whose interface exposes a raw driver scale must
 convert here rather than in the caller. */
 int get_backlight(void);
 
+/* [COMMENT] Function purpose: AMD GPU telemetry, taken from the amdgpu
+driver's own sysfs attributes. Returns 1 when ONE card answered all four
+questions, in which case all four out-parameters have been written; returns 0
+and leaves every out-parameter UNTOUCHED when no amdgpu card is present or any
+single reading is missing.
+
+  util        core utilisation in percent, 0-100
+  vram_used   used VRAM in MiB
+  vram_total  total VRAM in MiB, always greater than 0 on success
+  temp        die temperature in whole degrees Celsius
+
+The MiB unit is the contract, not the kernel's: amdgpu reports both VRAM
+figures in bytes (drivers/gpu/drm/amd/amdgpu/amdgpu_vram_mgr.c documents
+mem_info_vram_total as "the total amount of VRAM in bytes"), so the
+implementation divides and the caller's field keeps the same unit nvidia-smi's
+--format=csv,nounits already hands it. Converting in the caller would make the
+unit depend on which GPU answered.
+
+The all-or-nothing return is deliberate and is the NVIDIA contract, not a new
+one: update_nvidia_info() in src/topbar.c sets GPUInfo::available to 0 whenever
+its one line does not yield all four values, and the caller then suppresses all
+three GPU blocks rather than rendering a partial set. There is no per-field
+sentinel here because the caller has no per-field suppression to spend one on.
+
+NVIDIA is deliberately NOT behind this function. nvidia-smi is the same program
+on both platforms, so update_nvidia_info() stays shared in src/topbar.c under
+the rule at the top of this file; amdgpu's attributes are a Linux sysfs
+interface and so belong to the platform half. src/topbar_sensors_freebsd.c
+implements this by returning 0 without reading anything -- FreeBSD has no
+/sys/class/drm, and reporting unavailable leaves that platform's bar exactly as
+it was. */
+int get_amd_gpu_info(float *util, long *vram_used, long *vram_total, int *temp);
+
 #endif
