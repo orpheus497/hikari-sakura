@@ -59,6 +59,21 @@ cursor_touch_cancel_handler(struct wl_listener *listener, void *data);
 static void
 cursor_touch_frame_handler(struct wl_listener *listener, void *data);
 
+/* Touchscreen gesture recognition. Defined further down, beside the touchpad
+gesture code it shares its classifiers and binding lookup with, but called
+from the touch handlers above it. */
+static void
+touch_gesture_down(int32_t id, double lx, double ly, uint32_t time_msec);
+
+static void
+touch_gesture_motion(int32_t id, double lx, double ly, uint32_t time_msec);
+
+static void
+touch_gesture_up(int32_t id, uint32_t time_msec);
+
+static void
+touch_gesture_reset(void);
+
 static void
 cursor_swipe_begin_handler(struct wl_listener *listener, void *data);
 
@@ -187,6 +202,28 @@ hikari_cursor_release_primary_touch(
   }
 }
 
+/* [COMMENT] Function purpose: Whether the client owning this surface has
+bound wl_touch, and so is already receiving the real touch sequence.
+
+This is what decides whether a touch point is also delivered as pointer
+input. A client with touch support that is sent both sees one finger twice:
+GTK, Qt, Firefox and Chromium all implement wl_touch and wl_pointer, and a
+single tap arriving as a touch and a click can activate a control twice. A
+client without touch support gets nothing at all from a touchscreen unless
+the pointer is synthesised for it, so for those it still is. */
+static bool
+surface_client_has_touch(struct wlr_surface *surface)
+{
+  if (surface == NULL) {
+    return false;
+  }
+
+  struct wlr_seat_client *seat_client = wlr_seat_client_for_wl_client(
+      hikari_server.seat, wl_resource_get_client(surface->resource));
+
+  return seat_client != NULL && !wl_list_empty(&seat_client->touches);
+}
+
 static void
 cursor_touch_down_handler(struct wl_listener *listener, void *data)
 {
@@ -203,10 +240,15 @@ cursor_touch_down_handler(struct wl_listener *listener, void *data)
       cursor->wlr_cursor, &event->touch->base, event->x, event->y, &lx, &ly);
 
   hikari_server_node_at(lx, ly, &surface, &workspace, &sx, &sy);
+
+  touch_gesture_down(event->touch_id, lx, ly, event->time_msec);
+
   // Action purpose: Only notify a touch-down when the hit test actually
   // found a surface -- there is nothing meaningful to deliver a down event
-  // to otherwise (e.g. a touch that starts on bare wallpaper).
-  if (surface != NULL) {
+  // to otherwise (e.g. a touch that starts on bare wallpaper) -- and only
+  // while the sequence still belongs to the client, rather than to a
+  // compositor gesture that has claimed it.
+  if (surface != NULL && !cursor->touch_gesture.claimed) {
     wlr_seat_touch_notify_down(
         hikari_server.seat, surface, event->time_msec, event->touch_id, sx, sy);
   }
@@ -216,10 +258,16 @@ cursor_touch_down_handler(struct wl_listener *listener, void *data)
   // exactly like a left mouse click, reusing the mode state machine as-is.
   // The client still receives the real wl_touch events sent above.
   // Additional simultaneous fingers stay pure client-forwarded multi-touch.
-  if (!cursor->has_primary_touch) {
+  //
+  // Whether that synthesised button is also forwarded to the client as
+  // wl_pointer input depends on whether the client handles touch itself;
+  // see surface_client_has_touch() above. The compositor-side half runs
+  // either way.
+  if (!cursor->has_primary_touch && !cursor->touch_gesture.claimed) {
     cursor->has_primary_touch = true;
     cursor->primary_touch_id = event->touch_id;
     cursor->primary_touch_device = event->touch;
+    cursor->touch_emulates_pointer = !surface_client_has_touch(surface);
 
     wlr_cursor_warp(cursor->wlr_cursor, &event->touch->base, lx, ly);
 
@@ -240,7 +288,14 @@ cursor_touch_up_handler(struct wl_listener *listener, void *data)
   struct wlr_touch_up_event *event = data;
   struct hikari_cursor *cursor = &hikari_server.cursor;
 
-  wlr_seat_touch_notify_up(hikari_server.seat, event->time_msec, event->touch_id);
+  if (!cursor->touch_gesture.claimed) {
+    wlr_seat_touch_notify_up(
+        hikari_server.seat, event->time_msec, event->touch_id);
+  }
+
+  /* After the gesture bookkeeping, because this is where a hold is
+  recognised and where the sequence is reset once the last finger lifts. */
+  touch_gesture_up(event->touch_id, event->time_msec);
 
   if (cursor->has_primary_touch
       && event->touch_id == cursor->primary_touch_id) {
@@ -264,8 +319,15 @@ cursor_touch_motion_handler(struct wl_listener *listener, void *data)
       cursor->wlr_cursor, &event->touch->base, event->x, event->y, &lx, &ly);
 
   hikari_server_node_at(lx, ly, &surface, &workspace, &sx, &sy);
-  wlr_seat_touch_notify_motion(
-      hikari_server.seat, event->time_msec, event->touch_id, sx, sy);
+
+  /* Before the forwarding below, because this is what may claim the
+  sequence -- and once it has, nothing more of it reaches the client. */
+  touch_gesture_motion(event->touch_id, lx, ly, event->time_msec);
+
+  if (!cursor->touch_gesture.claimed) {
+    wlr_seat_touch_notify_motion(
+        hikari_server.seat, event->time_msec, event->touch_id, sx, sy);
+  }
 
   if (cursor->has_primary_touch
       && event->touch_id == cursor->primary_touch_id) {
@@ -289,6 +351,11 @@ cursor_touch_cancel_handler(struct wl_listener *listener, void *data)
     wlr_seat_touch_notify_cancel(hikari_server.seat, point->client);
   }
 
+  /* The hardware abandoned the sequence, so no gesture was made. Dropping
+  the tracking wholesale is right: a cancel can arrive for any point, and a
+  partial sequence must not go on to be recognised as something. */
+  touch_gesture_reset();
+
   if (cursor->has_primary_touch
       && event->touch_id == cursor->primary_touch_id) {
     release_primary_touch(cursor, event->time_msec);
@@ -298,6 +365,13 @@ cursor_touch_cancel_handler(struct wl_listener *listener, void *data)
 static void
 cursor_touch_frame_handler(struct wl_listener *listener, void *data)
 {
+  /* Nothing of a claimed sequence reaches the client, this frame included:
+  the client was sent wl_touch.cancel and has no pending points left to
+  commit. */
+  if (hikari_server.cursor.touch_gesture.claimed) {
+    return;
+  }
+
   wlr_seat_touch_notify_frame(hikari_server.seat);
 }
 
@@ -327,13 +401,15 @@ find_gesture_binding(enum hikari_gesture_type type,
 static void
 fire_gesture_binding(struct hikari_gesture_binding_config *binding_config)
 {
-  /* Every other live input path (keyboard, pointer button/motion, touch --
-  translated to synthetic pointer events) dispatches through
+  /* Every other live input path (keyboard, pointer button/motion, and the
+  touch point that drives hikari's own bookkeeping) dispatches through
   hikari_server.mode's vtable, which lock_mode overrides to no-ops while
   locked. Gesture recognition never joined that vtable -- it called
   configured actions directly -- so a configured gesture binding fired
   regardless of lock state, the one input modality that could act on an
-  unauthenticated locked screen. */
+  unauthenticated locked screen. This guard is what the touchscreen
+  recogniser above relies on too: it dispatches through here, so a gesture
+  made on a locked screen is refused by the same check. */
   if (hikari_server_in_lock_mode()) {
     return;
   }
@@ -377,6 +453,401 @@ static enum hikari_gesture_direction
 classify_pinch_direction(double scale)
 {
   return scale >= 1.0 ? HIKARI_GESTURE_DIRECTION_OUT : HIKARI_GESTURE_DIRECTION_IN;
+}
+
+/* [COMMENT] Script function and purpose: Touchscreen gesture recognition.
+
+libinput does not do this for us. Its gesture events -- the swipe, pinch and
+hold the handlers below forward -- come from touchpads only: libinput.h states
+under @defgroup event_gesture that "Gesture events are generated when a gesture
+is recognized on a touchpad", and LIBINPUT_DEVICE_CAP_GESTURE is a separate
+capability from LIBINPUT_DEVICE_CAP_TOUCH. A touchscreen therefore produces
+touch points and nothing else, and every gestures{} binding was dead on one.
+What follows recognises the same three gestures from those points, so one
+configuration block covers both kinds of hardware.
+
+The thresholds below are in layout pixels and milliseconds, not the libinput
+units the touchpad path works in, and they are chosen rather than measured --
+there is no touchscreen here to calibrate against. They are deliberately
+generous: a binding that fails to fire is a nuisance, one that fires during an
+ordinary drag is a wrong window moved. */
+
+/* Mean per-finger travel, in layout pixels, before a swipe is recognised. */
+#define HIKARI_TOUCH_SWIPE_MIN_DISTANCE 60.0
+
+/* |scale - 1| before a pinch is recognised, scale being the fingers' mean
+distance from their centroid now over the same at the start. */
+#define HIKARI_TOUCH_PINCH_MIN_SCALE_DELTA 0.2
+
+/* How long the fingers must stay down, and how far they may drift, for the
+sequence to count as a hold. Like the touchpad hold the handlers below
+forward, it is dispatched when the fingers lift rather than as the dwell
+elapses, which keeps the two paths consistent and needs no timer. */
+#define HIKARI_TOUCH_HOLD_MIN_DURATION_MSEC 400
+#define HIKARI_TOUCH_HOLD_MAX_DISTANCE 30.0
+
+static struct hikari_touch_point *
+touch_point_find(struct hikari_touch_gesture_state *state, int32_t id)
+{
+  for (int i = 0; i < HIKARI_TOUCH_GESTURE_MAX_POINTS; i++) {
+    if (state->points[i].active && state->points[i].id == id) {
+      return &state->points[i];
+    }
+  }
+
+  return NULL;
+}
+
+static void
+touch_gesture_reset(void)
+{
+  struct hikari_touch_gesture_state *state =
+      &hikari_server.cursor.touch_gesture;
+
+  for (int i = 0; i < HIKARI_TOUCH_GESTURE_MAX_POINTS; i++) {
+    state->points[i].active = false;
+  }
+
+  state->npoints = 0;
+  state->peak_fingers = 0;
+  state->begin_time_msec = 0;
+  state->claimed = false;
+  state->fired = false;
+  state->start_spread = 0;
+  state->start_spread_valid = false;
+  state->max_distance = 0;
+}
+
+// Function purpose: Mean position of the active points, at either their
+// start positions or their current ones.
+static void
+touch_centroid(struct hikari_touch_gesture_state *state,
+    bool start,
+    double *cx,
+    double *cy)
+{
+  double sx = 0;
+  double sy = 0;
+  int n = 0;
+
+  for (int i = 0; i < HIKARI_TOUCH_GESTURE_MAX_POINTS; i++) {
+    struct hikari_touch_point *point = &state->points[i];
+
+    if (!point->active) {
+      continue;
+    }
+
+    sx += start ? point->start_lx : point->lx;
+    sy += start ? point->start_ly : point->ly;
+    n++;
+  }
+
+  *cx = n > 0 ? sx / n : 0;
+  *cy = n > 0 ? sy / n : 0;
+}
+
+// Function purpose: Mean distance of the active points from their centroid --
+// the scalar a pinch's scale is the ratio of.
+static double
+touch_spread(struct hikari_touch_gesture_state *state, bool start)
+{
+  double cx;
+  double cy;
+  touch_centroid(state, start, &cx, &cy);
+
+  double total = 0;
+  int n = 0;
+
+  for (int i = 0; i < HIKARI_TOUCH_GESTURE_MAX_POINTS; i++) {
+    struct hikari_touch_point *point = &state->points[i];
+
+    if (!point->active) {
+      continue;
+    }
+
+    double px = start ? point->start_lx : point->lx;
+    double py = start ? point->start_ly : point->ly;
+
+    total += hypot(px - cx, py - cy);
+    n++;
+  }
+
+  return n > 0 ? total / n : 0;
+}
+
+// Function purpose: Mean displacement of the active points from their start
+// positions, which is what gives a multi-finger swipe its direction.
+static void
+touch_displacement(
+    struct hikari_touch_gesture_state *state, double *dx, double *dy)
+{
+  double tx = 0;
+  double ty = 0;
+  int n = 0;
+
+  for (int i = 0; i < HIKARI_TOUCH_GESTURE_MAX_POINTS; i++) {
+    struct hikari_touch_point *point = &state->points[i];
+
+    if (!point->active) {
+      continue;
+    }
+
+    tx += point->lx - point->start_lx;
+    ty += point->ly - point->start_ly;
+    n++;
+  }
+
+  *dx = n > 0 ? tx / n : 0;
+  *dy = n > 0 ? ty / n : 0;
+}
+
+/* [COMMENT] Function purpose: Take the sequence away from the clients holding
+it and hand it to the compositor.
+
+wl_touch.cancel is the protocol's own word for this -- it tells a client the
+compositor has taken over the sequence and that it should undo whatever the
+touch had begun -- so a client that was mid-drag when the third finger landed
+is left consistent rather than stranded with a point that stops reporting.
+Each distinct client is told once; several of this sequence's points may
+belong to the same one.
+
+The synthesised button the first finger pressed is released here too.
+Without that the mode state machine would sit waiting for a release that the
+suppressed touch_up can no longer deliver. */
+static void
+touch_gesture_claim(
+    struct hikari_touch_gesture_state *state, uint32_t time_msec)
+{
+  struct wlr_seat *seat = hikari_server.seat;
+  struct wlr_seat_client *seen[HIKARI_TOUCH_GESTURE_MAX_POINTS];
+  int nseen = 0;
+
+  for (int i = 0; i < HIKARI_TOUCH_GESTURE_MAX_POINTS; i++) {
+    if (!state->points[i].active) {
+      continue;
+    }
+
+    struct wlr_touch_point *point =
+        wlr_seat_touch_get_point(seat, state->points[i].id);
+
+    if (point == NULL || point->client == NULL) {
+      continue;
+    }
+
+    bool already = false;
+    for (int j = 0; j < nseen; j++) {
+      if (seen[j] == point->client) {
+        already = true;
+        break;
+      }
+    }
+
+    if (already) {
+      continue;
+    }
+
+    seen[nseen++] = point->client;
+    wlr_seat_touch_notify_cancel(seat, point->client);
+  }
+
+  state->claimed = true;
+
+  if (hikari_server.cursor.has_primary_touch) {
+    release_primary_touch(&hikari_server.cursor, time_msec);
+  }
+}
+
+/* Function purpose: Test the in-progress sequence against the configured
+gesture bindings, claiming and firing the first that matches. Pinch is tested
+before swipe because spreading fingers also displace, so a pinch that went
+unchecked would read as a swipe in whichever direction the hands happened to
+drift. */
+static void
+touch_gesture_evaluate(
+    struct hikari_touch_gesture_state *state, uint32_t time_msec)
+{
+  if (state->claimed || state->fired) {
+    return;
+  }
+
+  /* [COMMENT] Action purpose: Recognise nothing while locked. fire_gesture_
+  binding() already refuses to act on a locked screen, but claiming happens
+  first, so without this a gesture made on the lock screen would take the
+  sequence away from the lock client -- cancelling its touch input -- and
+  then decline to do anything with it. Checked here rather than there so the
+  points are simply left alone and go on reaching the client. */
+  if (hikari_server_in_lock_mode()) {
+    return;
+  }
+
+  /* Only while every finger of the sequence is still down: once one lifts the
+  remaining points no longer describe the gesture that was made. */
+  if (state->peak_fingers < HIKARI_TOUCH_GESTURE_MIN_FINGERS
+      || state->npoints != (int)state->peak_fingers) {
+    return;
+  }
+
+  struct hikari_gesture_binding_config *binding_config;
+
+  if (state->start_spread_valid && state->start_spread > 1.0) {
+    double scale = touch_spread(state, false) / state->start_spread;
+
+    if (fabs(scale - 1.0) >= HIKARI_TOUCH_PINCH_MIN_SCALE_DELTA) {
+      binding_config = find_gesture_binding(HIKARI_GESTURE_PINCH,
+          classify_pinch_direction(scale),
+          state->peak_fingers);
+
+      if (binding_config != NULL) {
+        touch_gesture_claim(state, time_msec);
+        state->fired = true;
+        fire_gesture_binding(binding_config);
+        return;
+      }
+    }
+  }
+
+  double dx;
+  double dy;
+  touch_displacement(state, &dx, &dy);
+
+  double distance = hypot(dx, dy);
+  if (distance > state->max_distance) {
+    state->max_distance = distance;
+  }
+
+  if (distance >= HIKARI_TOUCH_SWIPE_MIN_DISTANCE) {
+    binding_config = find_gesture_binding(HIKARI_GESTURE_SWIPE,
+        classify_swipe_direction(dx, dy),
+        state->peak_fingers);
+
+    if (binding_config != NULL) {
+      touch_gesture_claim(state, time_msec);
+      state->fired = true;
+      fire_gesture_binding(binding_config);
+    }
+  }
+}
+
+/* Function purpose: Decide, as the first finger lifts, whether the sequence
+was a hold. Everything that moves far enough to be a swipe or a pinch has
+already been dispatched as one by the time this runs. */
+static void
+touch_gesture_try_hold(
+    struct hikari_touch_gesture_state *state, uint32_t time_msec)
+{
+  if (hikari_server_in_lock_mode()) {
+    return;
+  }
+
+  if (state->claimed || state->fired
+      || state->peak_fingers < HIKARI_TOUCH_GESTURE_MIN_FINGERS
+      || state->max_distance > HIKARI_TOUCH_HOLD_MAX_DISTANCE
+      || time_msec - state->begin_time_msec
+          < HIKARI_TOUCH_HOLD_MIN_DURATION_MSEC) {
+    return;
+  }
+
+  struct hikari_gesture_binding_config *binding_config = find_gesture_binding(
+      HIKARI_GESTURE_HOLD, HIKARI_GESTURE_DIRECTION_NONE, state->peak_fingers);
+
+  if (binding_config != NULL) {
+    touch_gesture_claim(state, time_msec);
+    state->fired = true;
+    fire_gesture_binding(binding_config);
+  }
+}
+
+static void
+touch_gesture_down(int32_t id, double lx, double ly, uint32_t time_msec)
+{
+  struct hikari_touch_gesture_state *state =
+      &hikari_server.cursor.touch_gesture;
+
+  struct hikari_touch_point *point = NULL;
+  for (int i = 0; i < HIKARI_TOUCH_GESTURE_MAX_POINTS; i++) {
+    if (!state->points[i].active) {
+      point = &state->points[i];
+      break;
+    }
+  }
+
+  /* More fingers than there are slots. The sequence is already past any
+  supported finger count, so tracking stops rather than growing. */
+  if (point == NULL) {
+    return;
+  }
+
+  point->id = id;
+  point->active = true;
+  point->lx = lx;
+  point->ly = ly;
+  point->start_lx = lx;
+  point->start_ly = ly;
+
+  state->npoints++;
+
+  /* [COMMENT] Action purpose: A finger joining the sequence re-bases it.
+  Measuring a three-finger swipe from where the first finger landed would
+  charge it with however far that one travelled while the others were still
+  on their way down, which is a swipe's worth of movement on its own. Both
+  the pinch baseline and the hold clock restart here for the same reason. */
+  if (state->npoints > (int)state->peak_fingers) {
+    state->peak_fingers = state->npoints;
+
+    for (int i = 0; i < HIKARI_TOUCH_GESTURE_MAX_POINTS; i++) {
+      if (state->points[i].active) {
+        state->points[i].start_lx = state->points[i].lx;
+        state->points[i].start_ly = state->points[i].ly;
+      }
+    }
+
+    state->begin_time_msec = time_msec;
+    state->max_distance = 0;
+    state->start_spread = touch_spread(state, true);
+    state->start_spread_valid = state->npoints > 1;
+  }
+}
+
+static void
+touch_gesture_motion(int32_t id, double lx, double ly, uint32_t time_msec)
+{
+  struct hikari_touch_gesture_state *state =
+      &hikari_server.cursor.touch_gesture;
+
+  struct hikari_touch_point *point = touch_point_find(state, id);
+
+  if (point == NULL) {
+    return;
+  }
+
+  point->lx = lx;
+  point->ly = ly;
+
+  touch_gesture_evaluate(state, time_msec);
+}
+
+static void
+touch_gesture_up(int32_t id, uint32_t time_msec)
+{
+  struct hikari_touch_gesture_state *state =
+      &hikari_server.cursor.touch_gesture;
+
+  struct hikari_touch_point *point = touch_point_find(state, id);
+
+  if (point != NULL) {
+    point->active = false;
+    state->npoints--;
+  }
+
+  /* The first lift ends the gesture proper: whatever the remaining fingers do
+  is the tail of a sequence that has already been made. */
+  if (state->npoints == (int)state->peak_fingers - 1) {
+    touch_gesture_try_hold(state, time_msec);
+  }
+
+  if (state->npoints <= 0) {
+    touch_gesture_reset();
+  }
 }
 
 // Function purpose: Start accumulating a new gesture stream (swipe, pinch,
@@ -650,7 +1121,23 @@ hikari_cursor_init(
   cursor->wlr_cursor = wlr_cursor;
 
   cursor->has_primary_touch = false;
+  cursor->touch_emulates_pointer = false;
   cursor->gesture_state.active = false;
+
+  /* Zeroed explicitly rather than left to the caller's allocation: the
+  recogniser reads npoints and peak_fingers before anything has written
+  them if the first event to arrive is a motion or an up. */
+  for (int i = 0; i < HIKARI_TOUCH_GESTURE_MAX_POINTS; i++) {
+    cursor->touch_gesture.points[i].active = false;
+  }
+  cursor->touch_gesture.npoints = 0;
+  cursor->touch_gesture.peak_fingers = 0;
+  cursor->touch_gesture.begin_time_msec = 0;
+  cursor->touch_gesture.claimed = false;
+  cursor->touch_gesture.fired = false;
+  cursor->touch_gesture.start_spread = 0;
+  cursor->touch_gesture.start_spread_valid = false;
+  cursor->touch_gesture.max_distance = 0;
 
   wl_list_init(&cursor->surface_destroy.link);
   hikari_binding_group_init(cursor->bindings);

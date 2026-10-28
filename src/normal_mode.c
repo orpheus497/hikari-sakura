@@ -30,6 +30,26 @@ struct cursor_down_state {
 
 static struct cursor_down_state cursor_down_state;
 
+/* [COMMENT] Function purpose: Whether the client should also be told about
+the button or motion currently being handled.
+
+False only while a touch point is driving this mode for a client that has
+bound wl_touch. That client is already receiving the real touch sequence, and
+a synthesised pointer event on top of it delivers one finger twice. Every
+other caller -- a real pointer, or a touch on a client with no touch support
+-- gets true, so this changes nothing for them.
+
+Only the client half is gated. The compositor's own focus, raise and
+cursor-down bookkeeping around these calls runs regardless, which is what
+keeps touch able to focus and move windows either way. */
+static inline bool
+notify_pointer(void)
+{
+  struct hikari_cursor *cursor = &hikari_server.cursor;
+
+  return !cursor->has_primary_touch || cursor->touch_emulates_pointer;
+}
+
 static bool
 handle_input(struct hikari_binding_group *map, uint32_t code)
 {
@@ -212,7 +232,9 @@ cursor_down_move(uint32_t time)
   double sx = cursor_down_state.sx + moved_x;
   double sy = cursor_down_state.sy + moved_y;
 
-  wlr_seat_pointer_notify_motion(seat, time, sx, sy);
+  if (notify_pointer()) {
+    wlr_seat_pointer_notify_motion(seat, time, sx, sy);
+  }
 }
 
 static void
@@ -255,8 +277,10 @@ if (node != NULL) {
       hikari_node_focus(node);
     }
 
-    wlr_seat_pointer_notify_enter(seat, surface, sx, sy);
-    wlr_seat_pointer_notify_motion(seat, time, sx, sy);
+    if (notify_pointer()) {
+      wlr_seat_pointer_notify_enter(seat, surface, sx, sy);
+      wlr_seat_pointer_notify_motion(seat, time, sx, sy);
+    }
   } else {
     if (hikari_server.workspace != workspace) {
       struct hikari_view *view = hikari_workspace_first_view(workspace);
@@ -301,8 +325,10 @@ start_cursor_down_handling(struct wlr_pointer_button_event *event)
     cursor_down_state.sy = sy;
   }
 
-  wlr_seat_pointer_notify_button(
-      hikari_server.seat, event->time_msec, event->button, event->state);
+  if (notify_pointer()) {
+    wlr_seat_pointer_notify_button(
+        hikari_server.seat, event->time_msec, event->button, event->state);
+  }
 }
 
 static inline void
@@ -310,8 +336,10 @@ stop_cursor_down_handling(struct wlr_pointer_button_event *event)
 {
   hikari_server.normal_mode.mode.cursor_move = cursor_move;
 
-  wlr_seat_pointer_notify_button(
-      hikari_server.seat, event->time_msec, event->button, event->state);
+  if (notify_pointer()) {
+    wlr_seat_pointer_notify_button(
+        hikari_server.seat, event->time_msec, event->button, event->state);
+  }
 
   hikari_server_cursor_focus();
 }
@@ -343,7 +371,7 @@ button_handler(
   } else {
     if (is_cursor_down()) {
       stop_cursor_down_handling(event);
-    } else {
+    } else if (notify_pointer()) {
       wlr_seat_pointer_notify_button(
           hikari_server.seat, event->time_msec, event->button, event->state);
     }

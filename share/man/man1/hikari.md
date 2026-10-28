@@ -1794,18 +1794,40 @@ inputs = {
 
 Gestures
 --------
-Trackpad gestures reported via *wlr\_pointer\_gestures\_v1* can be bound in the
-*gestures* subsection, same as switches. A binding key has the form
-*swipe-\<direction\>-\<fingers\>*, *pinch-\<direction\>-\<fingers\>*, or
-*hold-\<fingers\>*, where *direction* is one of *up*, *down*, *left*, *right*
-for swipe or *in*, *out* for pinch, and *fingers* is the number of touchpoints
-the gesture requires.
+Gestures can be bound in the *gestures* subsection, same as switches. A binding
+key has the form *swipe-\<direction\>-\<fingers\>*,
+*pinch-\<direction\>-\<fingers\>*, or *hold-\<fingers\>*, where *direction* is
+one of *up*, *down*, *left*, *right* for swipe or *in*, *out* for pinch, and
+*fingers* is the number of touchpoints the gesture requires.
 
-A gesture that matches a configured binding triggers that action instead of
-being forwarded to the focused client; any gesture without a matching binding
-is delivered to the client. Update events are buffered until the gesture ends
-(in case it turns out to match a binding); a gesture with more than 128 update
-events has the excess silently dropped from what is delivered to the client.
+One *gestures* block covers both touchpads and touchscreens, but the two are
+recognized in different places, and they do not behave identically.
+
+On a **touchpad**, recognition is libinput's. It reports the finished gesture
+and hikari only matches it against the bindings, so any finger count from 1 to
+5 works. A gesture that matches a binding triggers that action instead of being
+forwarded to the focused client; one without a matching binding is delivered to
+the client via *wlr\_pointer\_gestures\_v1*. Update events are buffered until
+the gesture ends, in case it turns out to match a binding; a gesture with more
+than 128 update events has the excess silently dropped from what is delivered
+to the client.
+
+On a **touchscreen**, recognition is hikari's own, because libinput does not do
+it: its gesture events come from touchpads only. Two differences follow.
+
+First, a touchscreen gesture needs at least **three** fingers. One- and
+two-finger sequences are how a client is driven -- tapping, dragging, selecting
+text, and its own pinch-to-zoom -- so hikari never takes those. A binding with a
+lower finger count is not an error; it simply only ever fires on a touchpad.
+
+Second, a touchscreen gesture is recognized while it is still being made, not
+replayed afterwards. Its touch points reach the client as usual until the
+moment a binding matches, at which point the client is sent *wl\_touch.cancel*
+-- the protocol's own signal that the compositor has taken the sequence over --
+and receives nothing further from it. Only one binding fires per sequence, and
+a sequence that matches nothing is never interrupted.
+
+Gestures are not recognized while the session is locked.
 
 ```
 inputs = {
@@ -1828,6 +1850,20 @@ resize behavior as a left mouse click, so windows can be managed by tapping
 and dragging on a touchscreen without a mouse. Further simultaneous touch
 points are left untouched for the client to interpret (e.g. pinch-to-zoom in
 a PDF viewer).
+
+Whether that first touch point also reaches the client as pointer input
+depends on the client. A client that has bound *wl\_touch* is already
+receiving the real touch sequence and is sent nothing further: synthesizing a
+button for it as well would deliver one finger twice, and a toolkit that
+implements both protocols -- GTK, Qt, Firefox and Chromium all do -- can
+activate a control twice from a single tap. A client that has not bound
+*wl\_touch* would otherwise get nothing at all from a touchscreen, so for that
+one the pointer button is synthesized as before. The choice is made per touch
+sequence, from the client under the finger. hikari's own focus, raise, move and
+resize happen either way.
+
+Three or more fingers may be claimed by a gesture binding; see *Gestures*
+above.
 
 OUTPUTS
 =======

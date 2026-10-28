@@ -644,12 +644,20 @@ inputs = {
     ["Control Method Lid Switch"] = "lock",
   },
 
-  -- Trackpad gesture bindings, dispatched from wlr_pointer_gestures_v1.
+  -- Gesture bindings, for touchpads and touchscreens alike.
   -- Keys are "<swipe|pinch>-<direction>-<fingers>" or "hold-<fingers>";
   -- swipe directions are up/down/left/right, pinch directions are in/out.
   -- A gesture that matches a binding here fires the action instead of
   -- being forwarded to the focused client; unmatched gestures pass
   -- through to clients exactly as wlroots reported them.
+  --
+  -- On a touchpad libinput does the recognising and any count from 1 to 5
+  -- works. On a touchscreen hikari does it, because libinput's gesture
+  -- events come from touchpads only, and there a gesture needs at least
+  -- THREE fingers: one- and two-finger sequences belong to the client, for
+  -- tapping, dragging, selecting text and its own pinch-to-zoom. A binding
+  -- with fewer than three fingers is still valid; it just only ever fires
+  -- on a touchpad. See hikari(1) under "Gestures".
   gestures = {
     ["swipe-left-3"]  = "workspace-cycle-next",
     ["swipe-right-3"] = "workspace-cycle-prev",
