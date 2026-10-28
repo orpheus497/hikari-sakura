@@ -349,9 +349,35 @@ render_message(
   configure_message_layout(measure_layout, text);
   pango_cairo_update_layout(measure_cairo, measure_layout);
 
-  int text_width = 0;
-  int text_height = 0;
-  pango_layout_get_pixel_size(measure_layout, &text_width, &text_height);
+  /* [COMMENT] Action purpose: get_pixel_extents() and not get_pixel_size(),
+  because the latter reports only the logical width and height and discards the
+  logical x. configure_message_layout() above sets a 600 pixel layout width
+  together with PANGO_ALIGN_CENTER, so pango offsets every line by roughly
+  (600 - line_width) / 2 inside that layout. The surface below is sized from the
+  TEXT width, so drawing at the layout origin puts the glyphs that far to the
+  right of a buffer that has no room for them.
+
+  Measured with pangocairo on this host, font "sans 20": "Login incorrect" --
+  the ordinary pam_unix failure string -- measures 190 pixels wide with a
+  logical x of 205, is given a 206 pixel surface, and lands at x=213..403. The
+  buffer handed to hikari_buffer_create_argb8888() below contained zero
+  non-transparent pixels: the user saw a deny circle and no reason for it.
+  "Sorry, try again." kept 5% of its pixels, "Permission denied" 23%.
+
+  Only a line that fills the whole 600 pixel wrap width has a logical x of 0.
+  That is why the 500-byte filler the comment above configure_message_layout()
+  measures renders perfectly while every real diagnostic does not, and it is why
+  this survived the measurement that produced those numbers. The offset is
+  subtracted at both draw sites below, which keeps the lines centred relative to
+  one another -- switching to PANGO_ALIGN_LEFT would also fix the clipping, but
+  it would left-align a multi-line message instead. */
+  PangoRectangle logical;
+  pango_layout_get_pixel_extents(measure_layout, NULL, &logical);
+
+  int text_width = logical.width;
+  int text_height = logical.height;
+  int x_offset = logical.x;
+  int y_offset = logical.y;
 
   g_object_unref(measure_layout);
   cairo_destroy(measure_cairo);
@@ -381,11 +407,11 @@ render_message(
                           : hikari_configuration->lock.clock_color;
 
   cairo_set_source_rgba(cairo, 0, 0, 0, 0.45);
-  cairo_move_to(cairo, margin + 2, margin + 2);
+  cairo_move_to(cairo, margin + 2 - x_offset, margin + 2 - y_offset);
   pango_cairo_show_layout(cairo, layout);
 
   cairo_set_source_rgba(cairo, color[0], color[1], color[2], color[3]);
-  cairo_move_to(cairo, margin, margin);
+  cairo_move_to(cairo, margin - x_offset, margin - y_offset);
   pango_cairo_show_layout(cairo, layout);
 
   cairo_surface_flush(surface);

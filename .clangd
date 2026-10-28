@@ -1,6 +1,28 @@
 CompileFlags:
   Add:
+    # -I. and -Iinclude both, matching `CFLAGS += -Wall -I. -Iinclude` in the
+    # Makefile. -I. is what resolves the generated protocol headers, which sit
+    # at the tree root: without it wlr/types/wlr_layer_shell_v1.h cannot find
+    # wlr-layer-shell-unstable-v1-protocol.h and the whole translation unit
+    # fails to parse.
+    - "-I."
     - "-Iinclude"
+    #
+    # The six feature macros the default build defines. WITH_ALL defaults to
+    # YES, so a real compile gets every one of them; clangd defined none, and
+    # therefore read every optional feature as OFF. That is not a cosmetic
+    # difference: src/xwayland_view.c is wrapped in `#ifdef HAVE_XWAYLAND`
+    # from its first line to its last, so the file simply vanished. Measured
+    # by preprocessing src/action.c with each flag set: 7 non-blank lines with
+    # the flags as they were, 35893 with the build's own. This file argues
+    # elsewhere that clangd must not disagree with the main target; these are
+    # the flags that make that true.
+    - "-DHAVE_XWAYLAND=1"
+    - "-DHAVE_GAMMACONTROL=1"
+    - "-DHAVE_SCREENCOPY=1"
+    - "-DHAVE_FOREIGN_TOPLEVEL_MANAGEMENT=1"
+    - "-DHAVE_LAYERSHELL=1"
+    - "-DHAVE_VIRTUAL_INPUT=1"
     - "-I/usr/local/include/wlroots-0.20"
     - "-I/usr/local/include"
     - "-I/usr/local/include/pixman-1"

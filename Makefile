@@ -465,6 +465,23 @@ FORCE:
 
 main.o: version.h
 
+# [COMMENT] Action purpose: Every object needs the generated protocol headers,
+# not merely the link step. `hikari:` lists ${PROTOCOL_HEADERS} and ${OBJS} as
+# prerequisites of the SAME target, and prerequisites are unordered, so a
+# parallel build schedules wayland-scanner and cc in one batch. Most objects
+# reach wlr-layer-shell-unstable-v1-protocol.h through include/hikari/server.h
+# -> hikari/layer_shell.h -> wlr/types/wlr_layer_shell_v1.h, which resolves it
+# from the `-I.` at the tree root. The .d files do record that edge, but only
+# once a build has already succeeded, and `clean` deletes them again.
+#
+# Measured on a clean checkout: `bmake border.o` fails outright with
+# "wlr-layer-shell-unstable-v1-protocol.h: No such file or directory", which is
+# the whole proof -- nothing but this line states the dependency. The build
+# normally survives only because wayland-scanner happens to finish before the
+# first cc reaches the include. Stating it here fixes `bmake -j` on a clean
+# tree and a direct `bmake <object>.o` alike.
+${OBJS}: ${PROTOCOL_HEADERS}
+
 hikari: version.h ${PROTOCOL_HEADERS} ${OBJS}
 	${CC} ${LDFLAGS} ${CFLAGS} ${INCLUDES} -o ${.TARGET} ${OBJS} ${LIBS}
 
@@ -483,7 +500,17 @@ wlr-layer-shell-unstable-v1-protocol.h:
 # binaries that merely display things could compile the shim in. The header adds
 # nothing on FreeBSD and pulls in no library on Linux, so this does not widen
 # what the rule links; it only lets the declaration be found.
-hikari-unlocker: hikari_unlocker.c
+#
+# [COMMENT] Action purpose: compat.h is a prerequisite for the same reason it is
+# one for the top bar objects below -- this rule uses ${CFLAGS_EXTRA}, not
+# ${CFLAGS}, and -MMD -MP lives only in the latter. The rule therefore emits no
+# .d file and nothing else records that hikari_unlocker.c includes the header.
+# Measured: editing include/hikari/compat.h and re-running the target printed
+# "`hikari-unlocker' is up to date" and left the old binary byte-for-byte in
+# place. That matters more here than anywhere else in the tree, because this is
+# the setuid-root binary and the shim it would be missing is the explicit_bzero
+# it calls on password buffers.
+hikari-unlocker: hikari_unlocker.c include/hikari/compat.h
 	${CC} ${CFLAGS_EXTRA} ${LDFLAGS_EXTRA} -Iinclude -o hikari-unlocker hikari_unlocker.c -lpam
 
 # [COMMENT] Action purpose: Build the top bar telemetry helper as its own
@@ -696,8 +723,22 @@ install: hikari hikari-unlocker hikari-topbar share/man/man1/hikari.1
 	# installed configuration told the reader it lived in `$${ETC_/usr/local}`.
 	# Every live use of the token is a path, so it is always followed by `/`,
 	# while the prose mentions are followed by `}` or a space.
-	sed "s,PREFIX/,${PREFIX}/," etc/hikari/hikari.lua > ${DESTDIR}/${ETC_PREFIX}/etc/hikari/hikari.lua
-	chmod 644 ${DESTDIR}/${ETC_PREFIX}/etc/hikari/hikari.lua
+	# [COMMENT] Action purpose: Never overwrite a configuration the administrator
+	# has already edited. This had been an unconditional truncating redirect, so
+	# a second `make install` -- an upgrade -- silently destroyed every local
+	# keybinding and setting in the project's main configuration file. The PAM
+	# policy further down this same recipe already does exactly this .new dance;
+	# the two config files were being treated in contradictory ways, and this is
+	# the one that holds the user's work.
+	@if [ -e ${DESTDIR}/${ETC_PREFIX}/etc/hikari/hikari.lua ]; then \
+		sed "s,PREFIX/,${PREFIX}/," etc/hikari/hikari.lua > ${DESTDIR}/${ETC_PREFIX}/etc/hikari/hikari.lua.new; \
+		chmod 644 ${DESTDIR}/${ETC_PREFIX}/etc/hikari/hikari.lua.new; \
+		echo "install: ${ETC_PREFIX}/etc/hikari/hikari.lua exists and was NOT replaced."; \
+		echo "install: wrote hikari.lua.new instead -- merge it by hand if you want it."; \
+	else \
+		sed "s,PREFIX/,${PREFIX}/," etc/hikari/hikari.lua > ${DESTDIR}/${ETC_PREFIX}/etc/hikari/hikari.lua; \
+		chmod 644 ${DESTDIR}/${ETC_PREFIX}/etc/hikari/hikari.lua; \
+	fi
 	install -m ${PERMS} hikari ${DESTDIR}/${PREFIX}/bin
 	install -m 555 start-hikari.sh ${DESTDIR}/${PREFIX}/bin/start-hikari
 	install -m 4555 hikari-unlocker ${DESTDIR}/${PREFIX}/bin

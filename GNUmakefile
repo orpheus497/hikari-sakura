@@ -92,5 +92,13 @@ $(HIKARI_REST): $(HIKARI_FIRST)
 # assignment here would silently reintroduce the serial build it is meant to
 # prevent.
 hikari-dispatch:
-	@MAKEFLAGS='$(filter-out --jobserver-auth=% --jobserver-fds=% -O% --output-sync% -j -- $(MAKEOVERRIDES),$(MAKEFLAGS))' \
+# The leading + marks this line recursive. GNU make skips recipe lines under
+# -n, -t and -q unless it can tell they run a sub-make, and it only detects
+# that automatically for $(MAKE); this line invokes $(BMAKE). Without the +,
+# `make -n` printed the dispatch line and stopped, so a dry run showed nothing
+# whatever about the build it was asked to describe -- while on FreeBSD, where
+# make IS bmake, the same command worked. The MAKEFLAGS filter above already
+# preserves n, so bmake receives it and does the dry run itself; this is the
+# only thing that was stopping it from ever being reached.
+	+@MAKEFLAGS='$(filter-out --jobserver-auth=% --jobserver-fds=% -O% --output-sync% -j -- $(MAKEOVERRIDES),$(MAKEFLAGS))' \
 		$(BMAKE) $(MAKEOVERRIDES) $(HIKARI_GOALS)
