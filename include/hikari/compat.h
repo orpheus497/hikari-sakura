@@ -47,7 +47,9 @@ FreeBSD, and makes it self-contained without interposing anything. */
 #include <unistd.h>
 
 /* [COMMENT] Action purpose: Both shims below reach the kernel through
-syscall(2), which syscall(2) itself records as needing _DEFAULT_SOURCE on glibc
+syscall(2) -- the closefrom() shim does; the explicit_bzero() one issues no
+syscall at all and reaches memset through a volatile function pointer -- which
+syscall(2) itself records as needing _DEFAULT_SOURCE on glibc
 since 2.19. Nothing is defined here to arrange that: a feature-test macro set
 in a header this deep is set after the C library's headers have already been
 configured by the translation unit that included it, so it would be ignored

@@ -20,9 +20,10 @@
 
 /* [COMMENT] Action purpose: closefrom() is a base-system call on FreeBSD and
 absent on Linux, where compat.h supplies it. It adds nothing on FreeBSD. Placed
-directly after <unistd.h>, the header that declares closefrom() there, because
-compat.h's Linux definitions must not precede a libc declaration of the same
-name. */
+after <unistd.h> for readability rather than necessity: compat.h's Linux branch
+includes <unistd.h> itself before defining anything, so it is self-contained and
+this include would compile just as well first -- verified. The grouping is libc,
+then the shim that completes libc. */
 #include <hikari/compat.h>
 
 #include <cairo/cairo.h>

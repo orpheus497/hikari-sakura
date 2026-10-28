@@ -474,8 +474,17 @@ xdg-shell-protocol.h:
 wlr-layer-shell-unstable-v1-protocol.h:
 	wayland-scanner server-header protocol/wlr-layer-shell-unstable-v1.xml ${.TARGET}
 
+# [COMMENT] Action purpose: -Iinclude so this rule can reach hikari/compat.h.
+# It could not before, and that was the one binary where it mattered most:
+# hikari_unlocker.c calls explicit_bzero() six times on password buffers, and
+# with no -I at all it could only ever get that symbol from libc. On a C library
+# that does not export it -- which is exactly the case compat.h was written for
+# -- the setuid-root binary handling passwords failed to LINK, while the two
+# binaries that merely display things could compile the shim in. The header adds
+# nothing on FreeBSD and pulls in no library on Linux, so this does not widen
+# what the rule links; it only lets the declaration be found.
 hikari-unlocker: hikari_unlocker.c
-	${CC} ${CFLAGS_EXTRA} ${LDFLAGS_EXTRA} -o hikari-unlocker hikari_unlocker.c -lpam
+	${CC} ${CFLAGS_EXTRA} ${LDFLAGS_EXTRA} -Iinclude -o hikari-unlocker hikari_unlocker.c -lpam
 
 # [COMMENT] Action purpose: Build the top bar telemetry helper as its own
 # binary. It is deliberately NOT linked into the compositor: it samples sensors

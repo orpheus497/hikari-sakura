@@ -2026,6 +2026,25 @@ parse_step(
     return false;
   }
 
+  /* The same bound, and for the same reason, as "border" and "gap" above:
+  hikari_config_int() hands back an int64_t and configuration->step is an int,
+  so without a check the assignment is a silent narrowing conversion. It is
+  silent in the worst way -- the load SUCCEEDS and the compositor runs with a
+  value the user never wrote. Measured before this check existed:
+
+    step = 4294967296   loaded, and became 0            -- movement does nothing
+    step = 2147483648   loaded, and became -2147483648  -- movement inverts
+
+  server.c reads this straight into `const int step` at three call sites and
+  adds it to view geometry, so a negative value moves views the wrong way at
+  maximum magnitude rather than failing. 100000 is not a realistic step; it is
+  chosen to match the neighbouring keys so that one rule covers the three
+  integer dimensions this section parses. */
+  if (step < 0 || step > 100000) {
+    hikari_config_error("ui", "\"step\" must be between 0 and 100000");
+    return false;
+  }
+
   configuration->step = step;
 
   return true;

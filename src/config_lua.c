@@ -9,9 +9,13 @@ given when that slot is not already a string, because it has to materialise a
 buffer the caller can keep. Doing that to the key slot of a lua_next() walk
 makes the next lua_next() call raise "invalid key to 'next'", and doing it to a
 value slot destroys the integer subtype a later test depends on. So:
-lua_tolstring and lua_tostring are called in exactly eight places in this file,
-and every one of them sits directly behind an exact `lua_type(...) ==
-LUA_TSTRING` test. No slot this file touches can therefore ever change type,
+lua_tolstring and lua_tostring are called in exactly nine places in this file
+(lines 144, 186, 274, 406, 518, 589, 718, 743 and 879), and every one of them
+sits directly behind an exact `lua_type(...) == LUA_TSTRING` test. The count is
+part of the invariant, not decoration: it is what lets a reviewer check the
+claim by grepping rather than by trusting this paragraph, so a new call means
+this number changes with it. It was stale once already -- the pattern-length
+guard added a ninth and left the text saying eight. No slot this file touches can therefore ever change type,
 whatever index a caller hands in, and the hazard is structurally absent rather
 than merely avoided. Any new call that is not behind that test is a defect.
 

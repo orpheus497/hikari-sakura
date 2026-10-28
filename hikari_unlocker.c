@@ -13,6 +13,20 @@
 #include <unistd.h>
 #include <errno.h>
 
+/* [COMMENT] Action purpose: explicit_bzero() for a C library that does not
+have one. This file scrubs password buffers in six places and, before this
+include, could only ever get that symbol from libc -- its rule passed no -I at
+all, so the shim written for exactly this case was unreachable from the one
+binary where a failed scrub matters most. On FreeBSD the header expands to
+<strings.h> and <unistd.h> and nothing else, so the preprocessed output of a
+FreeBSD build is unchanged and this costs that platform nothing.
+
+This does NOT undo the independence the wire-format comment below describes.
+That independence is about the two IPC structs, which are duplicated on purpose
+so each end pins its own layout with _Static_assert; compat.h declares no type,
+allocates nothing, and links no library. */
+#include <hikari/compat.h>
+
 /* Wire format for the password-submission pipe from hikari (lock_mode.c).
 Must be kept byte-for-byte identical to the copy of these two structs
 there -- there is deliberately no shared header, so this binary's build

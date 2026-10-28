@@ -14,11 +14,13 @@ these definitions (configuration.c, cursor.c, binding_config.c and
 pointer_config.c), and a guarded include copied into each of them would be four
 places to keep in agreement and four places for the explanation to rot.
 
-Deliberately NOT folded into hikari/compat.h. That header is reached by
-hikari-topbar and hikari-unlocker, which are built from the TOPBAR_CFLAGS
-snapshot and their own rule precisely so they link nothing but libc; pulling
-the input layer into them would undo that for no reason, since neither reads
-input codes. */
+Deliberately NOT folded into hikari/compat.h, because the two headers serve
+different sets of binaries. compat.h is reached by the compositor and, since
+its rule gained -Iinclude, by hikari-unlocker, which needs explicit_bzero();
+hikari-topbar reaches neither header and is built from the TOPBAR_CFLAGS
+snapshot precisely so it links nothing but libc. Folding the input layer into
+compat.h would push evdev's definitions into hikari-unlocker, which reads no
+input codes and has no business seeing them. */
 
 #if !defined(HIKARI_EVDEV_H)
 #define HIKARI_EVDEV_H

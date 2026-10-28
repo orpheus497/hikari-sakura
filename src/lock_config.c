@@ -9,10 +9,11 @@
 #include <string.h>
 
 // [COMMENT] Action purpose: sysctlbyname(3) is the FreeBSD interface for
-// reading hw.acpi.acline. The guard exists so clangd-based IDE analysis on
-// Linux still resolves the rest of the file, mirroring the guard src/lock_mode.c
-// applies to explicit_bzero. Without a way to ask, the AC timeout is used --
-// see hikari_lock_config_blank_timeout().
+// reading hw.acpi.acline. This is a real platform split and not an editor
+// convenience -- the Linux branch below answers the same question from
+// /sys/class/power_supply -- so each system compiles its own half and a machine
+// that can answer neither falls through to the AC timeout; see
+// hikari_lock_config_blank_timeout().
 #if defined(__FreeBSD__)
 #include <sys/sysctl.h>
 #include <sys/types.h>

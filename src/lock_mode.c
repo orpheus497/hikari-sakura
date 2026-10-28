@@ -18,9 +18,12 @@
 // declaration promises a function which is not there, and the build fails at
 // link rather than at compile, with no hint of which header lied.
 //
-// Position is load-bearing. <string.h>, <strings.h> and <unistd.h> above are
-// the headers that declare these two names, and compat.h must come after all
-// of them so its Linux definitions never collide with a libc declaration.
+// Position is not load-bearing, despite where it sits. compat.h's Linux branch
+// includes <string.h> and <unistd.h> itself before it defines either name, so
+// the header is self-contained and this include compiles first, last or in the
+// middle -- verified by compiling a translation unit that includes it ahead of
+// every libc header. It is kept here only so the grouping reads in the order a
+// reader expects: libc, then the shim that completes libc, then wlroots.
 #include <hikari/compat.h>
 
 #include <wlr/types/wlr_seat.h>

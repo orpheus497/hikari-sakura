@@ -19,10 +19,11 @@
 
 // [COMMENT] Action purpose: statfs(2) reports the filesystem type by name on
 // FreeBSD (struct statfs.f_fstypename). Linux's struct statfs carries only a
-// numeric f_type and lives in a different header; this file is only ever built
-// on FreeBSD, so the guard exists so clangd-based IDE analysis on Linux keeps
-// resolving the rest of the file rather than failing at the include. Mirrors
-// the guard src/lock_mode.c already applies to explicit_bzero.
+// numeric f_type and lives in a different header, and offers no name at all --
+// which is why the Linux implementation further down this file reads
+// /proc/self/mountinfo instead. The guard is therefore a real platform split,
+// not an editor convenience: platform.o is in the unconditional OBJS list and
+// this file is compiled on both systems, each taking its own branch.
 #if defined(__FreeBSD__)
 #include <sys/mount.h>
 #include <sys/param.h>
