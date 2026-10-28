@@ -603,26 +603,6 @@ DIST_FILES = \
 		etc/hikari/hikari.lua \
 		etc/pam.d/hikari-unlocker.*
 
-# [COMMENT] Action purpose: The `dist` tarball rewrites every member path to sit
-# under a hikari-${VERSION}/ directory. `-s` is a bsdtar substitution flag and is
-# what FreeBSD's base tar understands; GNU tar, which is what a Linux system has,
-# spells the same operation --transform and takes a sed expression. Selecting
-# here rather than requiring bsdtar on Linux keeps `make dist` working with the
-# tar that is already installed.
-#
-# This is branched at the RECIPE rather than hoisted into a variable, and that
-# is the whole point: make(1) COMMENTS says a comment begins "anywhere but in a
-# shell command line", so the `#` delimiters are literal here but would start a
-# comment in an assignment -- truncating the expression to `--transform "s` with
-# no error. Escaping as `\#` does work, but make(1) documents no such escape, so
-# the recipe form is preferred as the one the manual actually guarantees.
-#
-# The FreeBSD line is byte-identical to the one that preceded this change. Only
-# the Linux line is new. Double quotes are not optional on either: VERSION
-# carries its own literal quotes (`VERSION ?= "CURRENT"`), and only under double
-# quotes does the shell concatenate the adjacent segments and strip the inner
-# pair -- single quotes would name the archive root hikari-"CURRENT"/. Verified
-# that both tars emit byte-identical member lists.
 # [COMMENT] Action purpose: Stage the files under a directory named after the
 # release, then archive that directory. The point of the two spellings this
 # replaces was only to prefix every path with "hikari-${VERSION}/", and each was

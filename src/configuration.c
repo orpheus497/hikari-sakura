@@ -1813,6 +1813,29 @@ parse_background(lua_State *L,
   success = true;
 
 done:
+  /* [COMMENT] Action purpose: Free the path on every failing path, because the
+  caller cannot. It passes an UNINITIALISED char * and, on a false return, goes
+  straight to its own `done:` without touching it -- so an allocation made here
+  and then abandoned by a later key is unreachable from that moment on. The
+  abandoning keys are real: a "fit" that is not one of the three accepted
+  spellings, an unknown key inside the background table, or an iterator that
+  failed, each of which can follow a "path" that already allocated.
+
+  has_background is exactly the right guard, not an approximation of one: it is
+  set only after the copy succeeds, and the NULL check above returns before it
+  on a failed copy, so has_background is true if and only if *background holds
+  a pointer this function owns. NULLing it after the free keeps the caller from
+  reading a dangling value should that contract ever change.
+
+  This is the same ownership discipline PARSE_SPLIT uses in this file -- own it
+  until it is handed over, free it at one place if it never is. The leak it
+  closes is small but not one-shot: a reload leaves the compositor running, so
+  a configuration that is edited and reloaded repeatedly leaks once each time. */
+  if (!success && has_background) {
+    hikari_free(*background);
+    *background = NULL;
+  }
+
   hikari_config_iter_fini(&iter, L);
 
   return success;

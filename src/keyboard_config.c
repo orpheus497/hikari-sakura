@@ -115,6 +115,19 @@ load_xkb_file(struct hikari_xkb *xkb, const char *xkb_file)
       XKB_KEYMAP_COMPILE_NO_FLAGS);
   xkb_context_unref(context);
 
+  /* [COMMENT] Action purpose: Close the stream as soon as xkbcommon is done
+  reading it, which is the moment the call above returns. xkb_keymap_new_from_
+  file() takes a FILE * and reads the keymap from it; xkbcommon.h documents no
+  transfer of ownership, so closing is the caller's job and nothing downstream
+  holds the handle. Placed here rather than at `done:` because it covers both
+  remaining paths -- a NULL keymap and a successful one -- with one call.
+
+  Before this, the stream was never closed on ANY path, so every configuration
+  load naming a keyboard "xkb file" leaked a descriptor and its FILE buffer.
+  That matters more than a one-off would: the configuration is re-read on every
+  reload, so the leak accumulated for as long as the session lasted. */
+  fclose(keymap_file);
+
   if (keymap == NULL) {
     goto done;
   }
