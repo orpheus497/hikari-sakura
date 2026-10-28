@@ -633,12 +633,33 @@ DIST_FILES = \
 # libarchive-tools, a separate package -- while GNU tar is the default, so
 # requiring bsdtar would ADD a build dependency and break `make dist` on a
 # stock system. Requiring neither is strictly better than requiring either.
+# Two further things this recipe gets right, both of which the obvious spelling
+# gets wrong.
+#
+# It stages under hikari-${VERSION}.stage and NOT under hikari-${VERSION}. The
+# second is the name an extracted release has, so a recipe that began
+# `rm -rf hikari-${VERSION}` would delete a tree someone had unpacked beside the
+# checkout and been editing -- and `make dist` is exactly the command whose user
+# is most likely to have one lying around. The suffixed name is this build's
+# own, and nothing else is expected to create it.
+#
+# It also does NOT pipe one tar into the other. A pipeline's status is the LAST
+# command's, so a source tar that fails part way -- a DIST_FILES entry missing
+# or unreadable -- is masked by a successful extract, and `make dist` reports
+# success while shipping an incomplete archive. Measured: `tar -cf - present.txt
+# missing.txt | (cd stage && tar -xf -)` exits 0 with only present.txt staged.
+# Writing the intermediate archive to a file instead puts each tar on its own
+# recipe line, where bmake stops at the first non-zero exit, so a missing member
+# fails the build.
+DISTSTAGE = hikari-${VERSION}.stage
+
 hikari-${VERSION}.tar.gz: version.h doc
-	@rm -rf hikari-${VERSION}
-	@mkdir -p hikari-${VERSION}
-	@tar -cf - ${DIST_FILES} | (cd hikari-${VERSION} && tar -xf -)
-	@tar -czf hikari-${VERSION}.tar.gz hikari-${VERSION}
-	@rm -rf hikari-${VERSION}
+	@rm -rf ${DISTSTAGE}
+	@mkdir -p ${DISTSTAGE}/hikari-${VERSION}
+	@tar -cf ${DISTSTAGE}/dist.tar ${DIST_FILES}
+	@(cd ${DISTSTAGE}/hikari-${VERSION} && tar -xf ../dist.tar)
+	@(cd ${DISTSTAGE} && tar -czf ../hikari-${VERSION}.tar.gz hikari-${VERSION})
+	@rm -rf ${DISTSTAGE}
 
 # [COMMENT] Action purpose: version.h is regenerated on every build by the
 # FORCE rule above, so removing it here is always safe. It used to be guarded on

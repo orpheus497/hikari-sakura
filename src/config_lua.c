@@ -67,6 +67,26 @@ truncates the file name in its own messages at LUA_IDSIZE (60), so a value error
 -- which has no line to report anyway -- prints the path from here instead. */
 static const char *config_path = NULL;
 
+/* The chain of configuration files currently being executed, innermost last,
+with the root at index 0. This is what the include depth limit and the
+self-inclusion check are computed from.
+
+It used to be derived from the Lua call stack instead, by walking lua_getstack
+and counting frames whose ar.what is "main". That read correctly for every
+shape I tested and was wrong for one I did not: a TAIL CALL from a main chunk
+replaces that chunk's frame, so `local function go() return include("x") end
+return go()` leaves no "main" frame for the including file on the stack at all.
+Both guards then saw an empty chain -- the depth never grew and the file never
+matched itself -- and a file including itself that way recursed until Lua
+raised "C stack overflow" instead of being refused at depth 1. Measured.
+
+Each entry points at the `resolved` buffer in the config_include() frame that
+pushed it, which stays live for exactly as long as the entry does, because that
+frame is blocked in the lua_call below it. Index 0 points at the root path the
+caller owns. */
+static const char *config_include_chain[CONFIG_INCLUDE_DEPTH_MAX + 1];
+static int config_include_depth = 0;
+
 /* Address-as-registry-key: the sandbox environment is stored under
 &config_sandbox_key so include() can give an included chunk the same _ENV, with
 no string key to collide with anything else in the registry. */
@@ -647,53 +667,31 @@ config_resolve_include(
   }
 }
 
-/* Function purpose: Refuse an include that is too deep or that is already open.
-Both answers come from the call stack, so there is no bookkeeping to go stale
-if a load is abandoned part way.
+/* Function purpose: Refuse an include that is too deep or that is already open,
+from the chain config_include() maintains rather than from the Lua call stack.
 
-Action purpose: only MAIN chunks are counted, which is what makes the depth a
-count of open FILES. Testing `ar.source[0] == '@'` alone counts every
-file-sourced frame, and an ordinary helper function defined in the
-configuration is one of those -- so a file with a few helpers on the stack
-consumed the include budget and a single legal include() failed with "includes
-are nested more than 8 deep". ar.what is "main" for exactly one frame per file
-being executed, which is the quantity this limit is about. The self-inclusion
-test below needs the same restriction for the same reason: a helper defined in
-file X and called from file Y would otherwise make including X look recursive. */
+Action purpose: the chain is consulted and not lua_getstack, because the call
+stack does not survive a tail call. See the comment on config_include_chain
+for the shape that broke -- a main chunk doing `return go()` is replaced by
+go's frame, so the file doing the including is no longer represented. The chain
+is pushed and popped by config_include() around its own lua_call, so it is
+exactly the set of files whose execution has started and not finished, which is
+the quantity both of these limits are about. */
 static void
 config_check_include_stack(lua_State *L, const char *resolved)
 {
-  lua_Debug ar;
-  int depth = 0;
-  int level;
+  int i;
 
-  for (level = 1; lua_getstack(L, level, &ar); level++) {
-    lua_getinfo(L, "S", &ar);
-
-    if (ar.source == NULL || ar.source[0] != '@') {
-      continue;
-    }
-
-    if (ar.what == NULL || strcmp(ar.what, "main") != 0) {
-      continue;
-    }
-
-    depth++;
-
-    if (!strcmp(ar.source + 1, resolved)) {
+  for (i = 0; i < config_include_depth; i++) {
+    if (!strcmp(config_include_chain[i], resolved)) {
       luaL_error(L, "\"%s\" includes itself", resolved);
     }
   }
 
-  /* Action purpose: `>` and not `>=`, so that the limit the constant NAMES is
-  the limit enforced. `depth` counts the main chunks already on the stack, and
-  the root configuration is one of them -- so at the first include() depth is 1.
-  With `>=` the eighth nested include was refused by a constant called
-  INCLUDE_DEPTH_MAX 8, and the diagnostic then said "nested more than 8 deep"
-  about a nesting of exactly 8. Measured before the change: seven levels loaded
-  and the eighth was refused. Now eight load and the ninth is refused, which is
-  what the constant, this message and the manual all say. */
-  if (depth > CONFIG_INCLUDE_DEPTH_MAX) {
+  /* The root occupies entry 0, so a depth of 8 is seven nested includes plus
+  the root, and the ninth include is what this refuses -- which is what the
+  constant, the message and hikari(1) all say. */
+  if (config_include_depth > CONFIG_INCLUDE_DEPTH_MAX) {
     luaL_error(
         L, "includes are nested more than %d deep", CONFIG_INCLUDE_DEPTH_MAX);
   }
@@ -759,8 +757,21 @@ config_include(lua_State *L)
 
   /* An unprotected call is safe here and only here: this function was itself
   reached through the lua_pcall that hikari_config_lua_read() put below
-  everything. */
+  everything.
+
+  Action purpose: the chain entry is pushed around exactly this call, so it
+  covers precisely the window in which this file is executing and can therefore
+  be reached again. `resolved` is this frame's own buffer and outlives the
+  entry, because this frame is blocked here until the call returns.
+
+  The pop is skipped if the included chunk raises, since a Lua error is a
+  longjmp. That is harmless and deliberate rather than overlooked: the only
+  thing below this call is hikari_config_lua_read()'s lua_pcall, so an error
+  here ends the whole load, and that function restores the depth it saved on
+  entry. Nothing can observe the raised value in between. */
+  config_include_chain[config_include_depth++] = resolved;
   lua_call(L, 0, 1);
+  config_include_depth--;
 
   return 1;
 }
@@ -1098,6 +1109,7 @@ hikari_config_lua_read(const char *path, hikari_config_reader reader, void *ud)
     .path = path, .reader = reader, .ud = ud, .verdict = false
   };
   const char *outer_path = config_path;
+  int outer_depth = config_include_depth;
   lua_State *L;
   const char *upvalue;
   bool success = false;
@@ -1106,10 +1118,20 @@ hikari_config_lua_read(const char *path, hikari_config_reader reader, void *ud)
 
   config_path = path;
 
+  /* Action purpose: seed the chain with the root, so a root that includes
+  itself is caught by the same test as any other cycle, and so the depth the
+  limit counts includes the file the user actually named. Saved and restored
+  around the whole read exactly as config_path is, which is what keeps an
+  abandoned load -- one that longjmped out of an include and skipped its pop --
+  from leaving the depth raised for whatever runs next. */
+  config_include_chain[0] = path;
+  config_include_depth = 1;
+
   L = lua_newstate(config_alloc, &budget);
   if (L == NULL) {
     hikari_config_error(NULL, "could not create the Lua interpreter");
     config_path = outer_path;
+    config_include_depth = outer_depth;
     return false;
   }
 
@@ -1177,6 +1199,7 @@ done:
   strings die here, all at once, and not before. */
   lua_close(L);
   config_path = outer_path;
+  config_include_depth = outer_depth;
 
   return success;
 }
