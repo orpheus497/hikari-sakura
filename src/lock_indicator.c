@@ -234,6 +234,11 @@ get_geometry(struct hikari_output *output, struct wlr_box *geometry)
       geometry, &output_geometry, &geometry->x, &geometry->y);
 }
 
+/* [COMMENT] Function purpose: Forward declaration so the damage path below can
+reach the message placement defined further down, without moving either
+function away from the code it belongs next to. */
+static void damage_message(struct hikari_lock_indicator *lock_indicator);
+
 // [COMMENT] Function purpose: Update or damage lock indicator rendering on all
 // outputs.
 void
@@ -273,6 +278,21 @@ hikari_lock_indicator_damage(struct hikari_lock_indicator *lock_indicator)
         wlr_scene_node_set_enabled(&output->lock_indicator_node->node, false);
       }
     }
+  }
+
+  /* [COMMENT] Action purpose: Place the message on every output too, for the
+  same reason the loop above places the circles: an output that appeared after
+  the message was set has no message node yet. hikari_output_init() nulls
+  lock_message_node along with lock_indicator_node, and damage_message() was
+  reachable only from hikari_lock_indicator_set_message(), so a monitor plugged
+  in while a diagnostic was on screen got the circle back on the next keystroke
+  and never got the message -- until a new message happened to arrive.
+
+  Guarded on message, so this is a no-op whenever no diagnostic is displayed,
+  which is the usual case. When one is, the work is the same kind the circle
+  path above already does on every call: set_buffer, position, enable, raise. */
+  if (lock_indicator->message != NULL) {
+    damage_message(lock_indicator);
   }
 }
 
