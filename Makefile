@@ -730,14 +730,29 @@ install: hikari hikari-unlocker hikari-topbar share/man/man1/hikari.1
 	# policy further down this same recipe already does exactly this .new dance;
 	# the two config files were being treated in contradictory ways, and this is
 	# the one that holds the user's work.
-	@if [ -e ${DESTDIR}/${ETC_PREFIX}/etc/hikari/hikari.lua ]; then \
-		sed "s,PREFIX/,${PREFIX}/," etc/hikari/hikari.lua > ${DESTDIR}/${ETC_PREFIX}/etc/hikari/hikari.lua.new; \
-		chmod 644 ${DESTDIR}/${ETC_PREFIX}/etc/hikari/hikari.lua.new; \
-		echo "install: ${ETC_PREFIX}/etc/hikari/hikari.lua exists and was NOT replaced."; \
+	#
+	# Generated into a temporary file in the destination directory and moved into
+	# place, rather than redirected straight at the destination. `>` truncates
+	# before sed runs, so a sed that failed part way -- a full disk is the
+	# ordinary way -- left a half-written configuration behind while chmod still
+	# succeeded and the recipe still reported success. Adding the existence check
+	# above made that worse rather than better: the next install would see the
+	# truncated file, decide it was the administrator's work, and preserve it
+	# instead of repairing it. set -e stops the recipe on the sed itself, the mv
+	# is atomic because the temporary sits in the same directory as its target,
+	# and the trap takes the temporary away on any exit that does not reach it.
+	@set -e; \
+	cfg_dir="${DESTDIR}/${ETC_PREFIX}/etc/hikari"; \
+	cfg_tmp="$$cfg_dir/hikari.lua.tmp.$$$$"; \
+	trap 'rm -f "$$cfg_tmp"' EXIT HUP INT TERM; \
+	sed "s,PREFIX/,${PREFIX}/," etc/hikari/hikari.lua > "$$cfg_tmp"; \
+	chmod 644 "$$cfg_tmp"; \
+	if [ -e "$$cfg_dir/hikari.lua" ]; then \
+		mv "$$cfg_tmp" "$$cfg_dir/hikari.lua.new"; \
+		echo "install: $$cfg_dir/hikari.lua exists and was NOT replaced."; \
 		echo "install: wrote hikari.lua.new instead -- merge it by hand if you want it."; \
 	else \
-		sed "s,PREFIX/,${PREFIX}/," etc/hikari/hikari.lua > ${DESTDIR}/${ETC_PREFIX}/etc/hikari/hikari.lua; \
-		chmod 644 ${DESTDIR}/${ETC_PREFIX}/etc/hikari/hikari.lua; \
+		mv "$$cfg_tmp" "$$cfg_dir/hikari.lua"; \
 	fi
 	install -m ${PERMS} hikari ${DESTDIR}/${PREFIX}/bin
 	install -m 555 start-hikari.sh ${DESTDIR}/${PREFIX}/bin/start-hikari
