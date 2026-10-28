@@ -166,6 +166,37 @@ WAYLAND_PROTOCOLS != ${PKG_CONFIG} --variable pkgdatadir wayland-protocols
 CFLAGS += ${CFLAGS_EXTRA}
 LDFLAGS += ${LDFLAGS_EXTRA}
 
+# [COMMENT] Action purpose: Undo the sysroot redirection portable bmake applies
+# to DESTDIR, which otherwise makes `bmake install DESTDIR=...` -- the standard
+# staged install every distribution packager performs -- fail to compile.
+#
+# bmake's own /usr/share/mk/sys/Linux.mk contains, verbatim:
+#
+#     .if defined(DESTDIR)
+#     CPPFLAGS+=	-nostdinc -idirafter ${DESTDIR}/usr/include
+#     .endif
+#
+# The same three lines appear in its AIX, HP-UX, IRIX, OSF1, SunOS and UnixWare
+# files. There DESTDIR means a cross-build sysroot holding a target system's
+# headers. Here it means what GNU conventions and every packaging tool mean by
+# it -- a staging directory to install INTO -- and it holds no headers at all,
+# so the redirection points the compiler at an empty directory and the first
+# #include fails: "assert.h: No such file or directory". Measured, before this
+# block existed, on a tree that builds cleanly without DESTDIR.
+#
+# This Makefile sets no CPPFLAGS of its own; the injected flags reach the
+# compiler only through bmake's built-in .c.o rule, whose COMPILE.c expands
+# ${CPPFLAGS}. Removing exactly the three words sys.mk added therefore costs
+# nothing and changes nothing else.
+#
+# Filtering the words rather than assigning CPPFLAGS empty is deliberate: it is
+# a no-op wherever those words are absent, so a packager who legitimately set
+# CPPFLAGS keeps it, and FreeBSD -- whose sys.mk this was not verified against,
+# there being no FreeBSD host here -- is unaffected whatever it does.
+.if defined(DESTDIR)
+CPPFLAGS := ${CPPFLAGS:N-nostdinc:N-idirafter:N${DESTDIR}/usr/include}
+.endif
+
 .if defined(DEBUG) && ${DEBUG:tu} != "NO"
 # [COMMENT] Action purpose: Debug build — full symbols, no optimisation, strict
 # warnings. ASan is deliberately excluded from the base debug build because
