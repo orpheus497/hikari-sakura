@@ -233,9 +233,12 @@ autostart applications.
 
 The configuration language
 --------------------------
-The file is a Lua chunk that must `return` exactly one table, and every section
-documented below is an entry in that table. A chunk that returns nothing, or
-returns anything that is not a table, fails the load and says so. The file is
+The file is a Lua chunk whose FIRST returned value must be a table, and every
+section documented below is an entry in that table. A chunk that returns
+nothing, or whose first value is not a table, fails the load and says so. Any
+further values are discarded rather than refused -- `return cfg, "note"` loads
+`cfg` and ignores the rest, which is how Lua treats a chunk's extra results
+everywhere, not a check this reader omits. The file is
 read as source text only and never as precompiled bytecode: Lua's bytecode
 verifier is not a security boundary, since malformed bytecode corrupts memory
 rather than raising an error.
@@ -306,10 +309,14 @@ Four names are added to that set:
   load it. Includes may nest 8 deep, and a file that includes itself is
   refused by name.
 
-* `CONFIG_FILE` -- the path of the configuration file being read.
-
-* `CONFIG_DIR` -- the directory holding it, which is the base an `include`
-  resolves a relative path against.
+* `CONFIG_FILE` -- the path of the ROOT configuration file, and `CONFIG_DIR`
+  the directory holding it. Both are fixed when the sandbox is built and do
+  NOT follow `include()`: inside an included file they still name the root,
+  not that file. This is rarely what anyone needs them for, because
+  `include()` already resolves a relative path against the directory of the
+  file that calls it -- so a nested include is written relative to its own
+  file and needs neither variable. Build a path from `CONFIG_DIR` only when
+  you want one anchored to the root configuration wherever it is reached from.
 
 Resource limits stop a mistake in the configuration from hanging the
 compositor at startup, where there is no desktop yet to report it on. A load
@@ -377,9 +384,19 @@ Lua's `or`, which the old spelling had no way to express:
 terminal = env.TERMINAL or "foot",
 ```
 
-The table is read-only, and reaches **getenv**(3) on each access rather than
-copying the environment, so a name is looked up when it is used and a
-configuration cannot set a variable through it.
+The table reaches **getenv**(3) on each access rather than copying the
+environment, so a name is looked up at the moment it is used. Assigning to it
+is refused -- `env.FOO = "x"` fails the load with "env is read-only" -- so a
+configuration cannot change the compositor's environment through it, and could
+not change the process's environment even if it could write to the table.
+
+That refusal is a metatable guard, so `rawset`, whose whole purpose is to
+bypass metatables, goes around it as it would for any table:
+`rawset(env, "HOME", "x")` plants a literal value that shadows **getenv**(3)
+for that name for the rest of the load. Nothing outside the configuration is
+affected, and the next load starts clean -- a configuration can only mislead
+itself this way -- but it does mean `env` is not immutable, only
+unassignable.
 
 One edge the `or` idiom does not cover: a variable that is set but **empty**.
 An empty string is true in Lua, so `or` does not fire and the value becomes

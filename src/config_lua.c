@@ -681,7 +681,15 @@ config_check_include_stack(lua_State *L, const char *resolved)
     }
   }
 
-  if (depth >= CONFIG_INCLUDE_DEPTH_MAX) {
+  /* Action purpose: `>` and not `>=`, so that the limit the constant NAMES is
+  the limit enforced. `depth` counts the main chunks already on the stack, and
+  the root configuration is one of them -- so at the first include() depth is 1.
+  With `>=` the eighth nested include was refused by a constant called
+  INCLUDE_DEPTH_MAX 8, and the diagnostic then said "nested more than 8 deep"
+  about a nesting of exactly 8. Measured before the change: seven levels loaded
+  and the eighth was refused. Now eight load and the ninth is refused, which is
+  what the constant, this message and the manual all say. */
+  if (depth > CONFIG_INCLUDE_DEPTH_MAX) {
     luaL_error(
         L, "includes are nested more than %d deep", CONFIG_INCLUDE_DEPTH_MAX);
   }
