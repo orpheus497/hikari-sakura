@@ -73,5 +73,9 @@ hikari.log
 /2
 
 # An unpacked wlroots source tree, if one is kept alongside for reference when
-# checking compositor behaviour against the version actually linked.
-wlroots-0.20.0/
+# checking compositor behaviour against the version actually linked. Globbed
+# rather than pinned: the pattern named 0.20.0 while this tree links 0.20.2,
+# so the one tree a contributor is most likely to unpack was the one it did
+# not cover -- and an accidentally committed wlroots checkout is tens of
+# thousands of files.
+wlroots-*/
