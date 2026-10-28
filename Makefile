@@ -189,12 +189,28 @@ LDFLAGS += ${LDFLAGS_EXTRA}
 # ${CPPFLAGS}. Removing exactly the three words sys.mk added therefore costs
 # nothing and changes nothing else.
 #
-# Filtering the words rather than assigning CPPFLAGS empty is deliberate: it is
-# a no-op wherever those words are absent, so a packager who legitimately set
-# CPPFLAGS keeps it, and FreeBSD -- whose sys.mk this was not verified against,
-# there being no FreeBSD host here -- is unaffected whatever it does.
+# ONLY -nostdinc is removed, and only that one word. It is the word that does
+# the damage: with it gone, `cc -idirafter /empty/usr/include` compiles the test
+# case above cleanly, because -idirafter is searched AFTER the standard
+# directories and a -I naming a directory that does not exist is silently
+# ignored. So the surviving flag is a no-op and does not need removing.
+#
+# Removing -idirafter as well would be worse than leaving it. The flag takes its
+# directory as a SEPARATE word, and `:N` filters words, not sequences -- so
+# stripping `-idirafter` from a CPPFLAGS that already contained one would leave
+# its argument behind as a bare word, which the compiler reads as an input FILE.
+# Measured: with CPPFLAGS='-idirafter /opt/inc' in the environment and DESTDIR
+# set, the earlier three-word filter reduced it to the single word `/opt/inc`.
+# -nostdinc takes no argument, so it cannot do that.
+#
+# A no-op wherever the word is absent, which is why this cannot affect FreeBSD
+# -- whose sys.mk was not verified here, there being no FreeBSD host -- whatever
+# that sys.mk does. Note also that a CPPFLAGS set on the COMMAND LINE is
+# immutable and reaches the compiler unfiltered, which is correct: make does not
+# let a makefile override it, and sys.mk's += cannot append to it either, so
+# there is nothing to undo in that case.
 .if defined(DESTDIR)
-CPPFLAGS := ${CPPFLAGS:N-nostdinc:N-idirafter:N${DESTDIR}/usr/include}
+CPPFLAGS := ${CPPFLAGS:N-nostdinc}
 .endif
 
 .if defined(DEBUG) && ${DEBUG:tu} != "NO"
