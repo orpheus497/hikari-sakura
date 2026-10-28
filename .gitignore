@@ -32,8 +32,12 @@
 # build the roff page first, so nothing needs the generated copy committed.
 /share/man/man1/hikari.1
 
-# Release tarballs produced by `make dist`.
+# Release tarballs produced by `make dist`, and the staging directory the rule
+# builds them from. The staging directory is removed by the recipe itself; this
+# entry only covers an interrupted run, which would otherwise leave a tree of
+# every distributed file sitting untracked in the checkout.
 /hikari-*.tar.gz
+/hikari-*/
 
 # Core dumps. Kept out deliberately: they embed the full memory image of a
 # running compositor, which on this project means whatever was on screen.

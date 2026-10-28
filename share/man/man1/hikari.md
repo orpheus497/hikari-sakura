@@ -237,8 +237,10 @@ The file is a Lua chunk whose FIRST returned value must be a table, and every
 section documented below is an entry in that table. A chunk that returns
 nothing, or whose first value is not a table, fails the load and says so. Any
 further values are discarded rather than refused -- `return cfg, "note"` loads
-`cfg` and ignores the rest, which is how Lua treats a chunk's extra results
-everywhere, not a check this reader omits. The file is
+`cfg` and ignores the rest. That is Lua discarding the surplus because this
+reader asks a chunk for one result, not a check the reader forgot; it is not a
+property of Lua chunks in general, and **dofile**, which asks for all of them,
+would hand back every value. The file is
 read as source text only and never as precompiled bytecode: Lua's bytecode
 verifier is not a security boundary, since malformed bytecode corrupts memory
 rather than raising an error.

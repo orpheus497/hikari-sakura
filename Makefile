@@ -623,12 +623,33 @@ DIST_FILES = \
 # quotes does the shell concatenate the adjacent segments and strip the inner
 # pair -- single quotes would name the archive root hikari-"CURRENT"/. Verified
 # that both tars emit byte-identical member lists.
+# [COMMENT] Action purpose: Stage the files under a directory named after the
+# release, then archive that directory. The point of the two spellings this
+# replaces was only to prefix every path with "hikari-${VERSION}/", and each was
+# specific to one tar: --transform is GNU tar's, -s is bsdtar's, and neither
+# implementation accepts the other's. That is why this rule used to be branched
+# on ${OS}, and the branch is the thing worth deleting -- it meant `make dist`
+# was the one target whose behaviour depended on which tar happened to be
+# installed rather than on which platform it claimed to support.
+#
+# Having the files actually LIVE in a directory of that name needs no flag at
+# all. What is left -- -c, -f, -x and -z -- is present in GNU tar, bsdtar and
+# FreeBSD's base tar alike, so one recipe now serves every platform and every
+# implementation. The pipe into a subshell is the portable directory copy: POSIX
+# cp(1) cannot create the intermediate directories that include/hikari/ and
+# src/ need, and tar can.
+#
+# Deliberately NOT switched to bsdtar on Linux. bsdtar is not installed by
+# default on the common distributions -- on this machine it comes from Debian's
+# libarchive-tools, a separate package -- while GNU tar is the default, so
+# requiring bsdtar would ADD a build dependency and break `make dist` on a
+# stock system. Requiring neither is strictly better than requiring either.
 hikari-${VERSION}.tar.gz: version.h doc
-.if ${OS} == "Linux"
-	@tar --transform "s#^#hikari-${VERSION}/#" -czf hikari-${VERSION}.tar.gz ${DIST_FILES}
-.else
-	@tar -s "#^#hikari-${VERSION}/#" -czf hikari-${VERSION}.tar.gz ${DIST_FILES}
-.endif
+	@rm -rf hikari-${VERSION}
+	@mkdir -p hikari-${VERSION}
+	@tar -cf - ${DIST_FILES} | (cd hikari-${VERSION} && tar -xf -)
+	@tar -czf hikari-${VERSION}.tar.gz hikari-${VERSION}
+	@rm -rf hikari-${VERSION}
 
 # [COMMENT] Action purpose: version.h is regenerated on every build by the
 # FORCE rule above, so removing it here is always safe. It used to be guarded on
