@@ -492,8 +492,26 @@ sanitize_message(
 
     offset += consumed;
 
+    /* Action purpose: U+2028 and U+2029 are dropped alongside the control
+    codepoints, and they are the reason the list is not just "controls". They
+    are categories Zl and Zp, not Cc, so no control-character test catches
+    them -- but Unicode gives them line-break class BK, mandatory break, the
+    same class as U+000A. Measured with pangocairo on this host, in the same
+    layout configuration the renderer uses:
+
+      500 x's                 3 lines, 600x51   -- the documented case
+      250x "x" + U+000A     251 lines, 7x4267   -- what this filter stops
+      250x "x" + U+2029     251 lines, 7x4267   -- identical, and it did NOT
+      250x "x" + U+2028       3 lines, 600x55
+
+    So U+2029 defeated the three-line cap exactly as a newline does, which
+    made the "hard bound" this function is supposed to guarantee an intention
+    after all. U+2028 happens to be wrapped rather than broken by this Pango
+    version and stayed inside the cap, but it carries the same Unicode break
+    class, so it is dropped too rather than left to depend on that. */
     if (codepoint < 0x20 || codepoint == 0x7f ||
-        (codepoint >= 0x80 && codepoint <= 0x9f)) {
+        (codepoint >= 0x80 && codepoint <= 0x9f) ||
+        codepoint == 0x2028 || codepoint == 0x2029) {
       continue;
     }
 

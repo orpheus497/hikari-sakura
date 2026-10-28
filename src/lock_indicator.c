@@ -287,12 +287,20 @@ text -- one unbreakable 500-character word, a hundred short words, anything in
 between -- produce exactly 3 lines and a 600x51 pixel layout, and the ellipsis
 says that something was dropped.
 
-The cap holds only because the text cannot contain an explicit line break.
+The cap holds only because the text cannot contain a mandatory line break.
 pango_layout_set_height() with a negative value limits WRAPPED lines and does
 nothing about paragraph breaks: the same measurement gave 251 lines and a
 4267-pixel-tall layout for 250 repetitions of "x\n". sanitize_message() in
 src/lock_mode.c is what guarantees the input has none, and the two belong
-together. */
+together.
+
+"Mandatory line break" and not "newline", because the set is wider than it
+looks and getting it wrong cost this cap once already. U+2029 PARAGRAPH
+SEPARATOR is category Zp rather than Cc, so it survived a filter that dropped
+every control codepoint, and it produced the identical 251 lines and
+4267 pixels that "x\n" does. sanitize_message() now drops U+2028 and U+2029
+by name alongside the controls; if that filter is ever narrowed, this cap
+stops being a bound. */
 static void
 configure_message_layout(PangoLayout *layout, const char *text)
 {
