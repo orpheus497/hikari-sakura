@@ -462,15 +462,20 @@ check_password(const char *username)
   PAM_MAXTRIES does not arrive here. It was previously listed as the lockout
   code, but pam_faillock(8) documents PAM_AUTH_ERR for "too many failed logins"
   and that is what a locked tally actually returns -- so a lockout presents as
-  an ordinary wrong password and stays on the retryable path. The consequence
-  is user-visible and is NOT handled here: on a stack with pam_faillock in the
-  auth group (Arch ships one unconditionally; Fedora gates it behind
-  with-faillock), three wrong attempts lock the account, after which the
-  CORRECT password also returns PAM_AUTH_ERR until the timeout expires. PAM
-  explains this through PAM_TEXT_INFO, which conversation_handler above
-  discards, so the lock screen silently refuses a valid password. Relaying
-  those messages requires a message field in struct hikari_unlock_reply and a
-  matching change to the compositor's copy of the wire format.
+  an ordinary wrong password and stays on the retryable path, which is correct:
+  the user may still type the right password once the tally expires.
+
+  What a lockout must not do is present as an ordinary wrong password to the
+  PERSON. On a stack with pam_faillock in the auth group (Arch ships one
+  unconditionally; Fedora gates it behind with-faillock), three wrong attempts
+  lock the account, after which the CORRECT password also returns
+  PAM_AUTH_ERR until the timeout expires. PAM explains that through a
+  PAM_TEXT_INFO, and the explanation is now relayed: conversation_handler
+  above captures both PAM_TEXT_INFO and PAM_ERROR_MSG through
+  append_message(), struct hikari_unlock_reply carries message_is_error,
+  message_len and message, and src/lock_mode.c sanitises the text and hands it
+  to hikari_lock_indicator_set_message() for display beneath the indicator. So
+  the refusal says why it is refusing rather than looking like a typo.
 
   PAM_PERM_DENIED (6) is reachable and was absent from this list. It is what a
   structurally broken policy produces -- an `include` naming a stack that does
