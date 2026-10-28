@@ -741,9 +741,19 @@ install: hikari hikari-unlocker hikari-topbar share/man/man1/hikari.1
 	# instead of repairing it. set -e stops the recipe on the sed itself, the mv
 	# is atomic because the temporary sits in the same directory as its target,
 	# and the trap takes the temporary away on any exit that does not reach it.
+	#
+	# mktemp, and not a name built from $$$$, for the same reason install-user
+	# below uses it. A predictable path in a directory someone less trusted can
+	# write to -- which a caller-provided DESTDIR can easily be -- can be
+	# pre-created as a symlink, and `>` follows it: the redirect truncates
+	# whatever it points at and the chmod then sets that target's mode, both as
+	# whatever user is running the install, which for a system install is root.
+	# Measured: with the old name, a symlink planted at it left the victim file
+	# truncated from 27 bytes to 17; mktemp creates the file itself, mode 600 and
+	# never a symlink, so the same attempt leaves it untouched.
 	@set -e; \
 	cfg_dir="${DESTDIR}/${ETC_PREFIX}/etc/hikari"; \
-	cfg_tmp="$$cfg_dir/hikari.lua.tmp.$$$$"; \
+	cfg_tmp=$$(mktemp "$$cfg_dir/hikari.lua.XXXXXX"); \
 	trap 'rm -f "$$cfg_tmp"' EXIT HUP INT TERM; \
 	sed "s,PREFIX/,${PREFIX}/," etc/hikari/hikari.lua > "$$cfg_tmp"; \
 	chmod 644 "$$cfg_tmp"; \
