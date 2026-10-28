@@ -85,7 +85,7 @@ They are, however, what the defaults assume:
   point to every other sofi surface), `L+e` (sheet switcher) and `L+n`
   (notification history). Without `sofi` installed those four bindings do
   nothing. Either install it or rebind the corresponding `actions` entries in
-  `hikari.conf`.
+  `hikari.lua`.
 * **`sofi` has more surfaces than the four bound here** — volume, network, a
   key-binding reference and a window switcher (`sofi -show windowlist`) among
   them. All are reachable from the control panel on `L+w`, and any of them can
@@ -203,11 +203,11 @@ it — so the policy lands where `hikari-unlocker` expects it.
 
 ### Setting up the keyboard layout
 
-`hikari` natively configures its keyboards via the `inputs { keyboards { ... } }`
-block in `hikari.conf`. You can directly specify your `xkb` layout, options,
-repeat rates, and delays there.
+`hikari` natively configures its keyboards via the `inputs.keyboards` table in
+`hikari.lua`. You can directly specify your `xkb` layout, options, repeat
+rates, and delays there.
 
-If a keyboard is not explicitly configured in `hikari.conf`, Hikari Sakura will
+If a keyboard is not explicitly configured in `hikari.lua`, Hikari Sakura will
 fall back to using `xkb` environment variables. To select a layout this way, set
 `XKB_DEFAULT_LAYOUT` before starting Hikari Sakura.
 
@@ -217,10 +217,27 @@ export XKB_DEFAULT_LAYOUT="de(nodeadkeys),de"
 
 ## Configuration & Customization
 
-Hikari Sakura is configured using `libucl` syntax. The configuration file is
-expected to be located at `$XDG_CONFIG_HOME/hikari/hikari.conf`. If it does not
-exist, Hikari Sakura will fall back to the default config installed at
-`${ETC_PREFIX}/etc/hikari/hikari.conf`.
+Hikari Sakura is configured in Lua 5.4. The configuration file is a Lua chunk
+that must `return` exactly one table, and that table *is* the configuration; a
+chunk that returns nothing is an error that says so. It is expected to be
+located at `$XDG_CONFIG_HOME/hikari/hikari.lua` — `~/.config/hikari/hikari.lua`
+when `XDG_CONFIG_HOME` is unset. If it does not exist, Hikari Sakura will fall
+back to the default config installed at `${ETC_PREFIX}/etc/hikari/hikari.lua`.
+
+Because the file is a program rather than a data format, `string.format`,
+`table.insert`, `math.max`, `pairs`, `ipairs`, `for` loops and local functions
+are all available, and a repetitive block such as the per-sheet bindings can be
+generated rather than typed. It is nevertheless loaded as text only and run in
+a sandbox: `io`, `os.execute`, `require`, `load`, `pcall` and the metatable
+primitives are absent, and the chunk executes under an instruction-count budget
+and a memory ceiling. The line that divides the two halves is that a
+configuration file may *compute* values, but it may not run commands, read
+files or loop forever. The single exception is `include("other.lua")`, the
+successor to libucl's `.include` — it loads another configuration file relative
+to this one and *returns* its value for you to splice in, since there is no
+sane in-place merge for a Lua table constructor, and a second argument of
+`true` makes an unreadable file `nil` instead of an error the way
+`.try_include` did.
 
 The shipped default configuration is written as an annotated reference: every
 key in it is a default made explicit, so deleting any of them changes nothing.
@@ -252,24 +269,38 @@ The configuration file allows you to define:
 
 **Capabilities & Limitations:**
 
-- You can use environment variables (e.g. `$TERMINAL`) in the configuration
-  file; they will be substituted when the configuration is loaded.
+- Environment variables are read through the global `env` table — `env.TERMINAL`
+  is the value of `$TERMINAL`, and `nil` when it is unset, so
+  `env.TERMINAL or "foot"` supplies a fallback. There is no substitution *into*
+  strings; see [Environment](#environment).
 - Structural changes like UI themes, custom actions, and new bindings can be
   hot-reloaded using the `reload` action (default: `LS+r`, that is
   Super+Shift+R — modifier letters are concatenated, so `LS+r` is one modifier
   set and there is only ever one `+`).
 - Two things do not reload. The `hikari-topbar` helper is spawned once at
-  startup, so `ui { palette }` reaches the bar only on the next compositor
-  start; and `outputs { position }` re-applies on reload only when
+  startup, so `ui.palette` reaches the bar only on the next compositor
+  start; and a `position` set in `outputs` re-applies on reload only when
   `output_management_overrides_config` is `false` and the value actually
   changed.
-- A key written twice is neither merged nor an error — `hikari` uses the
-  **first** and ignores the rest, and says so on standard error at startup. If
-  a setting appears to do nothing, read that output first. See
-  [Logging and diagnostics](#logging-and-diagnostics) for how to capture it
-  under a display manager.
-- Hikari Sakura does not support conditional statements or complex logic within
-  the config file itself.
+- A key written twice is neither merged nor an error, and there is **no
+  warning** — this is Lua, and a table constructor keeps the **last** value
+  written for a key and discards the earlier one. The collapse happens inside
+  the constructor, before any of the compositor's own code is handed the table,
+  so no diagnostic for it is possible even in principle. Two `palette` tables
+  inside the same `ui` table are not merged; the second simply replaces the
+  first. If a setting appears to do nothing, check first that you have not
+  written the same key twice in the same table.
+- A key written *wrong* is the opposite case and is loud. An unknown section,
+  and an unknown key inside `ui`, `layout`, `outputs`, `inputs`, `views`,
+  `colorscheme`, `bar`, `lock`, `animation` or `blur`, fails the load outright
+  and names the offender on standard error; on a reload the running
+  configuration simply stays in place. See
+  [Logging and diagnostics](#logging-and-diagnostics) for how to capture that
+  output under a display manager.
+- Conditionals, loops and local functions *are* available within the
+  configuration file, because it is a Lua chunk — what is not available is
+  anything that reaches outside it, which the sandbox described under
+  [Configuration & Customization](#configuration--customization) withholds.
 - Some environment-level initializations (like XWayland) require a full restart
   of the compositor to apply.
 - Hikari Sakura provides its own built-in status bar, described below. External
@@ -319,8 +350,9 @@ output_management_overrides_config = true
 
 `true`, the default, lets those clients lead. Their changes are applied, and
 reloading the configuration no longer drags an output back to the `position`
-written in `outputs { }`. That block still **seeds** a monitor when it first
-appears, so a position you configure is applied on plug-in either way — what
+written in the `outputs` table. That table still **seeds** a monitor when it
+first appears, so a position you configure is applied on plug-in either way —
+what
 changes is whether the file keeps asserting it afterwards.
 
 `false` puts the configuration file in charge. Clients may still *read* the
@@ -345,7 +377,7 @@ Two limits worth knowing:
   does not relight an output you switched off.
 
 Persisting a layout across restarts is `kanshi`'s job — it speaks the same
-protocol, so it works with no further setup. The `outputs { }` block itself
+protocol, so it works with no further setup. The `outputs` table itself
 carries only wallpaper and position, not modes.
 
 ### Autostart
@@ -383,32 +415,39 @@ blocking `popen()` calls several times a second, and running those inside the
 compositor would stall the Wayland event loop on every tick. A slow or wedged
 sensor costs the bar its freshness and nothing else.
 
-The bar's height follows `ui { font }`, so it scales with your font choice. Its
-colours come from the compositor's `ui { palette }`, passed to the helper on
+The bar's height follows `ui.font`, so it scales with your font choice. Its
+colours come from the compositor's `ui.palette`, passed to the helper on
 its command line — which is why a palette change reaches the bar on the next
 compositor start rather than on a reload.
 
 ### Blocks
 
-| Block | Source | Shown when |
-| --- | --- | --- |
-| CPU usage | `kern.cp_time` | always |
-| RAM usage | `hw.physmem`, `vm.stats.vm.*` | always |
-| CPU temperature | `dev.cpu.0.temperature`, falling back to `hw.acpi.thermal.tz0.temperature` | a sensor is readable |
-| GPU usage, VRAM, temperature | `nvidia-smi` | an NVIDIA GPU is detected at startup |
-| `$HOME` partition usage | `getfsstat(2)` / `statfs(2)` | always |
-| Media / now playing | `playerctl` | always (shows `Idle` with nothing playing) |
-| Network | `getifaddrs(3)` | always |
-| Backlight | `backlight(8)` | the tool reports a level |
-| Volume | `pactl` | a default sink is readable |
-| Battery | `hw.acpi.battery.*` | a battery is present |
-| Clock and date | `strftime(3)` | always |
+| Block | Source on FreeBSD | Source on Linux | Shown when |
+| --- | --- | --- | --- |
+| CPU usage | `kern.cp_time` | `/proc/stat` | always |
+| RAM usage | `hw.physmem`, `vm.stats.vm.*` | `/proc/meminfo` | always |
+| CPU temperature | `dev.cpu.0.temperature`, falling back to `hw.acpi.thermal.tz0.temperature` | `/sys/class/hwmon`, falling back to `/sys/class/thermal` | a sensor is readable |
+| GPU usage, VRAM, temperature | `nvidia-smi` | `nvidia-smi` | an NVIDIA GPU is detected at startup |
+| `$HOME` partition usage | `statfs(2)` | `statfs(2)` | always |
+| Media / now playing | `playerctl` | `playerctl` | always (shows `Idle` with nothing playing) |
+| Network | `getifaddrs(3)` | `getifaddrs(3)`, plus `/sys/class/net` to tell Wi-Fi from Ethernet | always |
+| Backlight | `backlight(8)` | `/sys/class/backlight` | a level is readable |
+| Volume | `pactl` | `pactl` | a default sink is readable |
+| Battery | `hw.acpi.battery.*` | `/sys/class/power_supply` | a battery is present |
+| Clock and date | `strftime(3)` | `strftime(3)` | always |
+
+The two columns are two implementations of one contract, not two feature sets:
+`include/hikari/topbar_sensors.h` declares what a platform must answer and
+`src/topbar_sensors_freebsd.c` and `src/topbar_sensors_linux.c` each answer it,
+so a block that is absent on one platform is absent because the hardware or the
+helper is missing, never because the port skipped it. The rows that name the
+same source on both are the ones where no branch was needed at all.
 
 Blocks with no readable source are omitted entirely rather than shown empty, so
 a desktop with no battery and integrated graphics simply has a shorter bar.
 
 The battery block picks its colour from the charge level, mapping onto specific
-palette entries — the bands are listed in the shipped `hikari.conf`. Retheming
+palette entries — the bands are listed in the shipped `hikari.lua`. Retheming
 the palette retints the battery with it.
 
 ### Runtime dependencies
@@ -416,7 +455,7 @@ the palette retints the battery with it.
 None of these are required to build or run Hikari Sakura; each one only affects
 the block that uses it.
 
-* **A Nerd Font**, installed and selected via `ui { font }`. The blocks are
+* **A Nerd Font**, installed and selected via `ui.font`. The blocks are
   labelled with private-use-area glyphs, so without one the bar renders boxes.
 * `playerctl` — the media block. Without it, the block reads `Idle`.
 * `pactl` (PulseAudio or PipeWire-pulse) — the volume block.
@@ -427,10 +466,11 @@ the block that uses it.
 ### Long block text
 
 The media block's content is whatever the playing track is called and is
-therefore unbounded. `ui { bar { max-block-chars, scroll-interval,
-scroll-separator } }` caps it and scrolls the remainder as a banner. Those keys
-are read by the compositor rather than by the helper, so they do take effect on
-a configuration reload. See the *bar* subsection of hikari(1).
+therefore unbounded. The `["max-block-chars"]`, `["scroll-interval"]` and
+`["scroll-separator"]` keys of `ui.bar` cap it and scroll the remainder as a
+banner. Those keys are read by the compositor rather than by the helper, so
+they do take effect on a configuration reload. See the *bar* subsection of
+hikari(1).
 
 ### Palette fallback
 
@@ -475,24 +515,24 @@ PulseAudio or PipeWire is running — and brightness through FreeBSD's base-syst
 `backlight(8)`. On a machine with neither sound server, swap the volume actions
 for FreeBSD's native `mixer(8)`:
 
-```ucl
-actions {
-  vol-up       = "mixer vol +5"
-  vol-down     = "mixer vol -5"
-  vol-mute     = "mixer vol.mute=^"
-  bright-up    = "backlight incr 5"
-  bright-down  = "backlight decr 5"
-}
+```lua
+actions = {
+  ["vol-up"]      = "mixer vol +5",
+  ["vol-down"]    = "mixer vol -5",
+  ["vol-mute"]    = "mixer vol.mute=^",
+  ["bright-up"]   = "backlight incr 5",
+  ["bright-down"] = "backlight decr 5",
+},
 
-bindings {
-  keyboard {
-    "0+XF86AudioRaiseVolume"  = action-vol-up
-    "0+XF86AudioLowerVolume"  = action-vol-down
-    "0+XF86AudioMute"         = action-vol-mute
-    "0+XF86MonBrightnessUp"   = action-bright-up
-    "0+XF86MonBrightnessDown" = action-bright-down
-  }
-}
+bindings = {
+  keyboard = {
+    ["0+XF86AudioRaiseVolume"]  = "action-vol-up",
+    ["0+XF86AudioLowerVolume"]  = "action-vol-down",
+    ["0+XF86AudioMute"]         = "action-vol-mute",
+    ["0+XF86MonBrightnessUp"]   = "action-bright-up",
+    ["0+XF86MonBrightnessDown"] = "action-bright-down",
+  },
+},
 ```
 
 *Note: The `0+` prefix specifies that no modifier keys (like Super or Alt) are
@@ -500,36 +540,35 @@ required.*
 
 Playback keys are bound the same way, through `playerctl`:
 
-```ucl
-actions {
-  pause-play   = "playerctl play-pause"
-  media-next   = "playerctl next"
-  media-prev   = "playerctl previous"
-}
+```lua
+actions = {
+  ["pause-play"] = "playerctl play-pause",
+  ["media-next"] = "playerctl next",
+  ["media-prev"] = "playerctl previous",
+},
 
-bindings {
-  keyboard {
-    "0+XF86AudioPlay"  = action-pause-play
-    "0+XF86AudioPause" = action-pause-play
-    "0+XF86AudioNext"  = action-media-next
-    "0+XF86AudioPrev"  = action-media-prev
-  }
-}
+bindings = {
+  keyboard = {
+    ["0+XF86AudioPlay"]  = "action-pause-play",
+    ["0+XF86AudioPause"] = "action-pause-play",
+    ["0+XF86AudioNext"]  = "action-media-next",
+    ["0+XF86AudioPrev"]  = "action-media-prev",
+  },
+},
 ```
 
 ### Lid Switch Handling
 
 Hikari Sakura can natively parse switch events (like lid switches) through the
-`inputs { switches { ... } }` block in `hikari.conf`. You can bind these events
-to any Hikari Sakura action. For example, to lock the screen when the lid
-closes:
+`inputs.switches` table in `hikari.lua`. You can bind these events to any
+Hikari Sakura action. For example, to lock the screen when the lid closes:
 
-```ucl
-inputs {
-  switches {
-    "Control Method Lid Switch" = lock
-  }
-}
+```lua
+inputs = {
+  switches = {
+    ["Control Method Lid Switch"] = "lock",
+  },
+},
 ```
 
 However, Hikari Sakura itself does not manage suspend/resume states. On FreeBSD,
@@ -539,9 +578,9 @@ suspend is typically handled by `devd(8)` or `acpi(4)`. Ensure
 closed.
 
 The screen locker reads the power source each time its blank timer is armed, so
-`ui { lock { blank-timeout-ac, blank-timeout-battery } }` can give mains and
-battery sessions different blanking behaviour, and unplugging while locked takes
-effect on the next keystroke.
+the `["blank-timeout-ac"]` and `["blank-timeout-battery"]` keys of `ui.lock`
+can give mains and battery sessions different blanking behaviour, and
+unplugging while locked takes effect on the next keystroke.
 
 ## Touchscreen & Trackpad Gestures
 
@@ -556,31 +595,49 @@ simultaneous touch points are left for the client to interpret (e.g.
 pinch-to-zoom in a PDF viewer).
 
 Trackpad swipe, pinch, and hold gestures (via `wlr_pointer_gestures_v1`) can be
-bound to Hikari Sakura actions in the `inputs { gestures { ... } }` block, using
-keys of the form `swipe-<direction>-<fingers>`, `pinch-<direction>-<fingers>`,
-or `hold-<fingers>`, where `<fingers>` is an integer from 1 to 5. A gesture that
+bound to Hikari Sakura actions in the `inputs.gestures` table, using keys of
+the form `swipe-<direction>-<fingers>`, `pinch-<direction>-<fingers>` or
+`hold-<fingers>`, where `<fingers>` is an integer from 1 to 5. A gesture that
 matches a binding triggers the action instead of being forwarded to the client;
 unmatched gestures are forwarded to the client. Update events are buffered until
 the gesture ends (in case it turns out to match a binding); a gesture with more
 than 128 update events has the excess silently dropped from what is forwarded.
 
-```ucl
-inputs {
-  gestures {
-    "swipe-left-3"  = workspace-cycle-next
-    "swipe-right-3" = workspace-cycle-prev
-    "pinch-in-3"    = view-toggle-maximize-full
-    "hold-3"        = action-terminal
-  }
-}
+```lua
+inputs = {
+  gestures = {
+    ["swipe-left-3"]  = "workspace-cycle-next",
+    ["swipe-right-3"] = "workspace-cycle-prev",
+    ["pinch-in-3"]    = "view-toggle-maximize-full",
+    ["hold-3"]        = "action-terminal",
+  },
+},
 ```
 
 ## Building
 
-Hikari Sakura currently only works on FreeBSD. This is unlikely to change. When
-building directly from the repository, breaking changes might be encountered due
-to the project being in its `first` stages; it is currently considered
-`unstable`.
+FreeBSD is the first-class target and Linux is a supported second-class one.
+The asymmetry is deliberate and is not a staging post on the way to parity: no
+change may regress FreeBSD behaviour, performance or build ergonomics; where a
+portable spelling and a FreeBSD-native one are equally good the portable one
+wins, because it deletes a branch; where they are *not* equally good FreeBSD
+keeps the native spelling and Linux gets a branch of its own, so portability is
+never bought with a FreeBSD regression; and a Linux-only defect is a bug where
+a FreeBSD-only defect is an emergency. The compositor, `hikari-unlocker` and
+`hikari-topbar` all build and run on Linux against wlroots 0.20.2.
+
+The build system is BSD make on both platforms, and `Makefile` is the single
+source of truth for how the project builds. GNU make cannot parse it, so a
+`GNUmakefile` sits beside it carrying no build logic at all — GNU make reads
+that filename in preference to `Makefile` and it does nothing but hand every
+goal to `bmake`, which is what makes a bare `make` do the right thing on Linux
+while leaving the FreeBSD path, where `make` already *is* bmake, untouched.
+Install `bmake` from your distribution (`apt install bmake`,
+`dnf install bmake`, `pacman -S bmake`); FreeBSD needs nothing.
+
+When building directly from the repository, breaking changes might be
+encountered due to the project being in its `first` stages; it is currently
+considered `unstable`.
 
 ### Dependencies
 
@@ -594,7 +651,11 @@ to the project being in its `first` stages; it is currently considered
 * libinput
 * xkbcommon
 * pixman
-* libucl
+* Lua 5.4 — the configuration language. The build probes the `lua-5.4`,
+  `lua5.4`, `lua54` and `lua` pkg-config modules in that order and takes the
+  first that satisfies both `>= 5.4` and `< 5.5`, because the module is spelled
+  differently on FreeBSD, Debian, Fedora and Arch, and because an unconstrained
+  match would happily select a Lua 5.5 that cannot compile
 * evdev-proto
 * epoll-shim (FreeBSD)
 * pkgconf — every dependency above is located with `pkg-config`
@@ -650,7 +711,7 @@ make
 ```
 
 All four files are installed to `${PREFIX}/bin` by `make install`, which also
-installs the default configuration to `${ETC_PREFIX}/etc/hikari/hikari.conf`,
+installs the default configuration to `${ETC_PREFIX}/etc/hikari/hikari.lua`,
 the PAM policy to `${ETC_PREFIX}/etc/pam.d/hikari-unlocker`, the manpage, the
 default wallpaper, **both** wayland-session entries (`hikari.desktop` and
 `hikari-sakura.desktop`) and the `sakura-portals.conf` portal backend map.
@@ -673,9 +734,9 @@ make install-user
 ```
 
 It copies the default wallpaper to `~/.config/hikari/hikari_wallpaper.png` and
-writes `~/.config/hikari/hikari.conf` with the wallpaper path already pointing
+writes `~/.config/hikari/hikari.lua` with the wallpaper path already pointing
 at that copy, so the background renders out of the box. Unlike `install`, it
-never overwrites an existing `hikari.conf` — it says so and leaves yours alone.
+never overwrites an existing `hikari.lua` — it says so and leaves yours alone.
 
 `make uninstall-user` removes the wallpaper copy and deliberately leaves your
 configuration in place.
@@ -866,13 +927,14 @@ name (`$XDG_CURRENT_DESKTOP-portals.conf`, lower-cased), so it is tied to
 `DesktopNames` in both session entries and to the default the compositor sets.
 Change one and all four change together.
 
-The default configuration expects your default terminal emulator to be specified
-in the `$TERMINAL` environment variable.
+The default configuration takes your terminal emulator from the `$TERMINAL`
+environment variable, written as `env.TERMINAL or "foot"` — so exporting
+`TERMINAL` selects it and `foot` is what you get if you do not.
 
 ### Logging and diagnostics
 
 `hikari` and wlroots both log to standard error, and a session started from a
-display manager usually discards it — which is why configuration warnings and
+display manager usually discards it — which is why configuration errors and
 crash output can seem to vanish. Set `HIKARI_LOG` to a writable file path and
 `start-hikari` redirects its own descriptors there before `exec`:
 
@@ -890,8 +952,8 @@ logging.
 
 | Path | Contents |
 | --- | --- |
-| `$XDG_CONFIG_HOME/hikari/hikari.conf` | User configuration. Falls back to `~/.config/hikari/hikari.conf` when `XDG_CONFIG_HOME` is unset. |
-| `${ETC_PREFIX}/etc/hikari/hikari.conf` | System-wide default configuration, used when no user configuration is readable. |
+| `$XDG_CONFIG_HOME/hikari/hikari.lua` | User configuration. Falls back to `~/.config/hikari/hikari.lua` when `XDG_CONFIG_HOME` is unset. |
+| `${ETC_PREFIX}/etc/hikari/hikari.lua` | System-wide default configuration, used when no user configuration is readable. |
 | `~/.config/hikari/autostart` | Executed at startup if readable and executable. |
 | `${ETC_PREFIX}/etc/pam.d/hikari-unlocker` | PAM policy used by `hikari-unlocker`. |
 | `${PREFIX}/share/wayland-sessions/hikari.desktop` | Session entry shown as **Hikari**; runs `start-hikari`. |
@@ -909,20 +971,38 @@ logging.
 | `XDG_CONFIG_HOME` | Configuration directory root. Falls back to `$HOME/.config`. |
 | `TERMINAL` | Terminal emulator used by the default configuration. |
 | `HIKARI_LOG` | File path for `start-hikari` to capture compositor output to. |
-| `XKB_DEFAULT_LAYOUT`, `XKB_DEFAULT_MODEL`, `XKB_DEFAULT_OPTIONS`, `XKB_DEFAULT_RULES` | Fallback keyboard configuration for keyboards not configured in `hikari.conf`. Read once at startup. |
+| `XKB_DEFAULT_LAYOUT`, `XKB_DEFAULT_MODEL`, `XKB_DEFAULT_OPTIONS`, `XKB_DEFAULT_RULES` | Fallback keyboard configuration for keyboards not configured in `hikari.lua`. Read once at startup. |
 | `XDG_CURRENT_DESKTOP` | This desktop's name, `Sakura`. Exported by `start-hikari`; also set by the compositor itself (without overwriting an existing value) so the binary session entry reports the same name. |
 | `XDG_SESSION_DESKTOP` | Same value, for the tools that read this one instead. |
 | `DBUS_SESSION_BUS_ADDRESS` | If unset, `start-hikari` wraps the compositor in `dbus-run-session`. |
 
-Any environment variable can also be referenced from string values in
-`hikari.conf` as `$VARIABLE` or `${VARIABLE}`; write `$$` to escape it.
+Any environment variable can also be read from `hikari.lua`, but through the
+global `env` table rather than by substitution into strings: `env.HOME` is the
+value of `$HOME` and `nil` when the variable is unset, which makes
+`env.TERMINAL or "foot"` the idiom for a value with a fallback. The one edge
+worth knowing is that a variable that is *set but empty* is an empty string,
+which is truthy in Lua, so `or` does not fire for it.
+
+There is no `$VARIABLE` or `${VARIABLE}` expansion any more, and no `$$`
+escape — a Lua string is literal, so `"$HOME"`, `"${HOME}"` and `"$$HOME"` all
+arrive as exactly those characters. That is a feature where the consumer is a
+shell: `actions` entries are run through `/bin/sh -c`, so a `$(date ...)` or a
+`${VAR}` written in one reaches the shell untouched and is expanded there.
+Where you want the *compositor's* environment instead, build the string
+yourself — `env.HOME .. "/Pictures"`.
+
+`env` reads the compositor's own environment as it stood when the compositor
+was executed. Reloading the configuration with `LS+r` re-reads the file inside
+that same process, so it sees the same environment it saw at startup: a
+variable has to be exported *before* `hikari` starts for it to have any
+effect.
 
 ## Documentation
 
 * `man hikari` — the complete reference: concepts, every action name, bindings,
   layouts, the UI/palette/colorscheme/animation/lock/bar configuration, inputs,
   outputs, and the control socket protocol.
-* `etc/hikari/hikari.conf` — the annotated default configuration.
+* `etc/hikari/hikari.lua` — the annotated default configuration.
 * [sofi](https://github.com/orpheus497/sofi),
   [saber](https://github.com/orpheus497/saber) and
   [sakura](https://github.com/orpheus497/sakura) document their own
