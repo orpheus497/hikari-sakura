@@ -192,9 +192,30 @@ release_primary_touch(struct hikari_cursor *cursor, uint32_t time_msec)
 
   /* touch_emulates_pointer is deliberately left as the press set it, so this
   release is forwarded exactly when its press was. */
+  bool suppressed = !cursor->touch_emulates_pointer;
+
   cursor->touch_synthesized = true;
   hikari_server.mode->button_handler(cursor, &button_event);
   cursor->touch_synthesized = false;
+
+  /* [COMMENT] Action purpose: Put the seat pointer back where the cursor
+  actually is, but only when the dispatch above was suppressed.
+
+  stop_cursor_down_handling() already ends with hikari_server_cursor_focus(),
+  and that is the call that would normally do this -- except that it runs
+  inside the window above, so the enter and motion it issues are gated by the
+  very flag that is still set. The button being suppressed is right; the
+  position refresh going with it is not. The cursor has been warped to the
+  finger, so without this the seat pointer keeps whatever surface and
+  coordinates it held before the touch, and the next physical click that
+  arrives without motion first is delivered against them.
+
+  Conditional rather than unconditional because when the client has no touch
+  support nothing was suppressed, the in-band refresh already happened, and a
+  second one would only repeat it. */
+  if (suppressed) {
+    hikari_server_cursor_focus();
+  }
 }
 
 void
@@ -1280,6 +1301,20 @@ hikari_cursor_deactivate(struct hikari_cursor *cursor)
   // "active" here would resume against stale state (or never reset) once
   // the cursor is reactivated.
   cursor->gesture_state.active = false;
+
+  /* [COMMENT] Action purpose: And the touchscreen recogniser, for the same
+  reason and more urgently. Its state is not one flag: fingers still down are
+  held in points[] with npoints counting them, and touch_gesture_reset() is
+  otherwise reached only when the last finger lifts or a cancel arrives --
+  neither of which can happen once the listeners above have been removed. A
+  deactivation mid-touch would therefore carry those points into the next
+  activation, where a new finger joins a sequence that no longer exists.
+
+  `claimed` is the part that does real harm. It survives as true, and the
+  down, motion, up and frame handlers all refuse to forward anything while it
+  is set, so touch input would be silently dead after the reactivation with
+  nothing left able to clear it. */
+  touch_gesture_reset();
 
   hikari_cursor_set_image(cursor, NULL);
 }
