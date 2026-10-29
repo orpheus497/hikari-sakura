@@ -33,11 +33,18 @@ static struct cursor_down_state cursor_down_state;
 /* [COMMENT] Function purpose: Whether the client should also be told about
 the button or motion currently being handled.
 
-False only while a touch point is driving this mode for a client that has
-bound wl_touch. That client is already receiving the real touch sequence, and
-a synthesised pointer event on top of it delivers one finger twice. Every
-other caller -- a real pointer, or a touch on a client with no touch support
--- gets true, so this changes nothing for them.
+False only for a dispatch that was synthesised from a touch point, and only
+when the client under that point has bound wl_touch. Such a client is already
+receiving the real touch sequence, and a synthesised pointer event on top of
+it delivers one finger twice.
+
+Gated on the ORIGIN of this dispatch rather than on whether a touch happens to
+be down. An earlier form tested cursor->has_primary_touch, which was wrong in
+both directions: it suppressed a physical mouse moved or clicked while a
+finger rested on a touch-capable client -- so a real button release could fail
+to reach the client holding it -- and, because release_primary_touch() clears
+has_primary_touch before dispatching, it let the synthesised release through
+after suppressing its press, leaving an unpaired BTN_LEFT release.
 
 Only the client half is gated. The compositor's own focus, raise and
 cursor-down bookkeeping around these calls runs regardless, which is what
@@ -47,7 +54,7 @@ notify_pointer(void)
 {
   struct hikari_cursor *cursor = &hikari_server.cursor;
 
-  return !cursor->has_primary_touch || cursor->touch_emulates_pointer;
+  return !cursor->touch_synthesized || cursor->touch_emulates_pointer;
 }
 
 static bool

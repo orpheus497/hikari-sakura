@@ -846,9 +846,19 @@ loop is genuinely uninterruptible rather than merely slow to interrupt.
 
 The rest of the library was checked rather than assumed: table.unpack raises
 "too many results to unpack", table.concat rejects a nil element, and
-string.format rejects an over-wide conversion. move is the only one that needs
-a ceiling. */
-#define CONFIG_TABLE_MOVE_MAX (1 << 20)
+string.format rejects an over-wide conversion.
+
+move is NOT the only one that needs a ceiling, which this comment claimed
+until insert and remove were measured too. Both shift elements in the same
+uninterruptible C loop, bounded by the table's raw length -- and a raw length
+can be enormous without the table being. `#` returns a border, not a count, so
+a constructor of thirty-one keys at the powers of two gives a table whose
+length is 2^30: measured with lua5.4, that table is built instantly and
+table.remove(t, 1) on it then ran for 22.6 seconds. A dense two-million
+element table, by contrast, removes in 0.014s. The cost follows the border,
+which a configuration can inflate for almost nothing, so all three are
+bounded by the same ceiling. */
+#define CONFIG_TABLE_ELEMENTS_MAX (1 << 20)
 
 /* Function purpose: Delegate to the real string function held as upvalue 1,
 having already checked whatever the caller's guard checked. Shared by both
@@ -904,6 +914,24 @@ config_string_pattern(lua_State *L)
   return config_string_delegate(L);
 }
 
+/* Function purpose: table.insert and table.remove with the TABLE's length
+bounded, which is what their shifting loops run over. Shared by both because
+the check is the same one: neither takes an element count of its own, so the
+only thing to bound is the length Lua will derive from the table itself. */
+static int
+config_table_sized(lua_State *L)
+{
+  if (lua_type(L, 1) == LUA_TTABLE
+      && lua_rawlen(L, 1) > (lua_Unsigned)CONFIG_TABLE_ELEMENTS_MAX) {
+    return luaL_error(L,
+        "table.insert and table.remove on a table of more than %d elements "
+        "exceed the configuration limit",
+        CONFIG_TABLE_ELEMENTS_MAX);
+  }
+
+  return config_string_delegate(L);
+}
+
 /* Function purpose: table.move with its element count bounded. */
 static int
 config_table_move(lua_State *L)
@@ -926,10 +954,10 @@ config_table_move(lua_State *L)
   The message names only the limit. The true count can exceed lua_Integer, so
   printing it would be the same overflow in the diagnostic. */
   if (e >= f &&
-      (lua_Unsigned)e - (lua_Unsigned)f >= (lua_Unsigned)CONFIG_TABLE_MOVE_MAX) {
+      (lua_Unsigned)e - (lua_Unsigned)f >= (lua_Unsigned)CONFIG_TABLE_ELEMENTS_MAX) {
     return luaL_error(L,
         "table.move of more than %d elements exceeds the configuration limit",
-        CONFIG_TABLE_MOVE_MAX);
+        CONFIG_TABLE_ELEMENTS_MAX);
   }
 
   return config_string_delegate(L);
@@ -956,6 +984,14 @@ config_push_guarded_table(lua_State *L)
   lua_getfield(L, -2, "move");
   lua_pushcclosure(L, config_table_move, 1);
   lua_setfield(L, -2, "move");
+
+  lua_getfield(L, -2, "insert");
+  lua_pushcclosure(L, config_table_sized, 1);
+  lua_setfield(L, -2, "insert");
+
+  lua_getfield(L, -2, "remove");
+  lua_pushcclosure(L, config_table_sized, 1);
+  lua_setfield(L, -2, "remove");
 
   lua_remove(L, -2);
 }

@@ -190,7 +190,11 @@ release_primary_touch(struct hikari_cursor *cursor, uint32_t time_msec)
     .state = WL_POINTER_BUTTON_STATE_RELEASED,
   };
 
+  /* touch_emulates_pointer is deliberately left as the press set it, so this
+  release is forwarded exactly when its press was. */
+  cursor->touch_synthesized = true;
   hikari_server.mode->button_handler(cursor, &button_event);
+  cursor->touch_synthesized = false;
 }
 
 void
@@ -278,7 +282,9 @@ cursor_touch_down_handler(struct wl_listener *listener, void *data)
       .state = WL_POINTER_BUTTON_STATE_PRESSED,
     };
 
+    cursor->touch_synthesized = true;
     hikari_server.mode->button_handler(cursor, &button_event);
+    cursor->touch_synthesized = false;
   }
 }
 
@@ -332,7 +338,10 @@ cursor_touch_motion_handler(struct wl_listener *listener, void *data)
   if (cursor->has_primary_touch
       && event->touch_id == cursor->primary_touch_id) {
     wlr_cursor_warp(cursor->wlr_cursor, &event->touch->base, lx, ly);
+
+    cursor->touch_synthesized = true;
     hikari_server.mode->cursor_move(event->time_msec);
+    cursor->touch_synthesized = false;
   }
 }
 
@@ -1122,6 +1131,7 @@ hikari_cursor_init(
 
   cursor->has_primary_touch = false;
   cursor->touch_emulates_pointer = false;
+  cursor->touch_synthesized = false;
   cursor->gesture_state.active = false;
 
   /* Zeroed explicitly rather than left to the caller's allocation: the

@@ -3,18 +3,31 @@
 
 auth include system
 
-# Action purpose: The account group is REQUIRED, not optional, now that
-# hikari-unlocker calls pam_acct_mgmt(). OpenPAM and Linux-PAM both fall back
-# to the "other" policy PER FACILITY when a service declares no modules for
-# one, and FreeBSD's base "other" is pam_deny for all four groups. Leaving
-# this line out therefore does not mean "skip the account check" -- it means
-# every unlock is refused, for every user, forever.
+# Action purpose: The account group is declared explicitly, not left out, now
+# that hikari-unlocker calls pam_acct_mgmt(). OpenPAM and Linux-PAM both fall
+# back to the "other" policy PER FACILITY when a service declares no modules
+# for one, so omitting this line does not mean "skip the account check" -- it
+# means inherit whatever "other" says.
 #
-# Measured in the Linux container (pam_acct_mgmt against a service with an
-# auth group and no account group, with "other" set to the deny-by-default
-# form FreeBSD, Fedora and Arch all ship): PAM_AUTH_ERR, with no explanation
-# from any module. The user's correct password is refused with a bare
-# "Authentication failure" and retrying never helps.
+# On FreeBSD that inheritance is the problem. Its base "other" account group
+# is, verbatim from lib/libpam/pam.d/other in the FreeBSD source tree
+# (identical in releng/14.3 and main):
+#
+#     account         required        pam_nologin.so
+#     account         required        pam_login_access.so
+#     account         required        pam_unix.so
+#
+# which is pam_nologin -- exactly the module the `system` versus `login` choice
+# below exists to avoid. Falling through to "other" would therefore reintroduce
+# it by the back door and let a /var/run/nologin written during shutdown refuse
+# the unlock.
+#
+# A deny-by-default "other", which some Linux distributions do ship, is the
+# harsher case: there pam_acct_mgmt against a service with an auth group and no
+# account group returns PAM_AUTH_ERR with no explanation from any module, so
+# the user's correct password is refused with a bare "Authentication failure"
+# and retrying never helps. Measured in the Linux container. FreeBSD is not
+# that case, but the line is required for both.
 #
 # `include` rather than a module list, and `system` rather than `login`, both
 # to mirror the auth line above: OpenPAM's include imports only the matching

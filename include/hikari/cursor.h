@@ -141,6 +141,20 @@ struct hikari_cursor {
   move and resize bookkeeping runs off the synthesised button either way. */
   bool touch_emulates_pointer;
 
+  /* [COMMENT] Action purpose: True only while a dispatch into the mode vtable
+  was synthesised from a touch point, rather than coming from a real pointer.
+
+  touch_emulates_pointer alone is not enough to decide whether a client should
+  be told about a button or motion, because it says what KIND of client is
+  under the finger, not where the current event came from. Keying on the touch
+  state by itself suppressed two things it should not have: a physical mouse
+  moved or clicked while a finger was down, and -- because
+  release_primary_touch() clears has_primary_touch before it dispatches -- the
+  synthesised release whose press had been suppressed, which left the client
+  holding an unpaired BTN_LEFT release. Set around each of the three
+  synthesised dispatch sites in cursor.c and read by normal_mode.c. */
+  bool touch_synthesized;
+
   struct hikari_touch_gesture_state touch_gesture;
 
   struct hikari_binding_group bindings[HIKARI_BINDING_GROUP_MASK];

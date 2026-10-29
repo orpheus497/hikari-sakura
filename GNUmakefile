@@ -70,21 +70,33 @@ $(HIKARI_REST): $(HIKARI_FIRST)
 # genuinely parallel on the first, so there is no reason to drop them.
 #
 # What is removed, and why each:
-#   --jobserver-auth=% / --jobserver-fds=%  GNU-only, and the actual cause of
-#     the failure above.
-#   -O% / --output-sync%  GNU's output synchronisation, which travels in
-#     MAKEFLAGS alongside -j and which bmake has no equivalent for. Measured:
-#     `make -j4 -Otarget` exports ` -j4 -Otarget --jobserver-auth=...`, and
-#     handing bmake the `-Otarget` that survived the jobserver filter makes it
-#     print its usage and stop -- the same class of failure as the jobserver
-#     flags, one option further along.
+#   --%  EVERY long option, not a list of the ones that have bitten so far.
+#     bmake has no long options at all -- its usage line is a single
+#     `[-BeikNnqrstWwX]` block plus short options taking arguments -- so any
+#     word starting with `--` makes it print that usage and stop. GNU make puts
+#     long options in MAKEFLAGS as a matter of course: its manual says the
+#     value is "a possibly empty group of characters representing single-letter
+#     options that take no argument, followed by a space and any options that
+#     take arguments or which have long option names". Measured: `make
+#     --no-print-directory` exports ` --no-print-directory`, and handing that to
+#     bmake exits 2 with the usage line -- so that one ordinary flag broke the
+#     build outright on Linux, which is the one thing this file exists to
+#     prevent. `--warn-undefined-variables` does the same. This pattern
+#     subsumes the jobserver flags (--jobserver-auth=, --jobserver-fds=) that
+#     first motivated the filter, --output-sync in all its forms, and the bare
+#     `--` separator.
+#   -O%  the SHORT form of output synchronisation, which `--%` cannot catch.
+#     It travels in MAKEFLAGS alongside -j and bmake has no equivalent.
+#     Measured: `make -j4 -Otarget` exports ` -j4 -Otarget
+#     --jobserver-auth=...`, and handing bmake the `-Otarget` that survived the
+#     jobserver filter makes it print its usage and stop.
 #   -j   the BARE form, which GNU make uses for "unlimited". bmake requires a
 #     number ("option requires an argument -- j"), and picking one here would
 #     be inventing a policy, so this degrades to serial. `-j4` and friends are
 #     kept and work.
-#   --   and $(MAKEOVERRIDES), the variable assignments, which are already
-#     passed to bmake as real arguments on the line below. Leaving them in
-#     MAKEFLAGS too would send each one twice and hand bmake a bare `--`.
+#   $(MAKEOVERRIDES)  the variable assignments, which are already passed to
+#     bmake as real arguments on the line below. Leaving them in MAKEFLAGS too
+#     would send each one twice.
 #
 # Expanded in the recipe, never with `:=`. At parse time MAKEFLAGS does not yet
 # carry the job flags -- measured: parse-time filtering of `make -j4` yields an
@@ -100,5 +112,5 @@ hikari-dispatch:
 # make IS bmake, the same command worked. The MAKEFLAGS filter above already
 # preserves n, so bmake receives it and does the dry run itself; this is the
 # only thing that was stopping it from ever being reached.
-	+@MAKEFLAGS='$(filter-out --jobserver-auth=% --jobserver-fds=% -O% --output-sync% -j -- $(MAKEOVERRIDES),$(MAKEFLAGS))' \
+	+@MAKEFLAGS='$(filter-out --% -O% -j $(MAKEOVERRIDES),$(MAKEFLAGS))' \
 		$(BMAKE) $(MAKEOVERRIDES) $(HIKARI_GOALS)
