@@ -32,10 +32,9 @@
  * 200 ms tick, so its whole cost is one opendir() and a handful of short
  * reads.
  *
- * The interfaces, the units and every selection policy below are quoted and
- * justified in .devdocs/research/sysfs.md (sections 1-5) and
- * .devdocs/research/proc.md (sections 1-3). Where those notes record a point
- * as unverified it is marked as such here too, and nothing is asserted about
+ * The interfaces, the units and every selection policy below are justified
+ * where they are used. A point that could not be confirmed against a kernel
+ * document is marked as such there, and nothing is asserted about
  * an ABI that the kernel documentation does not state.
  *
  * LIBRARIES
@@ -250,8 +249,8 @@ static int read_cpu_fields(unsigned long long *f)
         /* Action purpose: match the first token for equality with "cpu", not
          * by prefix and not by byte offset. A bare strncmp(line, "cpu", 3)
          * also matches the per-CPU "cpu0" lines, which are not the aggregate;
-         * and the two kernel sources quoted in .devdocs/research/proc.md 1.3
-         * disagree on how many spaces follow the token, so the numbers cannot
+         * and the kernel's own sources disagree on how many spaces follow
+         * the token, so the numbers cannot
          * be read from a fixed column either. strtoull() below skips the run
          * of blanks for us. */
         if (strncmp(line, "cpu", 3) == 0 && (line[3] == ' ' || line[3] == '\t')) {
@@ -312,8 +311,8 @@ double get_cpu_usage(void)
      * read materially higher here than on FreeBSD. Columns 9 and 10 (guest,
      * guest_nice) are left out of the total: they are widely held to be
      * already included in user and nice, which would double-count them, and
-     * that relationship is NOT stated in proc_stat(5) or the kernel docs --
-     * see .devdocs/research/proc.md 4.1, where it is recorded as unverified.
+     * that relationship is NOT stated in proc_stat(5) or the kernel docs, so
+     * it is treated as unconfirmed.
      * steal is counted as busy: it is time the vCPU was denied, which is
      * neither idle nor usable. */
     long long idle = (long long)(cur[CPU_IDLE]   - last_cpu[CPU_IDLE])
@@ -560,9 +559,8 @@ static int thermal_cpu_temp(int *out)
          * example, "acpitz", which is also the value in the thermal sysfs
          * doc's worked example. Preferring the one documented value is as far
          * as the documentation goes; any longer vocabulary would be invented.
-         * x86_pkg_temp is a plausible second candidate and is deliberately NOT
-         * matched here, because it is unverified -- see
-         * .devdocs/research/sysfs.md 6.4. */
+         * x86_pkg_temp is a plausible second candidate and is deliberately
+         * NOT matched here, because its semantics are unconfirmed. */
         if (read_attr(dir, "type", type, sizeof(type)) &&
             strcmp(type, "acpitz") == 0) {
             acpitz      = index;
@@ -666,7 +664,7 @@ double get_mem_usage(void)
      * without swapping", calculated from the file LRU lists and per-zone
      * watermarks. The numbers will differ, sometimes by tens of points on the
      * same workload, and on a ZFS FreeBSD box dramatically so. That is
-     * expected; .devdocs/research/proc.md 3.3 enumerates the four divergences.
+     * expected: the two platforms compute availability differently.
      *
      * No unit conversion and no page-size lookup: both operands come from the
      * same file carrying the same suffix, so whatever "kB" means there -- and
@@ -851,8 +849,8 @@ void get_bat_info(int *life, char *state, int *external)
              * show up with type "Battery" -- and averaging a mouse into the
              * laptop reading would be wrong. The kernel has a "scope" property
              * (System vs Device) meant for exactly this, but it is NOT in
-             * either reachable ABI file (see .devdocs/research/sysfs.md 6.1),
-             * and this file does not key on an interface it cannot cite. So
+             * either reachable ABI file, and this file does not key on an
+             * interface it cannot cite. So
              * only entries whose directory name follows the ACPI convention
              * are counted. This is a naming heuristic, not an ABI guarantee,
              * and is recorded as one.

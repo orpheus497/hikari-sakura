@@ -3,7 +3,6 @@
 // palette handling and the main loop; everything declared below is implemented
 // once per platform, by src/topbar_sensors_freebsd.c or (when it exists)
 // src/topbar_sensors_linux.c, and the Makefile selects one by ${OS}.
-// See DECISIONS_LOG D-05 and .devdocs/research/contract.md.
 //
 // These are the signatures src/topbar.c already used internally -- the split
 // removed `static`, nothing more. There is deliberately no initialiser and no
@@ -37,8 +36,8 @@ int get_cpu_temp(void);
 
 /* [COMMENT] Function purpose: Committed memory as a percentage of physical
 memory. Returns 0.0 when unavailable; the caller prints the block either way.
-The two platforms do not compute the same number from the same machine -- see
-.devdocs/research/proc.md section 3 -- only the same intent. */
+The two platforms do not compute the same number from the same machine, only
+the same intent. */
 double get_mem_usage(void);
 
 /* [COMMENT] Function purpose: Battery charge, charge-state label, and whether

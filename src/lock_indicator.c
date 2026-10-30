@@ -302,10 +302,9 @@ apart.
 
 [COMMENT] Action purpose: The wrap width and the three-line cap are the bound
 on a buffer whose content comes from a PAM module rather than from hikari.
-Measured with pangocairo on this host: with this configuration, 500 bytes of
-text -- one unbreakable 500-character word, a hundred short words, anything in
-between -- produce exactly 3 lines and a 600x51 pixel layout, and the ellipsis
-says that something was dropped.
+With this configuration 500 bytes of text -- one unbreakable 500-character
+word, a hundred short words, anything in between -- produce exactly 3 lines
+and a 600x51 pixel layout, and the ellipsis says that something was dropped.
 
 The cap holds only because the text cannot contain a mandatory line break.
 pango_layout_set_height() with a negative value limits WRAPPED lines and does
@@ -377,20 +376,16 @@ render_message(
   TEXT width, so drawing at the layout origin puts the glyphs that far to the
   right of a buffer that has no room for them.
 
-  Measured with pangocairo on this host, font "sans 20": "Login incorrect" --
-  the ordinary pam_unix failure string -- measures 190 pixels wide with a
-  logical x of 205, is given a 206 pixel surface, and lands at x=213..403. The
-  buffer handed to hikari_buffer_create_argb8888() below contained zero
-  non-transparent pixels: the user saw a deny circle and no reason for it.
-  "Sorry, try again." kept 5% of its pixels, "Permission denied" 23%.
+  At font "sans 20", "Login incorrect" -- the ordinary pam_unix failure
+  string -- is 190 pixels wide with a logical x of 205, so a surface sized to
+  the text holds 206 pixels while the glyphs land at x=213..403: entirely
+  outside it. Shorter diagnostics clip proportionally rather than completely.
 
-  Only a line that fills the whole 600 pixel wrap width has a logical x of 0.
-  That is why the 500-byte filler the comment above configure_message_layout()
-  measures renders perfectly while every real diagnostic does not, and it is why
-  this survived the measurement that produced those numbers. The offset is
-  subtracted at both draw sites below, which keeps the lines centred relative to
-  one another -- switching to PANGO_ALIGN_LEFT would also fix the clipping, but
-  it would left-align a multi-line message instead. */
+  Only a line filling the whole 600 pixel wrap width has a logical x of 0,
+  which is why a full-width filler string renders correctly while every real
+  diagnostic does not. The offset is subtracted at both draw sites below,
+  keeping the lines centred relative to one another -- PANGO_ALIGN_LEFT would
+  also fix the clipping, but would left-align a multi-line message. */
   PangoRectangle logical;
   pango_layout_get_pixel_extents(measure_layout, NULL, &logical);
 

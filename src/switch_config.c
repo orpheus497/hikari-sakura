@@ -1,9 +1,6 @@
 #include <hikari/switch_config.h>
 
-/* [COMMENT] Action purpose: free(3). This was previously reached by accident
-through <ucl.h>, which the configuration headers used to pull in; removing
-libucl took the transitive include with it and left free() implicitly declared.
-*/
+/* [COMMENT] Action purpose: free(3). */
 #include <stdlib.h>
 
 void

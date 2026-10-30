@@ -286,7 +286,7 @@ Unconditional once the contact was emulated, so the press always gets its
 release. Where the seat's pointer focus has already been cleared -- lock entry
 does exactly that, deliberately -- wlr_seat_pointer_send_button() returns at
 once on a NULL focused_client, so this neither reaches a client nor puts focus
-back, which is what the old release path got wrong. */
+back. */
 static void
 touch_pointer_end(struct hikari_cursor *cursor, uint32_t time_msec)
 {

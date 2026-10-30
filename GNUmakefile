@@ -13,9 +13,8 @@
 # GNUmakefile, then makefile, then Makefile, and stops at the first it finds --
 # so this file intercepts `make` before Makefile is ever parsed. bmake's
 # .MAKE.MAKEFILE_PREFERENCE is "makefile Makefile", which does not contain
-# GNUmakefile, so bmake cannot read this file even by accident. Both halves
-# verified directly against GNU Make 4.3 and bmake 20200710. The result is that
-# `make` does the right thing on Linux while the FreeBSD build path is
+# GNUmakefile, so bmake cannot read this file even by accident. The result is
+# that `make` does the right thing on Linux while the FreeBSD build path is
 # untouched, byte for byte.
 
 BMAKE := $(shell command -v bmake 2>/dev/null)
@@ -38,7 +37,7 @@ HIKARI_GOALS := $(if $(MAKECMDGOALS),$(MAKECMDGOALS),all)
 # each with its own view of the dependency graph and its own job slots, so
 # neither could order its work against the other's.
 #
-# One invocation is NOT a serialisation of the goals themselves. Measured:
+# One invocation is NOT a serialisation of the goals themselves:
 # `bmake -j4 slow fast` on a two-target makefile runs fast entirely inside
 # slow, and `make -j4 slow fast` does exactly the same -- so `make -j4 clean
 # all` races here as it races under plain GNU make, and is a user error in
@@ -94,7 +93,7 @@ $(HIKARI_REST): $(HIKARI_FIRST)
 #
 # Clearing MAKEFLAGS outright fixes that and costs too much: it also discards
 # -e, so `WITH_ALL=NO make -e` would silently build with WITH_ALL=YES, and it
-# throws away -j entirely so every parallel build runs serially. Measured:
+# throws away -j entirely so every parallel build runs serially.
 # bmake accepts `-j4`, `e`, `ks` and `n` from MAKEFLAGS unchanged, and goes
 # genuinely parallel on the first, so there is no reason to drop them.
 #
@@ -106,7 +105,7 @@ $(HIKARI_REST): $(HIKARI_FIRST)
 #     long options in MAKEFLAGS as a matter of course: its manual says the
 #     value is "a possibly empty group of characters representing single-letter
 #     options that take no argument, followed by a space and any options that
-#     take arguments or which have long option names". Measured: `make
+#     take arguments or which have long option names". `make
 #     --no-print-directory` exports ` --no-print-directory`, and handing that to
 #     bmake exits 2 with the usage line -- so that one ordinary flag broke the
 #     build outright on Linux, which is the one thing this file exists to
@@ -116,7 +115,7 @@ $(HIKARI_REST): $(HIKARI_FIRST)
 #     `--` separator.
 #   -O%  the SHORT form of output synchronisation, which `--%` cannot catch.
 #     It travels in MAKEFLAGS alongside -j and bmake has no equivalent.
-#     Measured: `make -j4 -Otarget` exports ` -j4 -Otarget
+#     `make -j4 -Otarget` exports ` -j4 -Otarget
 #     --jobserver-auth=...`, and handing bmake the `-Otarget` that survived the
 #     jobserver filter makes it print its usage and stop.
 #   -j   the BARE form, which GNU make uses for "unlimited". bmake requires a

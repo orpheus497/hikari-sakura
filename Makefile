@@ -37,11 +37,10 @@ PKG_CONFIG ?= pkg-config
 #
 # Empty is deliberate rather than literal "/etc": the sites below all append
 # /etc themselves, and the same variable feeds -DHIKARI_ETC_PREFIX, whose
-# stringified expansion in main.c appends "/etc/hikari/hikari.lua". Verified
-# that an empty -D value stringifies to "" and yields exactly
-# /etc/hikari/hikari.lua under -std=c11 -Wall -Wextra -pedantic.
+# stringified expansion in main.c appends "/etc/hikari/hikari.lua". An empty -D
+# value stringifies to "" and yields exactly /etc/hikari/hikari.lua.
 #
-# Still `?=`, so a distribution packager can override it as before.
+# `?=`, so a distribution packager can override it.
 .if ${OS} == "Linux"
 ETC_PREFIX ?=
 .else
@@ -181,8 +180,7 @@ LDFLAGS += ${LDFLAGS_EXTRA}
 # headers. Here it means what GNU conventions and every packaging tool mean by
 # it -- a staging directory to install INTO -- and it holds no headers at all,
 # so the redirection points the compiler at an empty directory and the first
-# #include fails: "assert.h: No such file or directory". Measured, before this
-# block existed, on a tree that builds cleanly without DESTDIR.
+# #include fails: "assert.h: No such file or directory".
 #
 # This Makefile sets no CPPFLAGS of its own; the injected flags reach the
 # compiler only through bmake's built-in .c.o rule, whose COMPILE.c expands
@@ -199,13 +197,12 @@ LDFLAGS += ${LDFLAGS_EXTRA}
 # directory as a SEPARATE word, and `:N` filters words, not sequences -- so
 # stripping `-idirafter` from a CPPFLAGS that already contained one would leave
 # its argument behind as a bare word, which the compiler reads as an input FILE.
-# Measured: with CPPFLAGS='-idirafter /opt/inc' in the environment and DESTDIR
-# set, the earlier three-word filter reduced it to the single word `/opt/inc`.
+# With CPPFLAGS='-idirafter /opt/inc' in the environment, a filter that removed
+# all three words would reduce it to the single word `/opt/inc`.
 # -nostdinc takes no argument, so it cannot do that.
 #
 # A no-op wherever the word is absent, which is why this cannot affect FreeBSD
-# -- whose sys.mk was not verified here, there being no FreeBSD host -- whatever
-# that sys.mk does. Note also that a CPPFLAGS set on the COMMAND LINE is
+# whatever its sys.mk does. Note also that a CPPFLAGS set on the COMMAND LINE is
 # immutable and reaches the compiler unfiltered, which is correct: make does not
 # let a makefile override it, and sys.mk's += cannot append to it either, so
 # there is nothing to undo in that case.
@@ -474,12 +471,11 @@ main.o: version.h
 # from the `-I.` at the tree root. The .d files do record that edge, but only
 # once a build has already succeeded, and `clean` deletes them again.
 #
-# Measured on a clean checkout: `bmake border.o` fails outright with
-# "wlr-layer-shell-unstable-v1-protocol.h: No such file or directory", which is
-# the whole proof -- nothing but this line states the dependency. The build
-# normally survives only because wayland-scanner happens to finish before the
-# first cc reaches the include. Stating it here fixes `bmake -j` on a clean
-# tree and a direct `bmake <object>.o` alike.
+# Without this line, a direct `bmake border.o` on a clean checkout fails with
+# "wlr-layer-shell-unstable-v1-protocol.h: No such file or directory", and a
+# parallel build survives only because wayland-scanner happens to finish before
+# the first cc reaches the include. Stating the dependency here is what makes
+# `bmake -j` on a clean tree and a direct `bmake <object>.o` correct.
 ${OBJS}: ${PROTOCOL_HEADERS}
 
 hikari: version.h ${PROTOCOL_HEADERS} ${OBJS}
@@ -492,24 +488,21 @@ wlr-layer-shell-unstable-v1-protocol.h:
 	wayland-scanner server-header protocol/wlr-layer-shell-unstable-v1.xml ${.TARGET}
 
 # [COMMENT] Action purpose: -Iinclude so this rule can reach hikari/compat.h.
-# It could not before, and that was the one binary where it mattered most:
 # hikari_unlocker.c calls explicit_bzero() six times on password buffers, and
-# with no -I at all it could only ever get that symbol from libc. On a C library
-# that does not export it -- which is exactly the case compat.h was written for
-# -- the setuid-root binary handling passwords failed to LINK, while the two
-# binaries that merely display things could compile the shim in. The header adds
-# nothing on FreeBSD and pulls in no library on Linux, so this does not widen
-# what the rule links; it only lets the declaration be found.
+# this rule sets no other -I, so without it the symbol could only come from
+# libc. On a C library that does not export it -- which is exactly the case
+# compat.h was written for -- this setuid-root binary would fail to LINK. The
+# header adds nothing on FreeBSD and pulls in no library on Linux, so this does
+# not widen what the rule links; it only lets the declaration be found.
 #
 # [COMMENT] Action purpose: compat.h is a prerequisite for the same reason it is
 # one for the top bar objects below -- this rule uses ${CFLAGS_EXTRA}, not
 # ${CFLAGS}, and -MMD -MP lives only in the latter. The rule therefore emits no
 # .d file and nothing else records that hikari_unlocker.c includes the header.
-# Measured: editing include/hikari/compat.h and re-running the target printed
-# "`hikari-unlocker' is up to date" and left the old binary byte-for-byte in
-# place. That matters more here than anywhere else in the tree, because this is
-# the setuid-root binary and the shim it would be missing is the explicit_bzero
-# it calls on password buffers.
+# Without the prerequisite, editing include/hikari/compat.h leaves the target
+# up to date and the old binary in place. That matters more here than anywhere
+# else in the tree, because this is the setuid-root binary and the shim it
+# would be missing is the explicit_bzero it calls on password buffers.
 hikari-unlocker: hikari_unlocker.c include/hikari/compat.h
 	${CC} ${CFLAGS_EXTRA} ${LDFLAGS_EXTRA} -Iinclude -o hikari-unlocker hikari_unlocker.c -lpam
 
@@ -523,8 +516,8 @@ hikari-unlocker: hikari_unlocker.c include/hikari/compat.h
 # for u_int, IFF_UP and usleep -- no feature-test macro may be defined for this
 # target (see the comment atop src/topbar.c).
 #
-# Two translation units since the platform sensor split: the portable half in
-# src/topbar.c and the ${OS}-selected half named by TOPBAR_SENSORS_SRC above.
+# Two translation units: the portable half in src/topbar.c and the
+# ${OS}-selected half named by TOPBAR_SENSORS_SRC above.
 #
 # Both are compiled by the EXPLICIT rules below rather than by the built-in
 # .c.o suffix rule, and that is the whole reason the rules exist. `.PATH: src`
@@ -640,13 +633,10 @@ DIST_FILES = \
 		etc/pam.d/hikari-unlocker.*
 
 # [COMMENT] Action purpose: Stage the files under a directory named after the
-# release, then archive that directory. The point of the two spellings this
-# replaces was only to prefix every path with "hikari-${VERSION}/", and each was
-# specific to one tar: --transform is GNU tar's, -s is bsdtar's, and neither
-# implementation accepts the other's. That is why this rule used to be branched
-# on ${OS}, and the branch is the thing worth deleting -- it meant `make dist`
-# was the one target whose behaviour depended on which tar happened to be
-# installed rather than on which platform it claimed to support.
+# release, then archive that directory. Prefixing every path with
+# "hikari-${VERSION}/" from a flag would be tar-specific -- --transform is GNU
+# tar's, -s is bsdtar's, and neither implementation accepts the other's -- so
+# the rule would have to branch on which tar is installed.
 #
 # Having the files actually LIVE in a directory of that name needs no flag at
 # all. What is left -- -c, -f, -x and -z -- is present in GNU tar, bsdtar and
@@ -656,8 +646,8 @@ DIST_FILES = \
 # src/ need, and tar can.
 #
 # Deliberately NOT switched to bsdtar on Linux. bsdtar is not installed by
-# default on the common distributions -- on this machine it comes from Debian's
-# libarchive-tools, a separate package -- while GNU tar is the default, so
+# default on the common distributions -- it is a separate package, Debian's
+# libarchive-tools among them -- while GNU tar is the default, so
 # requiring bsdtar would ADD a build dependency and break `make dist` on a
 # stock system. Requiring neither is strictly better than requiring either.
 # Two further things this recipe gets right, both of which the obvious spelling
@@ -673,7 +663,7 @@ DIST_FILES = \
 # It also does NOT pipe one tar into the other. A pipeline's status is the LAST
 # command's, so a source tar that fails part way -- a DIST_FILES entry missing
 # or unreadable -- is masked by a successful extract, and `make dist` reports
-# success while shipping an incomplete archive. Measured: `tar -cf - present.txt
+# success while shipping an incomplete archive: `tar -cf - present.txt
 # missing.txt | (cd stage && tar -xf -)` exits 0 with only present.txt staged.
 # Writing the intermediate archive to a file instead puts each tar on its own
 # recipe line, where bmake stops at the first non-zero exit, so a missing member
@@ -720,25 +710,23 @@ install: hikari hikari-unlocker hikari-topbar share/man/man1/hikari.1
 	# [COMMENT] Action purpose: the trailing slash in the pattern is what keeps
 	# this from corrupting the file's own documentation. A bare `s,PREFIX,...,`
 	# also rewrites the `$${ETC_PREFIX}` named in the header comment, so the
-	# installed configuration told the reader it lived in `$${ETC_/usr/local}`.
+	# installed configuration would tell the reader it lived in
+	# `$${ETC_/usr/local}`.
 	# Every live use of the token is a path, so it is always followed by `/`,
 	# while the prose mentions are followed by `}` or a space.
 	# [COMMENT] Action purpose: Never overwrite a configuration the administrator
-	# has already edited. This had been an unconditional truncating redirect, so
-	# a second `make install` -- an upgrade -- silently destroyed every local
-	# keybinding and setting in the project's main configuration file. The PAM
-	# policy further down this same recipe already does exactly this .new dance;
-	# the two config files were being treated in contradictory ways, and this is
-	# the one that holds the user's work.
+	# has already edited: an upgrade must not destroy local keybindings and
+	# settings. The PAM policy further down this same recipe does the same .new
+	# dance.
 	#
 	# Generated into a temporary file in the destination directory and moved into
 	# place, rather than redirected straight at the destination. `>` truncates
-	# before sed runs, so a sed that failed part way -- a full disk is the
-	# ordinary way -- left a half-written configuration behind while chmod still
-	# succeeded and the recipe still reported success. Adding the existence check
-	# above made that worse rather than better: the next install would see the
-	# truncated file, decide it was the administrator's work, and preserve it
-	# instead of repairing it. set -e stops the recipe on the sed itself, the mv
+	# before sed runs, so a sed that fails part way -- a full disk is the
+	# ordinary way -- would leave a half-written configuration behind while
+	# chmod still succeeded and the recipe still reported success, and the
+	# existence check above would then see the truncated file, decide it was
+	# the administrator's work, and preserve it instead of repairing it. set -e
+	# stops the recipe on the sed itself, the mv
 	# is atomic because the temporary sits in the same directory as its target,
 	# and the trap takes the temporary away on any exit that does not reach it.
 	#
@@ -748,9 +736,8 @@ install: hikari hikari-unlocker hikari-topbar share/man/man1/hikari.1
 	# pre-created as a symlink, and `>` follows it: the redirect truncates
 	# whatever it points at and the chmod then sets that target's mode, both as
 	# whatever user is running the install, which for a system install is root.
-	# Measured: with the old name, a symlink planted at it left the victim file
-	# truncated from 27 bytes to 17; mktemp creates the file itself, mode 600 and
-	# never a symlink, so the same attempt leaves it untouched.
+	# mktemp creates the file itself, mode 600 and never a symlink, so the
+	# planted target is left untouched.
 	@set -e; \
 	cfg_dir="${DESTDIR}/${ETC_PREFIX}/etc/hikari"; \
 	cfg_tmp=$$(mktemp "$$cfg_dir/hikari.lua.XXXXXX"); \
@@ -803,8 +790,8 @@ install: hikari hikari-unlocker hikari-topbar share/man/man1/hikari.1
 	# Omitting it while the identity stays "Sakura" costs screen sharing and
 	# screenshots, with nothing logged to say why -- the two changes are a pair.
 	install -m 644 share/xdg-desktop-portal/sakura-portals.conf ${DESTDIR}/${PREFIX}/share/xdg-desktop-portal/sakura-portals.conf
-# [COMMENT] Action purpose: FreeBSD installs one policy chosen by OS and is
-# unchanged by this block. Linux cannot: the include target differs by family,
+# [COMMENT] Action purpose: FreeBSD installs one policy chosen by OS. Linux
+# cannot: the include target differs by family,
 # so the stack is detected on the target system and the matching template
 # installed. See PAM_CONFDIR and PAM_STACK at the top of this file.
 .if ${OS} == "Linux"

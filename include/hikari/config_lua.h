@@ -5,9 +5,8 @@ table that file returns, and the single diagnostic sink those parsers report
 through.
 
 WHAT THIS IS NOT. It is not a configuration library. There is no path lookup, no
-schema, no defaulting helper and no coercion policy: each declaration below
-replaces exactly one libucl entry point that the Lua port deletes, so that every
-one of the recurring shapes in the old parsers has one mechanical translation.
+schema, no defaulting helper and no coercion policy: there is one declaration
+below per shape the parsers need, so each has exactly one spelling.
 
 THE LIFETIME RULE, UNCHANGED FROM LIBUCL. Nothing obtained from the
 configuration outlives it, and it lives until hikari_config_lua_read() returns.
@@ -28,13 +27,12 @@ Neither bounds a single long-running C call, and that gap is reachable from the
 whitelisted standard library. The hook counts VM instructions, and no VM
 instruction is executed while a C function runs, so the hook cannot interrupt
 one; a C function that does not allocate is invisible to the cap as well. Two
-measured cases: `string.rep("", math.maxinteger)` loops inside one C call past
-25 seconds without the hook firing once and allocates nothing at all, so no cap
-can see it; and Lua's pattern matcher backtracks, so `string.find` over a few
-dozen characters with a dozen `.-` items runs for tens of seconds in one C
-call, with zero instructions counted and a few kilobytes allocated. Either line
-in a configuration file hangs the compositor at startup, before any output is
-lit. Measured, not inferred -- see .devdocs/research/outstanding-plan.md.
+cases reach that gap: `string.rep("", math.maxinteger)` loops inside one C call
+without the hook firing once and allocates nothing at all, so no cap can see
+it; and Lua's pattern matcher backtracks, so `string.find` over a few dozen
+characters with a dozen `.-` items runs for a long time in one C call, with
+zero instructions counted and a few kilobytes allocated. Either line in a
+configuration file hangs the compositor at startup, before any output is lit.
 
 This is an accepted limitation, not an oversight. Closing it needs a
 time-based watchdog rather than an instruction count, because a hook cannot

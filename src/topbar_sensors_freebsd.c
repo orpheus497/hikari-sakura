@@ -5,9 +5,8 @@
  * Script function and purpose: Supplies the six sensors declared in
  * include/hikari/topbar_sensors.h for FreeBSD -- CPU usage, CPU temperature,
  * memory usage, battery, backlight, and AMD GPU telemetry. The first five were
- * moved here verbatim from src/topbar.c when the helper was split by platform
- * (DECISIONS_LOG D-05, .devdocs/research/contract.md); only the `static`
- * keyword was dropped from the five definitions so the shared translation unit
+ * defined here rather than in src/topbar.c so the helper splits by platform;
+ * they carry no `static` keyword so the shared translation unit
  * can call them. The snapshot get_cpu_usage() needs moved with it and stays
  * private to this file. The sixth, get_amd_gpu_info(), is new and reports
  * unavailable here -- see the comment above it for why that is the whole

@@ -223,22 +223,15 @@ parse_split(
   slots says nothing about recursion depth, and running out of them is a
   different failure, so it reads differently.
 
-  The figure is 16 rather than a counted minimum, and that is deliberate.
-  A review raised that the worst path might need 9 -- the iterator's key and
-  value, the "scale" field's value, and the "min" and "max" that
-  parse_scale_dynamic holds live at the same time, since it pushes both before
-  its single lua_settop. Counting by hand I get 5 plus whatever
-  parse_scale_value pushes, which is under 8, but I could not pin the exact
-  figure by measurement: instrumenting this function means editing the
-  PARSE_SPLIT macro that generates half of it, and the system liblua is built
-  without LUA_USE_APICHECK, so an overrun would be silent rather than
-  asserted.
-
-  So rather than record a count I have not verified, the reservation carries a
-  margin. lua_checkstack() only ensures capacity -- it is not an allocation
-  per slot, and every nested level re-checks on entry -- so the margin costs
-  nothing and the question stops mattering. If the real figure is 8 this is a
-  no-op; if it is 9 it closes an overrun that the C API calls undefined. */
+  The figure is 16 rather than a counted minimum, and that is deliberate. The
+  worst path holds the iterator's key and value, the "scale" field's value,
+  and the "min" and "max" that parse_scale_dynamic keeps live at the same
+  time, since it pushes both before its single lua_settop; the exact count is
+  awkward to pin down, because the PARSE_SPLIT macro generates half of this
+  function and the system liblua is built without LUA_USE_APICHECK, so an
+  overrun would be silent rather than asserted. lua_checkstack() only ensures
+  capacity -- it is not an allocation per slot, and every nested level
+  re-checks on entry -- so the margin costs nothing. */
   if (!lua_checkstack(L, 16)) {
     hikari_config_error(NULL, "cannot reserve Lua stack for a layout element");
     goto done;
@@ -371,11 +364,10 @@ parse_scale(lua_State *L, int scale_idx, struct hikari_split_scale *scale)
   int type = lua_type(L, scale_idx);
 
   switch (type) {
-    /* Action purpose: Both number subtypes are taken, where libucl's parser
-    accepted only UCL_FLOAT here and dropped an integer into the silent
-    default below. No integer is a legal scale -- the range is 0.1 to 0.9 --
-    so `scale = 1` now reaches parse_scale_value() and is refused by name
-    instead of failing with no message at all. */
+    /* Action purpose: Both number subtypes are taken. No integer is a legal
+    scale -- the range is 0.1 to 0.9 -- so `scale = 1` reaches
+    parse_scale_value() and is refused by name rather than falling into the
+    default below with no message. */
     case LUA_TNUMBER:
       scale->type = HIKARI_SPLIT_SCALE_TYPE_FIXED;
       if (!parse_scale_value(L, scale_idx, "scale", &scale->scale.fixed)) {
@@ -429,12 +421,11 @@ done:
           goto done;                                                           \
         }                                                                      \
       } else if (!strcmp(key, "orientation")) {                                \
-        /* Action purpose: Which half of a split is laid out first used to be  \
-        decided by which of the two keys libucl yielded first, and a Lua       \
-        table has no order to read that from. The orientation is therefore     \
-        written down, defaulting to the key order's own default so that a      \
-        configuration which wrote "#first" before "#second" -- every split in  \
-        the shipped default does -- needs no new key and behaves as it did. */ \
+        /* Action purpose: A Lua table has no key order, so which half of a    \
+        split is laid out first cannot be read from the table and is written   \
+        down explicitly instead. It defaults to the order every split in the   \
+        shipped configuration writes, "#first" before "#second", so no         \
+        configuration needs to name it. */                                     \
         const char *value;                                                     \
                                                                                \
         if (!hikari_config_string(                                             \
@@ -1643,10 +1634,10 @@ parse_switches(
 
     switch_config->switch_name = strdup(key);
 
-    /* Action purpose: Every other hikari_action_parse() call site initialises
-    its action first, and this one did not -- so a switch whose entry set only
-    `begin` left `end` holding whatever the allocation came with, and toggling
-    the switch back called it. */
+    /* Action purpose: hikari_action_parse() does not initialise the action it
+    writes into, so without this a switch whose entry sets only `begin` leaves
+    `end` holding whatever the allocation came with, and toggling the switch
+    back calls it. */
     hikari_action_init(&switch_config->action);
 
     if (!hikari_action_parse(&switch_config->action,
@@ -1780,10 +1771,9 @@ parse_background(lua_State *L,
     if (!strcmp(key, "path")) {
       /* Action purpose: copy_in_config_string() returns NULL when the value is
       not a string, having already printed the diagnostic. Without this test
-      the walk continued, iter.failed stayed false, and the function returned
-      true after reporting an error -- the one "error printed, success
-      returned" path left in this rewrite. has_background is set only once the
-      copy succeeded, so a NULL can never be handed to
+      the walk would continue, iter.failed would stay false, and the function
+      would return true after reporting an error. has_background is set only
+      once the copy succeeded, so a NULL can never be handed to
       hikari_output_config_set_background(). */
       *background =
           copy_in_config_string(L, iter.vidx, "an outputs background", key);
@@ -2047,10 +2037,8 @@ parse_step(
   hikari_config_int() hands back an int64_t and configuration->step is an int,
   so without a check the assignment is a silent narrowing conversion. It is
   silent in the worst way -- the load SUCCEEDS and the compositor runs with a
-  value the user never wrote. Measured before this check existed:
-
-    step = 4294967296   loaded, and became 0            -- movement does nothing
-    step = 2147483648   loaded, and became -2147483648  -- movement inverts
+  value the user never wrote: 4294967296 narrows to 0 and movement does
+  nothing, 2147483648 narrows to -2147483648 and movement inverts.
 
   server.c reads this straight into `const int step` at three call sites and
   adds it to view geometry, so a negative value moves views the wrong way at

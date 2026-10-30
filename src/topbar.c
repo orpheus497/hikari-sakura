@@ -66,8 +66,7 @@ is why the disk sensor stays in this shared file instead of being duplicated
 per platform. FreeBSD keeps the native spelling here: statvfs(3) is the
 portable alternative and would delete this branch, but FreeBSD's own
 statvfs(3) manual calls its output garbage that portable applications must not
-depend on, and describes it as a lossy wrapper around statfs(). See
-.devdocs/research/libc.md section 7c and .devdocs/research/contract.md C.5. */
+depend on, and describes it as a lossy wrapper around statfs(). */
 #if defined(__linux__)
 #include <sys/vfs.h>
 #else
@@ -411,28 +410,17 @@ static void get_net_status(char *buf) {
          * On FreeBSD the name is the test. wlan(4) is the single interface
          * driver every 802.11 device is cloned onto, so a wireless interface
          * is always wlanN and the prefix is driver-derived rather than a
-         * guess. Unchanged from before this split.
+         * guess.
          *
-         * On Linux the name is NOT the test, and using it was a real defect.
-         * systemd's predictable interface names give wlp3s0, wlo1 and similar,
-         * none of which begin with "wlan" -- so the prefix test failed and
-         * every Wi-Fi-only laptop fell through to the wired branch and had its
-         * top bar report ETHERNET. The kernel exposes the property directly
-         * instead: a wireless interface carries a `wireless` directory, and a
-         * cfg80211 one additionally a `phy80211` link, under
-         * /sys/class/net/<ifname>/. Both are tested because `wireless` covers
-         * the older wireless-extensions drivers as well.
-         *
-         * Honesty note on sourcing: the kernel's own
-         * ABI/testing/sysfs-class-net page could not be retrieved from this
-         * environment to quote (404 at the documented URL, while other
-         * docs.kernel.org pages served normally), so this is the conventional
-         * test rather than one quoted from the ABI document, and it is
-         * untested here because the container exposes no wireless device.
-         * It is nonetheless strictly better than the name prefix, which is
-         * known-wrong on Linux rather than merely uncited. A failure of the
-         * probe degrades to "wired", which is the same answer the old code
-         * gave, so the worst case is unchanged behaviour. */
+         * On Linux the name is NOT the test: systemd's predictable interface
+         * names give wlp3s0, wlo1 and similar, none of which begin with
+         * "wlan", so a prefix test reports every Wi-Fi-only laptop as
+         * ETHERNET. The kernel exposes the property directly: a wireless
+         * interface carries a `wireless` directory, and a cfg80211 one
+         * additionally a `phy80211` link, under /sys/class/net/<ifname>/.
+         * Both are tested because `wireless` covers the older
+         * wireless-extensions drivers as well. A failure of the probe
+         * degrades to "wired". */
         int is_wifi;
 #if defined(__linux__)
         char wpath[sizeof("/sys/class/net//phy80211") + IFNAMSIZ];
@@ -513,21 +501,16 @@ int main(int argc, char **argv) {
      * branch below is skipped for the lifetime of the process.
      *
      * Action purpose: NVIDIA is probed FIRST and AMD only when NVIDIA did not
-     * answer, so a machine with an NVIDIA card behaves exactly as it did
-     * before AMD support existed -- same probe, same single nvidia-smi call
-     * per second, same numbers.  On the rare machine carrying both, NVIDIA
-     * therefore wins.  That is the conservative choice rather than a judgement
-     * about which card matters more: the bar has one GPU slot and three
-     * blocks, the NVIDIA reading is the one this program has always shown, and
-     * changing which card an existing machine reports would be a regression
-     * for its owner.  A machine with an AMD card and no NVIDIA driver falls
-     * through to the AMD probe and gains the blocks it never had.
+     * answer, so on the rare machine carrying both, NVIDIA wins.  That is the
+     * conservative choice rather than a judgement about which card matters
+     * more: the bar has one GPU slot and three blocks.  A machine with an AMD
+     * card and no NVIDIA driver falls through to the AMD probe.
      *
-     * Both flags are latched here and never recomputed, which is the existing
-     * behaviour: a driver that appears mid-session is not picked up, and a
-     * card that stops answering empties the blocks rather than switching
-     * vendors.  On FreeBSD get_amd_gpu_info() always returns 0, so
-     * amd_present stays 0 and nothing about that platform changes.
+     * Both flags are latched here and never recomputed: a driver that appears
+     * mid-session is not picked up, and a card that stops answering empties
+     * the blocks rather than switching vendors.  On FreeBSD
+     * get_amd_gpu_info() always returns 0, so amd_present stays 0 and the GPU
+     * slot there is NVIDIA-only.
      * ─────────────────────────────────────────────────────────────────── */
     update_nvidia_info(&s.gpu);
     const int nvidia_present = s.gpu.available;

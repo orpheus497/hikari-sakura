@@ -14,12 +14,11 @@
 #include <errno.h>
 
 /* [COMMENT] Action purpose: explicit_bzero() for a C library that does not
-have one. This file scrubs password buffers in six places and, before this
-include, could only ever get that symbol from libc -- its rule passed no -I at
-all, so the shim written for exactly this case was unreachable from the one
-binary where a failed scrub matters most. On FreeBSD the header expands to
-<strings.h> and <unistd.h> and nothing else, so the preprocessed output of a
-FreeBSD build is unchanged and this costs that platform nothing.
+have one. This file scrubs password buffers in six places, and its build rule
+sets no -I of its own beyond the one that reaches this header, so without it
+the symbol could only come from libc. On FreeBSD the header expands to
+<strings.h> and <unistd.h> and nothing else, so it costs that platform
+nothing.
 
 This does NOT undo the independence the wire-format comment below describes.
 That independence is about the two IPC structs, which are duplicated on purpose
@@ -70,7 +69,7 @@ struct hikari_unlock_reply {
 
 /* [COMMENT] Action purpose: Pin the wire layout as literals. The two copies of
 these structs live in separate files on purpose -- this binary must not depend
-on the tree's headers -- and until now nothing but prose kept them in step. A
+on the tree's headers. A
 silent divergence is invisible at runtime rather than loud: the compositor
 would read a wrong `seq`, discard every reply as stale, and the lock screen
 would refuse every password with no diagnostic whatsoever. A _Static_assert
@@ -186,12 +185,10 @@ lines into the compositor's renderer. Truncate on a character boundary when the
 accumulator is full, because a half-written sequence is precisely the malformed
 UTF-8 the first rule exists to keep out.
 
-The newline is excluded on measured grounds rather than taste. The compositor
-caps the rendered message at three lines with pango_layout_set_height(-3), and
-that cap holds for wrapped text but NOT across explicit line breaks: measured
-with pangocairo on this host, 500 bytes of text wrap to exactly 3 lines and
-600x51 pixels however they are spaced, while 250 repetitions of "x\n" produce
-251 lines and a 4267-pixel-tall layout. Several messages are therefore joined
+The newline is excluded for a concrete reason. The compositor caps the
+rendered message at three lines with pango_layout_set_height(-3), and that cap
+holds for wrapped text but NOT across explicit line breaks, which Pango treats
+as paragraph breaks rather than wraps. Several messages are therefore joined
 with a visible separator instead, which keeps the whole diagnostic one
 wrappable paragraph and the buffer bounded whatever a module emits.
 
@@ -225,7 +222,7 @@ append_message(const char *text, bool is_error)
   size_t restore_to = message_len;
 
   // [COMMENT] Action purpose: A visible separator rather than a newline, for
-  // the reason measured above. Skipped rather than truncated when it will not
+  // the reason above. Skipped rather than truncated when it will not
   // fit, so a full accumulator never ends in a dangling separator.
   static const char separator[] = " | ";
 
@@ -345,11 +342,11 @@ conversation_handler(int num_msg,
         }
         break;
 
-      // [COMMENT] Action purpose: PAM explaining itself. Previously dropped on
-      // the floor, which is what makes a pam_faillock lockout unexplainable:
-      // the tally returns PAM_AUTH_ERR for the CORRECT password until the
-      // timeout expires, and the only place PAM says so is a PAM_TEXT_INFO.
-      // Accumulated here and relayed with the reply instead.
+      // [COMMENT] Action purpose: PAM explaining itself. Without this a
+      // pam_faillock lockout is unexplainable: the tally returns PAM_AUTH_ERR
+      // for the CORRECT password until the timeout expires, and the only
+      // place PAM says so is a PAM_TEXT_INFO. Accumulated here and relayed
+      // with the reply.
       case PAM_ERROR_MSG:
         append_message(msg[i]->msg, true);
         break;
@@ -457,9 +454,8 @@ check_password(const char *username)
   system-auth all carry `pam_unix.so ... nullok`. nullok is defensible for a
   console login on a machine with no password set; it is not defensible for
   unlocking a session that is already running, where it means anyone walking
-  past can dismiss the lock screen by pressing Enter. FreeBSD is affected by
-  this change too, and deliberately so -- the reasoning is not platform
-  specific. */
+  past can dismiss the lock screen by pressing Enter. The flag is passed on
+  FreeBSD too -- the reasoning is not platform specific. */
   int pam_status = pam_authenticate(auth_handle, PAM_DISALLOW_NULL_AUTHTOK);
 
   // [COMMENT] Action purpose: Zero out sensitive password buffer immediately after authentication attempt.
@@ -470,11 +466,8 @@ check_password(const char *username)
   allows retry; every other non-success code is treated as unrecoverable and
   exits.
 
-  Two corrections to the earlier reading of this branch, both established by
-  running a probe against real stacks rather than from the documentation:
-
-  PAM_MAXTRIES does not arrive here. It was previously listed as the lockout
-  code, but pam_faillock(8) documents PAM_AUTH_ERR for "too many failed logins"
+  PAM_MAXTRIES does not arrive here: pam_faillock(8) documents PAM_AUTH_ERR
+  for "too many failed logins"
   and that is what a locked tally actually returns -- so a lockout presents as
   an ordinary wrong password and stays on the retryable path, which is correct:
   the user may still type the right password once the tally expires.
@@ -484,14 +477,14 @@ check_password(const char *username)
   unconditionally; Fedora gates it behind with-faillock), three wrong attempts
   lock the account, after which the CORRECT password also returns
   PAM_AUTH_ERR until the timeout expires. PAM explains that through a
-  PAM_TEXT_INFO, and the explanation is now relayed: conversation_handler
+  PAM_TEXT_INFO, and the explanation is relayed: conversation_handler
   above captures both PAM_TEXT_INFO and PAM_ERROR_MSG through
   append_message(), struct hikari_unlock_reply carries message_is_error,
   message_len and message, and src/lock_mode.c sanitises the text and hands it
   to hikari_lock_indicator_set_message() for display beneath the indicator. So
   the refusal says why it is refusing rather than looking like a typo.
 
-  PAM_PERM_DENIED (6) is reachable and was absent from this list. It is what a
+  PAM_PERM_DENIED (6) is reachable. It is what a
   structurally broken policy produces -- an `include` naming a stack that does
   not exist returns it from pam_authenticate rather than failing at pam_start.
   It is deliberately left on the fatal path: it signals a configuration fault,
@@ -522,8 +515,8 @@ check_password(const char *username)
 
   /* [COMMENT] Action purpose: Account management -- the call that makes
   `account` lines in the installed policy mean anything at all. Without it they
-  were inert: an expired account, an expired password, a pam_time window and a
-  faillock tally evaluated in the `account` group were all ignored on unlock.
+  are inert: an expired account, an expired password, a pam_time window and a
+  faillock tally evaluated in the `account` group are all ignored on unlock.
 
   Order and guard are both load-bearing. It runs AFTER pam_authenticate and
   ONLY on PAM_SUCCESS. On an unauthenticated handle it would leak account state
@@ -533,16 +526,13 @@ check_password(const char *username)
   cleared above and is deliberately not held across this call: account
   management has no business with a password.
 
-  Every code is classified deliberately. The codes and their accompanying
-  conversation messages were MEASURED against Linux-PAM 1.5.3 rather than
-  taken from documentation:
+  Every code is classified deliberately:
 
     * PAM_SUCCESS -- the account may be used right now. The only code that
       unlocks unqualified.
 
-    * PAM_NEW_AUTHTOK_REQD (measured: 12, from pam_unix after `chage -d 0`,
-      alongside PAM_ERROR_MSG "You are required to change your password
-      immediately") -- UNLOCKS, with the explanation relayed. This is the one
+    * PAM_NEW_AUTHTOK_REQD -- UNLOCKS, with the explanation relayed. This is
+      the one
       place where refusing would be worse than allowing. A screen locker cannot
       run pam_chauthtok(): there is no old/new/confirm dialogue, and
       conversation_handler above answers every prompt from the same single
@@ -550,21 +540,19 @@ check_password(const char *username)
       password to all three prompts. Treating it as failure would mean a user
       whose password expires WHILE THEIR SESSION IS RUNNING can never unlock
       it, leaving the session this locker exists to protect reachable only by
-      killing it. Nor is it a widening of what counts as a successful unlock:
-      the password has already been proved, this is exactly what happened
-      before this call existed, and it is no longer silent, because the reply
-      now carries the reason. The lock screen is gone by the time a successful
+      killing it. The password has already been proved, and the outcome is not
+      silent: the reply carries the reason. The lock screen is gone by the
+      time a successful
       unlock is drawn, so the compositor logs this one rather than drawing it.
 
-    * PAM_AUTH_ERR (measured: 7, both from `account required pam_deny.so` and
-      from Debian's common-account when its pam_unix arm fails) -- RETRYABLE,
+    * PAM_AUTH_ERR -- RETRYABLE,
       the same classification this code already has for pam_authenticate. It is
       the one account-group refusal that is plausibly transient, a faillock
       tally being the obvious case, so the helper stays alive for the next
       attempt instead of exiting.
 
-    * Everything else -- PAM_ACCT_EXPIRED (measured: 13), PAM_USER_UNKNOWN
-      (measured: 10), PAM_PERM_DENIED, and any code not listed -- FATAL.
+    * Everything else -- PAM_ACCT_EXPIRED, PAM_USER_UNKNOWN,
+      PAM_PERM_DENIED, and any code not listed -- FATAL.
       These are configuration or account facts rather than a mistyped
       password; retrying cannot change them and looping would spin forever
       against a stack that can never succeed. This is where PAM_PERM_DENIED
@@ -572,7 +560,7 @@ check_password(const char *username)
 
   No refusal here is silent. Where the account stack explained itself, the
   conversation handler has already captured the text; where it did not --
-  PAM_USER_UNKNOWN produced no message at all when measured -- pam_strerror()
+  PAM_USER_UNKNOWN typically produces none -- pam_strerror()
   supplies one, so the lock screen never shows a bare refusal the user has no
   way to act on. */
   if (success) {

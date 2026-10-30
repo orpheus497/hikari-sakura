@@ -13,17 +13,6 @@
 
 // [COMMENT] Action purpose: Supplies explicit_bzero() and closefrom() on
 // Linux; expands to the two base-system headers and nothing else on FreeBSD.
-// It replaces a bare `extern void explicit_bzero(void *, size_t);` that was
-// only ever true of glibc: on a C library that does not export the symbol that
-// declaration promises a function which is not there, and the build fails at
-// link rather than at compile, with no hint of which header lied.
-//
-// Position is not load-bearing, despite where it sits. compat.h's Linux branch
-// includes <string.h> and <unistd.h> itself before it defines either name, so
-// the header is self-contained and this include compiles first, last or in the
-// middle -- verified by compiling a translation unit that includes it ahead of
-// every libc header. It is kept here only so the grouping reads in the order a
-// reader expects: libc, then the shim that completes libc, then wlroots.
 #include <hikari/compat.h>
 
 #include <wlr/types/wlr_seat.h>
@@ -99,8 +88,8 @@ struct hikari_unlock_reply {
 
 /* [COMMENT] Action purpose: Pin the wire layout as literals. The two copies of
 these structs live in separate files on purpose -- hikari-unlocker builds with
-its own minimal rule and must not depend on the tree's headers -- and until now
-nothing but prose kept them in step. A silent divergence is invisible at
+its own minimal rule and must not depend on the tree's headers. A silent
+divergence is invisible at
 runtime rather than loud: this process would read a wrong `seq`, discard every
 reply as stale, and the lock screen would refuse every password with no
 diagnostic whatsoever. A _Static_assert cannot compare two translation units,
@@ -454,13 +443,11 @@ NUL-terminated on the wire; nothing read off this pipe may be passed to a
 string function before this function has terminated it.
 
 EVERY control codepoint is dropped, the newline included. That is what makes
-the renderer's three-line cap a hard bound rather than an intention: measured
-with pangocairo on this host, 500 bytes of text wrap to exactly 3 lines and
-600x51 pixels however they are spaced, while 250 repetitions of "x\n" produce
-251 lines and a 4267-pixel-tall layout, because pango_layout_set_height() caps
-wrapped lines and not explicit paragraph breaks. The helper already joins
-several PAM messages with a visible separator instead of a newline, and this is
-the check that does not depend on it having done so.
+the renderer's three-line cap a hard bound rather than an intention:
+pango_layout_set_height() caps wrapped lines and not explicit paragraph
+breaks. The helper already joins several PAM messages with a visible separator
+instead of a newline, and this is the check that does not depend on it having
+done so.
 
 Anything that is not valid UTF-8 is rejected outright rather than handed to
 Pango, and truncation happens on a character boundary, because a half-written
@@ -496,19 +483,9 @@ sanitize_message(
     codepoints, and they are the reason the list is not just "controls". They
     are categories Zl and Zp, not Cc, so no control-character test catches
     them -- but Unicode gives them line-break class BK, mandatory break, the
-    same class as U+000A. Measured with pangocairo on this host, in the same
-    layout configuration the renderer uses:
-
-      500 x's                 3 lines, 600x51   -- the documented case
-      250x "x" + U+000A     251 lines, 7x4267   -- what this filter stops
-      250x "x" + U+2029     251 lines, 7x4267   -- identical, and it did NOT
-      250x "x" + U+2028       3 lines, 600x55
-
-    So U+2029 defeated the three-line cap exactly as a newline does, which
-    made the "hard bound" this function is supposed to guarantee an intention
-    after all. U+2028 happens to be wrapped rather than broken by this Pango
-    version and stayed inside the cap, but it carries the same Unicode break
-    class, so it is dropped too rather than left to depend on that. */
+    same class as U+000A, so either can defeat the three-line cap exactly as a
+    newline does. Both are dropped rather than left to depend on how a given
+    Pango version happens to treat them. */
     if (codepoint < 0x20 || codepoint == 0x7f ||
         (codepoint >= 0x80 && codepoint <= 0x9f) ||
         codepoint == 0x2028 || codepoint == 0x2029) {

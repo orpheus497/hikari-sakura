@@ -14,10 +14,10 @@ lua_tolstring and lua_tostring are called in exactly nine places in this file
 sits directly behind an exact `lua_type(...) == LUA_TSTRING` test. The count is
 part of the invariant, not decoration: it is what lets a reviewer check the
 claim by grepping rather than by trusting this paragraph, so a new call means
-this number changes with it. It was stale once already -- the pattern-length
-guard added a ninth and left the text saying eight. No slot this file touches can therefore ever change type,
-whatever index a caller hands in, and the hazard is structurally absent rather
-than merely avoided. Any new call that is not behind that test is a defect.
+this number changes with it. No slot this file touches can therefore ever
+change type, whatever index a caller hands in, and the hazard is structurally
+absent rather than merely avoided. Any new call that is not behind that test
+is a defect.
 
 THE SECOND INVARIANT. A Lua error is a longjmp. It runs no cleanup, so it skips
 every free() a C frame still owed, and if no protected call is below it, it
@@ -71,14 +71,10 @@ static const char *config_path = NULL;
 with the root at index 0. This is what the include depth limit and the
 self-inclusion check are computed from.
 
-It used to be derived from the Lua call stack instead, by walking lua_getstack
-and counting frames whose ar.what is "main". That read correctly for every
-shape I tested and was wrong for one I did not: a TAIL CALL from a main chunk
+It is not derived from the Lua call stack: a TAIL CALL from a main chunk
 replaces that chunk's frame, so `local function go() return include("x") end
-return go()` leaves no "main" frame for the including file on the stack at all.
-Both guards then saw an empty chain -- the depth never grew and the file never
-matched itself -- and a file including itself that way recursed until Lua
-raised "C stack overflow" instead of being refused at depth 1. Measured.
+return go()` leaves no "main" frame for the including file to count, and both
+guards would see an empty chain.
 
 Each entry points at the `resolved` buffer in the config_include() frame that
 pushed it, which stays live for exactly as long as the entry does, because that
@@ -326,7 +322,7 @@ hikari_config_field(lua_State *L, int tidx, const char *key)
 
   /* Action purpose: lua_rawget on anything but a table is UNDEFINED BEHAVIOUR,
   not an error. Its api_check is compiled out of a release build of Lua, and
-  measured against the library installed here both lua_rawget and lua_next
+  and both lua_rawget and lua_next
   SIGSEGV on a string -- a protected call does not catch it, because nothing is
   raised. The configuration controls these types, so `ui = "oops"` would be a
   crash rather than a diagnostic without this test, which also covers an index
@@ -497,14 +493,12 @@ config_alloc(void *ud, void *ptr, size_t osize, size_t nsize)
 /* Function purpose: Stop a configuration that will not terminate.
 
 Action purpose: the hook stays ARMED across the raise, and that is the whole
-point. It previously disarmed itself with lua_sethook(L, NULL, 0, 0) on the
-reasoning that the raise must not re-enter it -- but lua_error() longjmps
-immediately, so there is nothing to re-enter, and the disarm was permanent.
-Nothing re-armed it, so the FIRST budget error removed the limit for the rest
-of the load: a configuration that caught that error then ran unbounded and hung
-the compositor at startup. Reproduced before this change, fixed after.
+point. It must NOT disarm itself with lua_sethook(L, NULL, 0, 0): lua_error()
+longjmps immediately, so there is nothing to re-enter, and nothing would re-arm
+it -- the first budget error would remove the limit for the rest of the load.
 
-Staying armed is only half the fix. The other half is that pcall is no longer
+Staying armed is only half of what makes this a bound. The other half is that
+pcall is not
 in the sandbox whitelist (see config_whitelist below), so the configuration
 cannot catch this error at all and it propagates to the lua_pcall that
 hikari_config_lua_read() placed below everything. Either half alone is
@@ -671,8 +665,8 @@ config_resolve_include(
 from the chain config_include() maintains rather than from the Lua call stack.
 
 Action purpose: the chain is consulted and not lua_getstack, because the call
-stack does not survive a tail call. See the comment on config_include_chain
-for the shape that broke -- a main chunk doing `return go()` is replaced by
+stack does not survive a tail call: a main chunk doing `return go()` is
+replaced by
 go's frame, so the file doing the including is no longer represented. The chain
 is pushed and popped by config_include() around its own lua_call, so it is
 exactly the set of files whose execution has started and not finished, which is
@@ -786,8 +780,7 @@ says, collectgarbage because it lets a configuration stop the collector, and
 warn because it has no use here. print stays: the configuration is a program
 now, and a program you cannot print from is hostile to write.
 
-Three further exclusions exist to keep the instruction budget enforceable, and
-each was added after reproducing the failure it prevents:
+Three further exclusions exist to keep the instruction budget enforceable:
 
 pcall (and xpcall, never listed) would let a configuration CATCH the budget
 error. Caught in a loop, the limit stops being a limit: the load never
@@ -812,10 +805,9 @@ CONFIG_STRING_REP_MAX bounds string.rep's repeat COUNT, not its result size.
 The distinction is the bug: Lua's own guard rejects a rep whose result would
 exceed MAXSIZE, but `string.rep("", math.maxinteger)` produces a zero-length
 result, passes that guard, and then runs its copy loop nearly maxinteger times.
-It allocates nothing, so the memory cap does not catch it either. Measured: with
-a count hook armed at interval 1000 it ran past 25 seconds without the hook ever
-firing once. A configuration containing that one line hung the compositor at
-startup, permanently.
+It allocates nothing, so the memory cap does not catch it either, and no VM
+instruction executes inside that loop, so the count hook never fires. A
+configuration containing that one line hangs the compositor at startup.
 
 CONFIG_PATTERN_SUBJECT_MAX bounds the subject handed to the pattern functions.
 Lua's matcher backtracks, and the work is superlinear in subject length, so an
@@ -831,33 +823,26 @@ string.rep("-", 80) uses 80 of a million; a config string long enough to reach
 #define CONFIG_STRING_REP_MAX (1 << 20)
 #define CONFIG_PATTERN_SUBJECT_MAX (1 << 16)
 
-/* Action purpose: the same ceiling for table.move, which is the one function
-outside the string library with the same shape -- a C loop the instruction hook
-cannot enter.
+/* Action purpose: the same ceiling for the three table functions with the same
+shape as the string pair -- a C loop the instruction hook cannot enter.
 
 Lua guards the obvious spelling and not the real one. table.move(t, 1,
 math.maxinteger, 2, {}) is refused with "destination wrap around", which makes
 the function look bounded. Moving to destination 1 does not wrap, so
 table.move({}, 1, math.maxinteger, 1, {}) is accepted -- and because the source
 is empty it copies nils, growing nothing, so the memory cap never sees it
-either. Measured: hung past 30 seconds with the hook firing zero times. A
-50-million element move completed in 0.66s with zero hook calls, confirming the
-loop is genuinely uninterruptible rather than merely slow to interrupt.
+either, and no VM instruction executes inside the loop for the hook to count.
 
-The rest of the library was checked rather than assumed: table.unpack raises
-"too many results to unpack", table.concat rejects a nil element, and
-string.format rejects an over-wide conversion.
+table.insert and table.remove shift elements in the same uninterruptible C
+loop, bounded by the table's raw length -- and a raw length can be enormous
+without the table being. `#` returns a border, not a count, so a constructor of
+thirty-one keys at the powers of two gives a table whose length is 2^30, which
+costs almost nothing to build and then takes tens of seconds to shift. All
+three are bounded by the same ceiling.
 
-move is NOT the only one that needs a ceiling, which this comment claimed
-until insert and remove were measured too. Both shift elements in the same
-uninterruptible C loop, bounded by the table's raw length -- and a raw length
-can be enormous without the table being. `#` returns a border, not a count, so
-a constructor of thirty-one keys at the powers of two gives a table whose
-length is 2^30: measured with lua5.4, that table is built instantly and
-table.remove(t, 1) on it then ran for 22.6 seconds. A dense two-million
-element table, by contrast, removes in 0.014s. The cost follows the border,
-which a configuration can inflate for almost nothing, so all three are
-bounded by the same ceiling. */
+Elsewhere in the library the guards hold: table.unpack raises "too many results
+to unpack", table.concat rejects a nil element, and string.format rejects an
+over-wide conversion. */
 #define CONFIG_TABLE_ELEMENTS_MAX (1 << 20)
 
 /* Function purpose: Delegate to the real string function held as upvalue 1,
@@ -939,17 +924,13 @@ config_table_move(lua_State *L)
   lua_Integer f = luaL_optinteger(L, 2, 0);
   lua_Integer e = luaL_optinteger(L, 3, 0);
 
-  /* Action purpose: take the difference in UNSIGNED arithmetic. The previous
-  form computed `e - f` in lua_Integer directly beneath a comment saying it
-  must not, which is exactly the trap the comment described: for f = -2^62 and
-  e = 2^62 the subtraction overflows, and signed overflow is undefined
-  behaviour. It never leaked a hang -- Lua's own luaL_argcheck refuses that
-  range with "too many elements to move" -- but a guard that relies on
-  undefined behaviour is not a guard.
+  /* Action purpose: take the difference in UNSIGNED arithmetic. For f = -2^62
+  and e = 2^62, `e - f` in lua_Integer overflows, and signed overflow is
+  undefined behaviour -- a guard that relies on it is not a guard.
 
   lua_Unsigned subtraction is defined to wrap, and for e >= f the result is
-  the exact difference, so the comparison is correct for every input the
-  earlier form was wrong for. e < f is an empty move and Lua's own job.
+  the exact difference, so the comparison is correct for every input. e < f is
+  an empty move and Lua's own job.
 
   The message names only the limit. The true count can exceed lua_Integer, so
   printing it would be the same overflow in the diagnostic. */
