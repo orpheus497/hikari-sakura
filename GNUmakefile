@@ -35,10 +35,18 @@ HIKARI_GOALS := $(if $(MAKECMDGOALS),$(MAKECMDGOALS),all)
 # Action purpose: Hand every goal to a single bmake run, not one run per goal.
 # Serialising the remaining goals behind the first is what guarantees that:
 # without it, `make clean all` would start two independent bmake processes,
-# which race over the same object files and, for `dist`, over the same tarball
-# members -- the very hazard the .ORDER directive in Makefile exists to prevent.
-# For the same reason -j is deliberately NOT forwarded: parallelism is bmake's
-# to schedule across the real dependency graph, which only it can see.
+# each with its own view of the dependency graph and its own job slots, so
+# neither could order its work against the other's.
+#
+# One invocation is NOT a serialisation of the goals themselves. Measured:
+# `bmake -j4 slow fast` on a two-target makefile runs fast entirely inside
+# slow, and `make -j4 slow fast` does exactly the same -- so `make -j4 clean
+# all` races here as it races under plain GNU make, and is a user error in
+# both. Matching GNU make is the point of this file; serialising goals it does
+# not serialise would be a divergence, not a fix.
+#
+# -j is deliberately not forwarded unbounded: parallelism is bmake's to
+# schedule across the real dependency graph, which only it can see.
 #
 # $(MAKEOVERRIDES) carries command-line variable assignments through, so
 # `make PREFIX=/usr WITH_XWAYLAND=NO install` reaches bmake intact.
