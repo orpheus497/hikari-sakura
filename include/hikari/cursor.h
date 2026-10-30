@@ -129,31 +129,38 @@ struct hikari_cursor {
   int32_t primary_touch_id;
   struct wlr_touch *primary_touch_device;
 
-  /* [COMMENT] Action purpose: Whether the primary touch point should also
-  reach its client as wl_pointer input. False when that client has bound
-  wl_touch: it is already receiving the real touch sequence, and sending a
-  synthesised button on top of it delivers one finger twice -- a toolkit that
-  implements both protocols, which GTK, Qt, Firefox and Chromium all do, sees
-  a touch and a click for a single tap. True for a client that has no touch
-  support, which would otherwise get nothing at all from a touchscreen.
+  /* [COMMENT] Action purpose: Whether the primary contact is also being
+  delivered to its client as wl_pointer input.
 
-  Only the client notification is conditional. hikari's own focus, raise,
-  move and resize bookkeeping runs off the synthesised button either way. */
+  False when that client has bound wl_touch: it is already receiving the real
+  touch sequence, and a synthesised button on top of it delivers one finger
+  twice -- a toolkit that implements both protocols, which GTK, Qt, Firefox
+  and Chromium all do, sees a touch and a click for a single tap. True for a
+  client that has no touch support, which would otherwise get nothing at all
+  from a touchscreen. Also false when the contact fell on no surface, or when
+  a mouse binding consumed it, because there is then nothing to deliver.
+
+  Latched once when the contact begins and cleared when it ends, so the
+  emulated press and its release always travel together. Read only by the
+  three touch_pointer_* functions in cursor.c, which are the only things that
+  emit pointer input for a finger -- the modes emit none, which is what keeps
+  a client from being reached twice. */
   bool touch_emulates_pointer;
 
-  /* [COMMENT] Action purpose: True only while a dispatch into the mode vtable
-  was synthesised from a touch point, rather than coming from a real pointer.
+  /* [COMMENT] Action purpose: Where an emulated contact started, in layout
+  pixels and in its surface's own frame.
 
-  touch_emulates_pointer alone is not enough to decide whether a client should
-  be told about a button or motion, because it says what KIND of client is
-  under the finger, not where the current event came from. Keying on the touch
-  state by itself suppressed two things it should not have: a physical mouse
-  moved or clicked while a finger was down, and -- because
-  release_primary_touch() clears has_primary_touch before it dispatches -- the
-  synthesised release whose press had been suppressed, which left the client
-  holding an unpaired BTN_LEFT release. Set around each of the three
-  synthesised dispatch sites in cursor.c and read by normal_mode.c. */
-  bool touch_synthesized;
+  Motion is reported as the surface-local start plus the layout displacement
+  since, rather than by re-hit-testing, so a finger dragged beyond the edge of
+  the window keeps reporting into it -- what a pointer drag does, and what a
+  client being dragged expects. Kept here rather than in normal mode's
+  cursor_down_state because a seat has one pointer but many fingers, and
+  sharing that one anchor is what let a touch release tear down a mouse
+  drag. */
+  double touch_pointer_lx;
+  double touch_pointer_ly;
+  double touch_pointer_sx;
+  double touch_pointer_sy;
 
   struct hikari_touch_gesture_state touch_gesture;
 

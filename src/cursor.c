@@ -5,6 +5,7 @@
 #include <assert.h>
 #include <errno.h>
 #include <math.h>
+#include <time.h>
 
 #include <hikari/evdev.h>
 
@@ -62,7 +63,7 @@ cursor_touch_frame_handler(struct wl_listener *listener, void *data);
 /* Touchscreen gesture recognition. Defined further down, beside the touchpad
 gesture code it shares its classifiers and binding lookup with, but called
 from the touch handlers above it. */
-static void
+static bool
 touch_gesture_down(int32_t id, double lx, double ly, uint32_t time_msec);
 
 static void
@@ -73,6 +74,9 @@ touch_gesture_up(int32_t id, uint32_t time_msec);
 
 static void
 touch_gesture_reset(void);
+
+static void
+touch_cancel_client_sequences(struct hikari_touch_gesture_state *state);
 
 static void
 cursor_swipe_begin_handler(struct wl_listener *listener, void *data);
@@ -174,69 +178,21 @@ configure_bindings(struct hikari_cursor *cursor, struct wl_list *bindings)
 
 // Touch and Gesture Handlers
 
-// [COMMENT] Function purpose: Release whatever mode-level "click" the
-// primary touch point started (focus/raise, or an in-progress move/resize
-// drag), so a touch_up or touch_cancel can never leave the mode state
-// machine stuck waiting for a release that will never arrive.
-static void
-release_primary_touch(
-    struct hikari_cursor *cursor, uint32_t time_msec, bool refresh_focus)
-{
-  cursor->has_primary_touch = false;
-
-  struct wlr_pointer_button_event button_event = {
-    .pointer = NULL,
-    .time_msec = time_msec,
-    .button = BTN_LEFT,
-    .state = WL_POINTER_BUTTON_STATE_RELEASED,
-  };
-
-  /* touch_emulates_pointer is deliberately left as the press set it, so this
-  release is forwarded exactly when its press was. */
-  bool suppressed = !cursor->touch_emulates_pointer;
-
-  cursor->touch_synthesized = true;
-  hikari_server.mode->button_handler(cursor, &button_event);
-  cursor->touch_synthesized = false;
-
-  /* [COMMENT] Action purpose: Put the seat pointer back where the cursor
-  actually is, but only when the dispatch above was suppressed.
-
-  stop_cursor_down_handling() already ends with hikari_server_cursor_focus(),
-  and that is the call that would normally do this -- except that it runs
-  inside the window above, so the enter and motion it issues are gated by the
-  very flag that is still set. The button being suppressed is right; the
-  position refresh going with it is not. The cursor has been warped to the
-  finger, so without this the seat pointer keeps whatever surface and
-  coordinates it held before the touch, and the next physical click that
-  arrives without motion first is delivered against them.
-
-  Conditional rather than unconditional because when the client has no touch
-  support nothing was suppressed, the in-band refresh already happened, and a
-  second one would only repeat it. */
-  if (suppressed && refresh_focus) {
-    hikari_server_cursor_focus();
-  }
-}
-
-void
-hikari_cursor_release_primary_touch(
-    struct hikari_cursor *cursor, struct wlr_touch *touch)
-{
-  if (cursor->has_primary_touch && cursor->primary_touch_device == touch) {
-    release_primary_touch(cursor, 0, true);
-  }
-}
-
 /* [COMMENT] Function purpose: Whether the client owning this surface has
 bound wl_touch, and so is already receiving the real touch sequence.
 
-This is what decides whether a touch point is also delivered as pointer
+This is what decides whether a touch contact is also delivered as pointer
 input. A client with touch support that is sent both sees one finger twice:
 GTK, Qt, Firefox and Chromium all implement wl_touch and wl_pointer, and a
 single tap arriving as a touch and a click can activate a control twice. A
-client without touch support gets nothing at all from a touchscreen unless
-the pointer is synthesised for it, so for those it still is. */
+client without touch support gets nothing at all from a touchscreen unless the
+pointer is synthesised for it, so for those it still is.
+
+The same test wlroots itself applies before it will create a touch point at
+all -- touch_point_create() in types/seat/wlr_seat_touch.c returns NULL when
+`wl_list_empty(&client->touches)`, "touch points are not valid without a
+connected client with touch" -- so the two halves agree by construction rather
+than by a heuristic of our own that could drift from it. */
 static bool
 surface_client_has_touch(struct wlr_surface *surface)
 {
@@ -248,6 +204,148 @@ surface_client_has_touch(struct wlr_surface *surface)
       hikari_server.seat, wl_resource_get_client(surface->resource));
 
   return seat_client != NULL && !wl_list_empty(&seat_client->touches);
+}
+
+// Function purpose: Monotonic milliseconds, for the paths that must release a
+// contact without an input event to take a timestamp from.
+static uint32_t
+touch_now_msec(void)
+{
+  struct timespec now;
+  clock_gettime(CLOCK_MONOTONIC, &now);
+
+  return (uint32_t)(now.tv_sec * 1000LL + now.tv_nsec / 1000000LL);
+}
+
+/* [COMMENT] Function purpose: Begin delivering a touch contact to a client
+that cannot speak wl_touch, as pointer input.
+
+Every client-facing pointer event a finger ever produces is emitted by these
+three functions and nowhere else. That is the whole point of the arrangement:
+the modes run window management and emit nothing, so a client is reached by
+exactly one path and a finger cannot be delivered twice.
+
+The order is the protocol's, not a convenience. wl_pointer.button carries no
+coordinates -- a client applies it wherever it last saw the pointer -- so the
+enter and the motion have to precede it or the tap lands at the previous tap's
+position, or in whichever window the pointer happened to be left in. The enter
+cannot be relied on to carry the position either: wlr_seat_pointer_enter()
+returns early when the surface is unchanged, so a second tap in the same
+window would emit nothing at all without the explicit motion.
+
+Nothing here can be driven off the cursor's own motion signal, because
+wlr_cursor_warp() does not emit one. */
+static void
+touch_pointer_begin(struct hikari_cursor *cursor,
+    struct wlr_surface *surface,
+    double lx,
+    double ly,
+    double sx,
+    double sy,
+    uint32_t time_msec)
+{
+  struct wlr_seat *seat = hikari_server.seat;
+
+  cursor->touch_pointer_lx = lx;
+  cursor->touch_pointer_ly = ly;
+  cursor->touch_pointer_sx = sx;
+  cursor->touch_pointer_sy = sy;
+
+  wlr_seat_pointer_notify_enter(seat, surface, sx, sy);
+  wlr_seat_pointer_notify_motion(seat, time_msec, sx, sy);
+  wlr_seat_pointer_notify_button(
+      seat, time_msec, BTN_LEFT, WL_POINTER_BUTTON_STATE_PRESSED);
+  wlr_seat_pointer_notify_frame(seat);
+}
+
+/* [COMMENT] Function purpose: Carry an emulated contact's movement to its
+client, in the surface frame the contact started in.
+
+Measured from the contact's own anchor rather than re-hit-testing, so a finger
+dragged past the edge of the window keeps reporting into that window -- which
+is what a pointer drag does, and what a client being dragged expects. This is
+the same arithmetic normal mode's cursor_down_move() does for a mouse, kept
+separate from it deliberately: there is one pointer but many fingers, and
+sharing one anchor is what let a touch release tear down a mouse drag. */
+static void
+touch_pointer_motion(struct hikari_cursor *cursor, double lx, double ly,
+    uint32_t time_msec)
+{
+  struct wlr_seat *seat = hikari_server.seat;
+
+  double sx = cursor->touch_pointer_sx + (lx - cursor->touch_pointer_lx);
+  double sy = cursor->touch_pointer_sy + (ly - cursor->touch_pointer_ly);
+
+  wlr_seat_pointer_notify_motion(seat, time_msec, sx, sy);
+  wlr_seat_pointer_notify_frame(seat);
+}
+
+/* [COMMENT] Function purpose: Release an emulated contact.
+
+Unconditional once the contact was emulated, so the press always gets its
+release. Where the seat's pointer focus has already been cleared -- lock entry
+does exactly that, deliberately -- wlr_seat_pointer_send_button() returns at
+once on a NULL focused_client, so this neither reaches a client nor puts focus
+back, which is what the old release path got wrong. */
+static void
+touch_pointer_end(struct hikari_cursor *cursor, uint32_t time_msec)
+{
+  struct wlr_seat *seat = hikari_server.seat;
+
+  wlr_seat_pointer_notify_button(
+      seat, time_msec, BTN_LEFT, WL_POINTER_BUTTON_STATE_RELEASED);
+  wlr_seat_pointer_notify_frame(seat);
+}
+
+/* [COMMENT] Function purpose: End the primary contact: release the emulated
+button if there was one, and tell the mode the contact is over.
+
+No focus refresh. The mode's touch_end does window management only, and the
+client half above either pairs its own press or is a no-op because focus is
+already gone. */
+static void
+release_primary_touch(struct hikari_cursor *cursor, uint32_t time_msec)
+{
+  cursor->has_primary_touch = false;
+
+  if (cursor->touch_emulates_pointer) {
+    touch_pointer_end(cursor, time_msec);
+    cursor->touch_emulates_pointer = false;
+  }
+
+  if (hikari_server.mode->touch_end != NULL) {
+    hikari_server.mode->touch_end(cursor, time_msec);
+  }
+}
+
+/* [COMMENT] Function purpose: Clean up after a touch device that has gone
+away mid-touch.
+
+wlroots emits neither up nor cancel for a device being destroyed --
+wlr_touch_finish() fires only events.destroy -- so every point that device was
+driving would otherwise stay down forever. For the recogniser that is fatal
+rather than untidy: npoints never falls back to zero, touch_gesture_reset() is
+reached only when the last finger lifts, and a sequence that had already been
+claimed keeps `claimed` set, which suppresses every touch event from every
+device for the rest of the session.
+
+The recogniser tracks no device per point, so the whole sequence goes. A
+second touchscreen's fingers are dropped with it, which is why their clients
+are cancelled first: a point forgotten without a cancel leaves its client
+holding a touch that can never end. Spoiling a concurrent gesture is a far
+smaller cost than leaving touch dead. */
+void
+hikari_cursor_release_primary_touch(
+    struct hikari_cursor *cursor, struct wlr_touch *touch)
+{
+  uint32_t time_msec = touch_now_msec();
+
+  if (cursor->has_primary_touch && cursor->primary_touch_device == touch) {
+    release_primary_touch(cursor, time_msec);
+  }
+
+  touch_cancel_client_sequences(&cursor->touch_gesture);
+  touch_gesture_reset();
 }
 
 static void
@@ -267,46 +365,67 @@ cursor_touch_down_handler(struct wl_listener *listener, void *data)
 
   hikari_server_node_at(lx, ly, &surface, &workspace, &sx, &sy);
 
-  touch_gesture_down(event->touch_id, lx, ly, event->time_msec);
+  bool tracked = touch_gesture_down(event->touch_id, lx, ly, event->time_msec);
 
-  // Action purpose: Only notify a touch-down when the hit test actually
-  // found a surface -- there is nothing meaningful to deliver a down event
-  // to otherwise (e.g. a touch that starts on bare wallpaper) -- and only
-  // while the sequence still belongs to the client, rather than to a
-  // compositor gesture that has claimed it.
-  if (surface != NULL && !cursor->touch_gesture.claimed) {
+  /* [COMMENT] Action purpose: Nothing of a touch reaches any client while the
+  screen is locked.
+
+  hikari's lock screen is drawn by the compositor -- there is no session-lock
+  client and no surface to deliver to -- and node_at() knows nothing about it:
+  it hit-tests hikari's own geometry lists, so it goes on returning the
+  ordinary window under the finger however the lock layer is composited. A
+  pointer cannot leak through that because every client-facing pointer call
+  lives inside a mode and lock mode's handlers are empty, but these touch
+  handlers deliver to clients directly, so they have to decline for
+  themselves.
+
+  Only the down is guarded. A sequence that began before the lock has already
+  been cancelled by hikari_cursor_deactivate(), and wlroots makes a motion or
+  an up for a touch id it holds no point for a silent no-op, so a contact that
+  never got a down cannot deliver anything later either. */
+  bool locked = hikari_server_in_lock_mode();
+
+  /* [COMMENT] Action purpose: Forward the down only when the recogniser took
+  the point, the hit test found something to deliver it to, and the sequence
+  still belongs to the client rather than to a claimed compositor gesture.
+
+  `tracked` is load-bearing, not caution: the suppression a claim applies is by
+  sequence, so a point the recogniser could not record is one that
+  touch_cancel_client_sequences() cannot find later. Sending it anyway would
+  leave its client holding a touch that the claim then swallows the end of. */
+  if (!locked && tracked && surface != NULL && !cursor->touch_gesture.claimed) {
     wlr_seat_touch_notify_down(
         hikari_server.seat, surface, event->time_msec, event->touch_id, sx, sy);
   }
 
-  // [COMMENT] Action purpose: the first finger of a fresh multi-touch
-  // sequence also drives hikari's own focus/raise/move/resize bookkeeping,
-  // exactly like a left mouse click, reusing the mode state machine as-is.
-  // The client still receives the real wl_touch events sent above.
-  // Additional simultaneous fingers stay pure client-forwarded multi-touch.
-  //
-  // Whether that synthesised button is also forwarded to the client as
-  // wl_pointer input depends on whether the client handles touch itself;
-  // see surface_client_has_touch() above. The compositor-side half runs
-  // either way.
+  /* [COMMENT] Action purpose: The first contact of a fresh sequence also
+  drives hikari's own window management. Additional simultaneous fingers stay
+  pure client-forwarded multi-touch.
+
+  The mode is asked first and gets to consume the contact -- that is a mouse
+  binding on BTN_LEFT firing, which a touchscreen must still be able to do.
+  A consumed contact is not emulated, exactly as a bound mouse press is not
+  forwarded to the client either. */
   if (!cursor->has_primary_touch && !cursor->touch_gesture.claimed) {
     cursor->has_primary_touch = true;
     cursor->primary_touch_id = event->touch_id;
     cursor->primary_touch_device = event->touch;
-    cursor->touch_emulates_pointer = !surface_client_has_touch(surface);
 
     wlr_cursor_warp(cursor->wlr_cursor, &event->touch->base, lx, ly);
 
-    struct wlr_pointer_button_event button_event = {
-      .pointer = NULL,
-      .time_msec = event->time_msec,
-      .button = BTN_LEFT,
-      .state = WL_POINTER_BUTTON_STATE_PRESSED,
-    };
+    bool consumed = false;
 
-    cursor->touch_synthesized = true;
-    hikari_server.mode->button_handler(cursor, &button_event);
-    cursor->touch_synthesized = false;
+    if (hikari_server.mode->touch_begin != NULL) {
+      consumed = hikari_server.mode->touch_begin(cursor, event->time_msec);
+    }
+
+    cursor->touch_emulates_pointer = !locked && !consumed && surface != NULL
+        && !surface_client_has_touch(surface);
+
+    if (cursor->touch_emulates_pointer) {
+      touch_pointer_begin(
+          cursor, surface, lx, ly, sx, sy, event->time_msec);
+    }
   }
 }
 
@@ -321,13 +440,13 @@ cursor_touch_up_handler(struct wl_listener *listener, void *data)
         hikari_server.seat, event->time_msec, event->touch_id);
   }
 
-  /* After the gesture bookkeeping, because this is where a hold is
-  recognised and where the sequence is reset once the last finger lifts. */
+  /* After the forwarding above, because this is where a hold is recognised and
+  where the sequence is reset once the last finger lifts. */
   touch_gesture_up(event->touch_id, event->time_msec);
 
   if (cursor->has_primary_touch
       && event->touch_id == cursor->primary_touch_id) {
-    release_primary_touch(cursor, event->time_msec, true);
+    release_primary_touch(cursor, event->time_msec);
   }
 }
 
@@ -361,9 +480,18 @@ cursor_touch_motion_handler(struct wl_listener *listener, void *data)
       && event->touch_id == cursor->primary_touch_id) {
     wlr_cursor_warp(cursor->wlr_cursor, &event->touch->base, lx, ly);
 
-    cursor->touch_synthesized = true;
-    hikari_server.mode->cursor_move(event->time_msec);
-    cursor->touch_synthesized = false;
+    /* [COMMENT] Action purpose: Only the modes for which the motion IS the
+    window management set this -- move and resize, where the drag moves the
+    window. Normal mode deliberately does not: a finger swiping inside a
+    window is scrolling it, not choosing a different one, so re-focusing
+    whatever it crosses would be wrong. */
+    if (hikari_server.mode->touch_motion != NULL) {
+      hikari_server.mode->touch_motion(event->time_msec);
+    }
+
+    if (cursor->touch_emulates_pointer) {
+      touch_pointer_motion(cursor, lx, ly, event->time_msec);
+    }
   }
 }
 
@@ -373,36 +501,40 @@ cursor_touch_cancel_handler(struct wl_listener *listener, void *data)
   struct wlr_touch_cancel_event *event = data;
   struct hikari_cursor *cursor = &hikari_server.cursor;
 
-  // [COMMENT] Action purpose: wlr_seat_touch_notify_cancel takes the
-  // wlr_seat_client owning the touch point, not the touch_id itself.
-  struct wlr_touch_point *point =
-      wlr_seat_touch_get_point(hikari_server.seat, event->touch_id);
+  /* [COMMENT] Action purpose: The hardware abandoned the sequence, so no
+  gesture was made, and a partial sequence must not go on to be recognised as
+  something. Dropping the tracking wholesale is right -- but every client
+  holding one of the points being dropped has to be told first.
 
-  if (point != NULL) {
-    wlr_seat_touch_notify_cancel(hikari_server.seat, point->client);
-  }
-
-  /* The hardware abandoned the sequence, so no gesture was made. Dropping
-  the tracking wholesale is right: a cancel can arrive for any point, and a
-  partial sequence must not go on to be recognised as something. */
+  The cancel event names one point. Its own client is covered by the call
+  below, which walks the tracked points; doing that before the reset is what
+  the helper's contract requires, because once an id is gone from points[]
+  nothing can match that finger again, and the suppression a later claim
+  applies is by sequence, so the finger's eventual lift would be swallowed and
+  its client left holding a touch that never ends. */
+  touch_cancel_client_sequences(&cursor->touch_gesture);
   touch_gesture_reset();
 
   if (cursor->has_primary_touch
       && event->touch_id == cursor->primary_touch_id) {
-    release_primary_touch(cursor, event->time_msec, true);
+    release_primary_touch(cursor, event->time_msec);
   }
 }
 
 static void
 cursor_touch_frame_handler(struct wl_listener *listener, void *data)
 {
-  /* Nothing of a claimed sequence reaches the client, this frame included:
-  the client was sent wl_touch.cancel and has no pending points left to
-  commit. */
-  if (hikari_server.cursor.touch_gesture.claimed) {
-    return;
-  }
+  /* [COMMENT] Action purpose: Always, even for a sequence that has just been
+  claimed. wlr_seat_touch_send_frame() walks the seat's clients and sends only
+  to those whose needs_touch_frame is set, clearing it as it goes, so this is
+  already a no-op for a client with nothing pending.
 
+  Guarding it on `claimed` instead was wrong in the one case that matters: a
+  hold is recognised from inside the up handler, so the up has already been
+  forwarded and its client's needs_touch_frame already set by the time the
+  claim lands. Skipping the frame left that client holding an uncommitted up --
+  a finger that never lifts, since GTK, Qt and Chromium all batch on
+  wl_touch.frame -- until some unrelated client's sequence flushed it. */
   wlr_seat_touch_notify_frame(hikari_server.seat);
 }
 
@@ -698,7 +830,7 @@ touch_gesture_claim(
   state->claimed = true;
 
   if (hikari_server.cursor.has_primary_touch) {
-    release_primary_touch(&hikari_server.cursor, time_msec, true);
+    release_primary_touch(&hikari_server.cursor, time_msec);
   }
 }
 
@@ -802,7 +934,7 @@ touch_gesture_try_hold(
   }
 }
 
-static void
+static bool
 touch_gesture_down(int32_t id, double lx, double ly, uint32_t time_msec)
 {
   struct hikari_touch_gesture_state *state =
@@ -817,9 +949,11 @@ touch_gesture_down(int32_t id, double lx, double ly, uint32_t time_msec)
   }
 
   /* More fingers than there are slots. The sequence is already past any
-  supported finger count, so tracking stops rather than growing. */
+  supported finger count, so tracking stops rather than growing -- and the
+  caller must not forward what is not tracked, because a claim cancels by
+  walking points[] and would never reach this contact's client. */
   if (point == NULL) {
-    return;
+    return false;
   }
 
   point->id = id;
@@ -851,6 +985,8 @@ touch_gesture_down(int32_t id, double lx, double ly, uint32_t time_msec)
     state->start_spread = touch_spread(state, true);
     state->start_spread_valid = state->npoints > 1;
   }
+
+  return true;
 }
 
 static void
@@ -1167,7 +1303,6 @@ hikari_cursor_init(
 
   cursor->has_primary_touch = false;
   cursor->touch_emulates_pointer = false;
-  cursor->touch_synthesized = false;
   cursor->gesture_state.active = false;
 
   /* Zeroed explicitly rather than left to the caller's allocation: the
@@ -1276,25 +1411,55 @@ hikari_cursor_activate(struct hikari_cursor *cursor)
 void
 hikari_cursor_deactivate(struct hikari_cursor *cursor)
 {
+  /* [COMMENT] Action purpose: Re-init each link after removing it, so this
+  function is idempotent.
+
+  wl_list_remove() leaves the link in an invalid state -- libwayland sets both
+  pointers to NULL -- and this runs twice with nothing in between on an
+  ordinary path: lock_mode.c deactivates the cursor on lock entry, only its
+  unlock path reactivates, and hikari_cursor_fini() deactivates again, so
+  ending the session while the screen is locked reached the second
+  wl_list_remove() and dereferenced NULL. wl_list_init() leaves an empty,
+  removable link, which hikari_cursor_set_image() already relies on for the
+  same reason. */
   wl_list_remove(&cursor->motion_absolute.link);
+  wl_list_init(&cursor->motion_absolute.link);
   wl_list_remove(&cursor->frame.link);
+  wl_list_init(&cursor->frame.link);
   wl_list_remove(&cursor->motion.link);
+  wl_list_init(&cursor->motion.link);
   wl_list_remove(&cursor->button.link);
+  wl_list_init(&cursor->button.link);
   wl_list_remove(&cursor->axis.link);
+  wl_list_init(&cursor->axis.link);
   wl_list_remove(&cursor->request_set_cursor.link);
+  wl_list_init(&cursor->request_set_cursor.link);
   wl_list_remove(&cursor->touch_down.link);
+  wl_list_init(&cursor->touch_down.link);
   wl_list_remove(&cursor->touch_up.link);
+  wl_list_init(&cursor->touch_up.link);
   wl_list_remove(&cursor->touch_motion.link);
+  wl_list_init(&cursor->touch_motion.link);
   wl_list_remove(&cursor->touch_cancel.link);
+  wl_list_init(&cursor->touch_cancel.link);
   wl_list_remove(&cursor->touch_frame.link);
+  wl_list_init(&cursor->touch_frame.link);
   wl_list_remove(&cursor->swipe_begin.link);
+  wl_list_init(&cursor->swipe_begin.link);
   wl_list_remove(&cursor->swipe_update.link);
+  wl_list_init(&cursor->swipe_update.link);
   wl_list_remove(&cursor->swipe_end.link);
+  wl_list_init(&cursor->swipe_end.link);
   wl_list_remove(&cursor->pinch_begin.link);
+  wl_list_init(&cursor->pinch_begin.link);
   wl_list_remove(&cursor->pinch_update.link);
+  wl_list_init(&cursor->pinch_update.link);
   wl_list_remove(&cursor->pinch_end.link);
+  wl_list_init(&cursor->pinch_end.link);
   wl_list_remove(&cursor->hold_begin.link);
+  wl_list_init(&cursor->hold_begin.link);
   wl_list_remove(&cursor->hold_end.link);
+  wl_list_init(&cursor->hold_end.link);
 
   // Action purpose: A held primary touch point is driving mode-level state
   // (focus/raise, or an in-progress move/resize drag) via a synthetic
@@ -1304,19 +1469,15 @@ hikari_cursor_deactivate(struct hikari_cursor *cursor)
   // mode is left believing a button is still held with no touch event ever
   // able to release it.
   if (cursor->has_primary_touch) {
-    struct timespec now;
-    clock_gettime(CLOCK_MONOTONIC, &now);
-    uint32_t time_msec =
-        (uint32_t)(now.tv_sec * 1000LL + now.tv_nsec / 1000000LL);
-    /* [COMMENT] Action purpose: No focus refresh on this one. Lock entry
-    clears the seat's pointer focus deliberately -- "a client must not still
-    believe it holds the pointer while the screen is locked" -- and then calls
-    this function, with the switch to lock mode on the NEXT line. A refresh
-    here would therefore still run normal mode's cursor_move and hand the
-    client under the cursor a pointer enter and motion, undoing that clearing
-    a moment before the lock takes hold. The button release still happens: the
-    mode must not be left believing a button is held. */
-    release_primary_touch(cursor, time_msec, false);
+    /* [COMMENT] Action purpose: Lock entry clears the seat's pointer focus
+    deliberately -- a client must not still believe it holds the pointer while
+    the screen is locked -- and then calls this function, with the switch to
+    lock mode on the NEXT line. release_primary_touch() no longer refreshes
+    focus at all, and the emulated button release it does send cannot reach a
+    client once focus is cleared, so the clearing stands. What still has to
+    happen is the release itself: a mode must not be left believing a contact
+    is held with no event able to end it. */
+    release_primary_touch(cursor, touch_now_msec());
   }
 
   // Action purpose: Clear any in-progress gesture. Deactivation happens

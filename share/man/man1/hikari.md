@@ -1845,22 +1845,31 @@ Touch
 Touchscreen input is supported natively: a touch device is attached to the
 cursor's output layout like a pointer, and touch events are forwarded to
 clients via the standard Wayland touch protocol. The first touch point of a
-new touch sequence additionally drives the same focus, raise, move, and
-resize behavior as a left mouse click, so windows can be managed by tapping
-and dragging on a touchscreen without a mouse. Further simultaneous touch
-points are left untouched for the client to interpret (e.g. pinch-to-zoom in
-a PDF viewer).
+new touch sequence additionally drives focus, raise, move and resize, so
+windows can be managed by tapping and dragging on a touchscreen without a
+mouse, and a mouse binding on *BTN\_LEFT* fires from a touchscreen as it does
+from a mouse. Further simultaneous touch points are left untouched for the
+client to interpret (e.g. pinch-to-zoom in a PDF viewer).
 
-Whether that first touch point also reaches the client as pointer input
-depends on the client. A client that has bound *wl\_touch* is already
-receiving the real touch sequence and is sent nothing further: synthesizing a
-button for it as well would deliver one finger twice, and a toolkit that
-implements both protocols -- GTK, Qt, Firefox and Chromium all do -- can
-activate a control twice from a single tap. A client that has not bound
-*wl\_touch* would otherwise get nothing at all from a touchscreen, so for that
-one the pointer button is synthesized as before. The choice is made per touch
-sequence, from the client under the finger. hikari's own focus, raise, move and
-resize happen either way.
+A finger is not treated as a mouse. The window management above is driven from
+the touch handlers directly rather than by synthesizing a button event and
+feeding it to the pointer path, which is what lets the compositor act on a
+contact without any client being told a mouse was involved.
+
+Whether the contact also reaches its client as pointer input depends on the
+client. A client that has bound *wl\_touch* is already receiving the real touch
+sequence and is sent nothing further: delivering a button as well would deliver
+one finger twice, and a toolkit that implements both protocols -- GTK, Qt,
+Firefox and Chromium all do -- can activate a control twice from a single tap.
+A client that has not bound *wl\_touch* would otherwise get nothing at all from
+a touchscreen, so for that one the contact is emulated as pointer input: an
+enter, a motion, the button, and the *wl\_pointer.frame* that commits them. The
+choice is made once per contact, from the client under the finger, so a press
+and its release always travel together. A contact that a mouse binding consumed
+is not emulated, exactly as a bound mouse press is not forwarded either.
+
+While the screen is locked a touch reaches no client at all, neither as touch
+nor as pointer input.
 
 Three or more fingers may be claimed by a gesture binding; see *Gestures*
 above.

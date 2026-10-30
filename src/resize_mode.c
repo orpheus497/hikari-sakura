@@ -93,6 +93,18 @@ button_handler(
 }
 
 // [COMMENT] Function purpose: Initialize resize mode state and handlers.
+/* [COMMENT] Function purpose: End the drag when the finger lifts, exactly as
+button_handler ends it when the mouse button is released.
+
+Set rather than left NULL because here the contact IS the window management:
+resize mode exists only for the duration of a drag, and a finger that lifts with
+no way to say so would leave the mode entered with nothing driving it. */
+static void
+touch_end(struct hikari_cursor *cursor, uint32_t time_msec)
+{
+  hikari_server_enter_normal_mode(NULL);
+}
+
 void
 hikari_resize_mode_init(struct hikari_resize_mode *resize_mode)
 {
@@ -102,6 +114,13 @@ hikari_resize_mode_init(struct hikari_resize_mode *resize_mode)
 
   resize_mode->mode.cancel = cancel;
   resize_mode->mode.cursor_move = cursor_move;
+
+  /* Action purpose: A touch drag moves the window by the same code a pointer
+  drag does -- cursor_move here reads the cursor position, which the touch
+  motion handler has already warped to the finger, and emits no client input of
+  its own, so it is correct for either source. */
+  resize_mode->mode.touch_motion = cursor_move;
+  resize_mode->mode.touch_end = touch_end;
 
   resize_mode->anchor_x = 0;
   resize_mode->anchor_y = 0;
