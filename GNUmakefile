@@ -42,6 +42,30 @@ HIKARI_GOALS := $(if $(MAKECMDGOALS),$(MAKECMDGOALS),all)
 #
 # $(MAKEOVERRIDES) carries command-line variable assignments through, so
 # `make PREFIX=/usr WITH_XWAYLAND=NO install` reaches bmake intact.
+# [COMMENT] Action purpose: The MAKEFLAGS actually handed to bmake, named here
+# so the -B check below and the dispatch recipe cannot drift apart. Expanded in
+# the recipe, never with `:=` -- see the note above hikari-dispatch.
+HIKARI_MAKEFLAGS = $(filter-out --% -O% -j $(MAKEOVERRIDES),$(MAKEFLAGS))
+
+# [COMMENT] Action purpose: Detect GNU make's -B, which must not reach bmake.
+#
+# The two makes disagree about this letter. GNU make's -B is --always-make,
+# "unconditionally make all targets"; bmake's -B selects compatibility mode,
+# which rebuilds nothing extra. MAKEFLAGS collects short flags into its first
+# word, the filter above keeps it, and bmake honours MAKEFLAGS from the
+# environment -- so `make -B` reached bmake as compatibility mode and did an
+# ordinary incremental build. Measured on this tree: a real full build is 78
+# compiler invocations, `make -B` on an up-to-date tree ran 2. Someone changing
+# CFLAGS_EXTRA and typing -B to pick it up would have kept every stale object.
+#
+# bmake has no --always-make equivalent to translate this into, and deleting
+# the user's objects on their behalf is not what -B means either, so the only
+# honest answer is to refuse and say what to run instead. Only the first word
+# is examined: GNU make puts short flags there, and no other short flag it
+# collects is an uppercase B. The test itself is the `case` in the dispatch
+# recipe below -- a make-level $(if) cannot carry the message, because $(if)
+# splits its arguments on commas and the text has commas in it.
+
 HIKARI_FIRST := $(firstword $(HIKARI_GOALS))
 HIKARI_REST  := $(wordlist 2,$(words $(HIKARI_GOALS)),$(HIKARI_GOALS))
 
@@ -112,5 +136,12 @@ hikari-dispatch:
 # make IS bmake, the same command worked. The MAKEFLAGS filter above already
 # preserves n, so bmake receives it and does the dry run itself; this is the
 # only thing that was stopping it from ever being reached.
-	+@MAKEFLAGS='$(filter-out --% -O% -j $(MAKEOVERRIDES),$(MAKEFLAGS))' \
+	+@case '$(firstword $(HIKARI_MAKEFLAGS))' in \
+	*B*) \
+		echo 'make: -B (--always-make) cannot be forwarded to bmake.' >&2; \
+		echo 'make: bmake reads -B as compatibility mode and rebuilds' >&2; \
+		echo 'make: nothing extra. Run "make clean" first instead.' >&2; \
+		exit 1 ;; \
+	esac; \
+	MAKEFLAGS='$(HIKARI_MAKEFLAGS)' \
 		$(BMAKE) $(MAKEOVERRIDES) $(HIKARI_GOALS)

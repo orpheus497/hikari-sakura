@@ -449,16 +449,30 @@ touch_begin(struct hikari_cursor *cursor, uint32_t time_msec)
 
 /* [COMMENT] Function purpose: Window management for a touch contact ending.
 
-Only the pending end action: a press-and-hold mouse binding stores its end
+First the pending end action: a press-and-hold mouse binding stores its end
 action when the press fires and expects the release to run it, and a finger
-must honour that the same way. There is deliberately no focus refresh here --
-that was stop_cursor_down_handling()'s, it ran unconditionally, and running it
-from a touch release is what handed a client a pointer enter as the screen was
-locking. */
+must honour that the same way.
+
+Then focus is resynced, because the contact pinned it. cursor_move() returns
+early for the whole of a contact, so a physical mouse moved while a finger was
+down warped the cursor without moving pointer focus with it; left unresynced,
+the next click -- which need not be preceded by any motion -- would go to
+whatever surface the contact had entered rather than the one now under the
+cursor. has_primary_touch is already false by the time this runs, so the
+refresh does the full hit test.
+
+This is NOT the refresh that leaked a pointer enter into a locking screen.
+That one was stop_cursor_down_handling()'s, reached because lock entry
+dispatched a synthetic release through the mode vtable. Lock entry now goes
+through end_primary_touch(), which does not call this function at all, and the
+touch listeners are detached before lock mode is installed, so neither this
+nor anything else here can run during a lock. */
 static void
 touch_end(struct hikari_cursor *cursor, uint32_t time_msec)
 {
   handle_pending_action();
+
+  hikari_server_cursor_focus();
 }
 
 void
