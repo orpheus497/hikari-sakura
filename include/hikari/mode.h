@@ -57,6 +57,24 @@ struct hikari_mode {
   void (*touch_motion)(uint32_t time_msec);
 
   void (*touch_end)(struct hikari_cursor *cursor, uint32_t time_msec);
+
+  /* [COMMENT] Action purpose: Whether a contact in this mode may be delivered
+  to a pointer-only client as emulated wl_pointer input.
+
+  False by default, and deliberately so. Most modes exist precisely to swallow
+  input until they are answered -- mark_assign, group_assign, sheet_assign,
+  layout_select and mark_select all carry an empty button_handler, and that
+  emptiness IS the mechanism; move and resize are driving the window
+  themselves and the client has no use for a pointer; input_grab has given one
+  view the input and an enter elsewhere would break the grab; dnd must not
+  have a finger inject a button into a pointer drag.
+
+  Normal mode is the only one that answers yes. Inferring this from
+  touch_begin's "consumed" was wrong: a mode without a touch_begin cannot
+  consume anything, so every one of the above would have had a complete
+  synthetic click delivered for it. A default of false means a mode added
+  later declines until it says otherwise, which is the safe direction. */
+  bool touch_emulates_pointer;
 };
 
 #endif

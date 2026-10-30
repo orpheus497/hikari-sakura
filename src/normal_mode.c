@@ -248,6 +248,29 @@ cursor_move(uint32_t time)
 {
   assert(hikari_server_in_normal_mode());
 
+  /* [COMMENT] Action purpose: A held touch contact pins focus, exactly as a
+  held mouse button does by swapping this function out for cursor_down_move().
+
+  This function is reached by far more than pointer motion:
+  hikari_server_cursor_focus() calls it whenever the scene changes under the
+  cursor -- a window mapping or unmapping, a re-tile, a layer surface
+  appearing, a workspace switch. Each re-hit-tests and can focus and
+  pointer-enter a different surface, which during a contact is wrong three
+  times over: keyboard focus moves away from the window the finger is on,
+  wlroots resets its button accounting on the enter so the contact's release
+  is later dropped as unmatched, and the emulated motion goes on reporting
+  coordinates in the old surface's frame into the new one.
+
+  Tested here rather than by swapping in a pinned variant the way the mouse
+  does, because the two can overlap: a mouse press during a contact would
+  overwrite the swapped pointer and its release would restore the unpinned
+  one, losing the pin while the finger is still down. One condition cannot get
+  that wrong. Nothing below runs, pointer_constraint_refresh() included, which
+  is what cursor_down_move() also does for a mouse drag. */
+  if (hikari_server.cursor.has_primary_touch) {
+    return;
+  }
+
   double sx, sy;
   struct wlr_seat *seat = hikari_server.seat;
   struct wlr_surface *surface;
@@ -450,6 +473,10 @@ hikari_normal_mode_init(struct hikari_normal_mode *normal_mode)
 
   normal_mode->mode.touch_begin = touch_begin;
   normal_mode->mode.touch_end = touch_end;
+
+  /* Action purpose: The only mode in which a contact is delivered to a
+  pointer-only client. See struct hikari_mode. */
+  normal_mode->mode.touch_emulates_pointer = true;
   /* Action purpose: No touch_motion. A contact that has already begun must not
   re-focus whatever it is dragged over -- a finger swiping inside a window is
   scrolling it, not choosing a new one -- and the client's own motion is the

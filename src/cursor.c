@@ -304,7 +304,7 @@ No focus refresh. The mode's touch_end does window management only, and the
 client half above either pairs its own press or is a no-op because focus is
 already gone. */
 static void
-release_primary_touch(struct hikari_cursor *cursor, uint32_t time_msec)
+end_primary_touch(struct hikari_cursor *cursor, uint32_t time_msec)
 {
   cursor->has_primary_touch = false;
 
@@ -312,6 +312,12 @@ release_primary_touch(struct hikari_cursor *cursor, uint32_t time_msec)
     touch_pointer_end(cursor, time_msec);
     cursor->touch_emulates_pointer = false;
   }
+}
+
+static void
+release_primary_touch(struct hikari_cursor *cursor, uint32_t time_msec)
+{
+  end_primary_touch(cursor, time_msec);
 
   if (hikari_server.mode->touch_end != NULL) {
     hikari_server.mode->touch_end(cursor, time_msec);
@@ -351,6 +357,14 @@ hikari_cursor_release_primary_touch(
 static void
 cursor_touch_down_handler(struct wl_listener *listener, void *data)
 {
+  /* [COMMENT] Action purpose: A touch cannot be seen while the screen is
+  locked, and nothing here has to test for it. hikari_lock_mode_enter() calls
+  hikari_cursor_deactivate() -- which removes this listener -- BEFORE it
+  installs lock mode, and only lock mode's cancel() reattaches, so these
+  handlers are detached for the whole of a lock. The same reasoning and the
+  same assertion guard the pointer handlers further down this file. */
+  assert(!hikari_server_in_lock_mode());
+
   struct wlr_touch_down_event *event = data;
   struct wlr_surface *surface;
   struct hikari_workspace *workspace;
@@ -367,24 +381,6 @@ cursor_touch_down_handler(struct wl_listener *listener, void *data)
 
   bool tracked = touch_gesture_down(event->touch_id, lx, ly, event->time_msec);
 
-  /* [COMMENT] Action purpose: Nothing of a touch reaches any client while the
-  screen is locked.
-
-  hikari's lock screen is drawn by the compositor -- there is no session-lock
-  client and no surface to deliver to -- and node_at() knows nothing about it:
-  it hit-tests hikari's own geometry lists, so it goes on returning the
-  ordinary window under the finger however the lock layer is composited. A
-  pointer cannot leak through that because every client-facing pointer call
-  lives inside a mode and lock mode's handlers are empty, but these touch
-  handlers deliver to clients directly, so they have to decline for
-  themselves.
-
-  Only the down is guarded. A sequence that began before the lock has already
-  been cancelled by hikari_cursor_deactivate(), and wlroots makes a motion or
-  an up for a touch id it holds no point for a silent no-op, so a contact that
-  never got a down cannot deliver anything later either. */
-  bool locked = hikari_server_in_lock_mode();
-
   /* [COMMENT] Action purpose: Forward the down only when the recogniser took
   the point, the hit test found something to deliver it to, and the sequence
   still belongs to the client rather than to a claimed compositor gesture.
@@ -393,7 +389,7 @@ cursor_touch_down_handler(struct wl_listener *listener, void *data)
   sequence, so a point the recogniser could not record is one that
   touch_cancel_client_sequences() cannot find later. Sending it anyway would
   leave its client holding a touch that the claim then swallows the end of. */
-  if (!locked && tracked && surface != NULL && !cursor->touch_gesture.claimed) {
+  if (tracked && surface != NULL && !cursor->touch_gesture.claimed) {
     wlr_seat_touch_notify_down(
         hikari_server.seat, surface, event->time_msec, event->touch_id, sx, sy);
   }
@@ -419,8 +415,8 @@ cursor_touch_down_handler(struct wl_listener *listener, void *data)
       consumed = hikari_server.mode->touch_begin(cursor, event->time_msec);
     }
 
-    cursor->touch_emulates_pointer = !locked && !consumed && surface != NULL
-        && !surface_client_has_touch(surface);
+    cursor->touch_emulates_pointer = hikari_server.mode->touch_emulates_pointer
+        && !consumed && surface != NULL && !surface_client_has_touch(surface);
 
     if (cursor->touch_emulates_pointer) {
       touch_pointer_begin(
@@ -432,6 +428,14 @@ cursor_touch_down_handler(struct wl_listener *listener, void *data)
 static void
 cursor_touch_up_handler(struct wl_listener *listener, void *data)
 {
+  /* [COMMENT] Action purpose: A touch cannot be seen while the screen is
+  locked, and nothing here has to test for it. hikari_lock_mode_enter() calls
+  hikari_cursor_deactivate() -- which removes this listener -- BEFORE it
+  installs lock mode, and only lock mode's cancel() reattaches, so these
+  handlers are detached for the whole of a lock. The same reasoning and the
+  same assertion guard the pointer handlers further down this file. */
+  assert(!hikari_server_in_lock_mode());
+
   struct wlr_touch_up_event *event = data;
   struct hikari_cursor *cursor = &hikari_server.cursor;
 
@@ -453,6 +457,14 @@ cursor_touch_up_handler(struct wl_listener *listener, void *data)
 static void
 cursor_touch_motion_handler(struct wl_listener *listener, void *data)
 {
+  /* [COMMENT] Action purpose: A touch cannot be seen while the screen is
+  locked, and nothing here has to test for it. hikari_lock_mode_enter() calls
+  hikari_cursor_deactivate() -- which removes this listener -- BEFORE it
+  installs lock mode, and only lock mode's cancel() reattaches, so these
+  handlers are detached for the whole of a lock. The same reasoning and the
+  same assertion guard the pointer handlers further down this file. */
+  assert(!hikari_server_in_lock_mode());
+
   struct wlr_touch_motion_event *event = data;
   struct wlr_surface *surface;
   struct hikari_workspace *workspace;
@@ -1469,15 +1481,21 @@ hikari_cursor_deactivate(struct hikari_cursor *cursor)
   // mode is left believing a button is still held with no touch event ever
   // able to release it.
   if (cursor->has_primary_touch) {
-    /* [COMMENT] Action purpose: Lock entry clears the seat's pointer focus
-    deliberately -- a client must not still believe it holds the pointer while
-    the screen is locked -- and then calls this function, with the switch to
-    lock mode on the NEXT line. release_primary_touch() no longer refreshes
-    focus at all, and the emulated button release it does send cannot reach a
-    client once focus is cleared, so the clearing stands. What still has to
-    happen is the release itself: a mode must not be left believing a contact
-    is held with no event able to end it. */
-    release_primary_touch(cursor, touch_now_msec());
+    /* [COMMENT] Action purpose: end_primary_touch(), not
+    release_primary_touch(): the contact is dropped WITHOUT telling the mode.
+
+    Both callers of this function are abandoning the mode, not continuing in
+    it -- lock entry installs lock mode two statements later, and
+    hikari_cursor_fini() is tearing the session down -- so there is nothing
+    left to inform. Telling it is worse than pointless: move and resize answer
+    touch_end by re-entering normal mode, which ends in
+    hikari_server_cursor_focus() and would hand a client back both keyboard
+    and pointer focus a moment after lock entry deliberately cleared them.
+
+    The emulated button release still goes out, so a client that was sent a
+    press is never left holding it; with pointer focus already cleared by lock
+    entry it reaches nobody, which is the intended outcome. */
+    end_primary_touch(cursor, touch_now_msec());
   }
 
   // Action purpose: Clear any in-progress gesture. Deactivation happens
