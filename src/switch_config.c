@@ -1,5 +1,8 @@
 #include <hikari/switch_config.h>
 
+/* [COMMENT] Action purpose: free(3). */
+#include <stdlib.h>
+
 void
 hikari_switch_config_fini(struct hikari_switch_config *switch_config)
 {

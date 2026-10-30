@@ -37,6 +37,60 @@ struct hikari_gesture_state {
   struct hikari_gesture_update updates[HIKARI_GESTURE_MAX_UPDATES];
 };
 
+/* [COMMENT] Action purpose: Upper bound on simultaneously tracked touch
+points. Ten is every finger; libinput reports no more, and a fixed array
+keeps the recogniser allocation-free on the input path. */
+#define HIKARI_TOUCH_GESTURE_MAX_POINTS 10
+
+/* [COMMENT] Action purpose: Fewest simultaneous fingers a touchscreen gesture
+may claim from the client. One- and two-finger sequences are how a client is
+driven -- tapping, dragging, selecting text, and its own pinch-to-zoom -- so
+the compositor never takes those. A gestures{} binding with a lower finger
+count still works on a touchpad, where libinput does the recognition and the
+touch points never reach a client at all. */
+#define HIKARI_TOUCH_GESTURE_MIN_FINGERS 3
+
+/* [COMMENT] Action purpose: One tracked finger. Start and current positions
+are layout pixels, which is what the recogniser's thresholds are expressed in
+-- unlike the touchpad path, whose dx/dy arrive in libinput's own units. */
+struct hikari_touch_point {
+  int32_t id;
+  bool active;
+  double start_lx;
+  double start_ly;
+  double lx;
+  double ly;
+};
+
+/* [COMMENT] Action purpose: Recognition state for one touchscreen sequence,
+meaning everything from the first finger landing on an empty screen to the
+last one lifting.
+
+`claimed` records that the compositor took the sequence: every client holding
+one of its points has been sent wl_touch.cancel, which is precisely what that
+event is for, and no further touch event for the sequence is forwarded.
+`fired` stops a second binding firing from the same sequence once one has. */
+struct hikari_touch_gesture_state {
+  struct hikari_touch_point points[HIKARI_TOUCH_GESTURE_MAX_POINTS];
+  int npoints;
+  uint32_t peak_fingers;
+  uint32_t begin_time_msec;
+  bool claimed;
+  bool fired;
+
+  /* Mean distance from the centroid at the moment peak_fingers was last
+  reached, which is the baseline a pinch's scale is measured against. Taken
+  then rather than at the first finger because the spread of a three-finger
+  pinch is not defined until all three are down. */
+  double start_spread;
+  bool start_spread_valid;
+
+  /* Largest mean displacement reached during the sequence, kept running so a
+  hold can be judged after the fingers have begun to lift, when their
+  positions are no longer all available. */
+  double max_distance;
+};
+
 struct hikari_cursor {
   struct wlr_cursor *wlr_cursor;
   struct wlr_xcursor_manager *cursor_mgr;
@@ -74,6 +128,39 @@ struct hikari_cursor {
   bool has_primary_touch;
   int32_t primary_touch_id;
   struct wlr_touch *primary_touch_device;
+
+  /* [COMMENT] Action purpose: Whether the primary contact is also being
+  delivered to its client as wl_pointer input.
+
+  False when that client has bound wl_touch: it is already receiving the real
+  touch sequence, and a synthesised button on top of it delivers one finger
+  twice -- a toolkit that implements both protocols, which GTK, Qt, Firefox
+  and Chromium all do, sees a touch and a click for a single tap. True for a
+  client that has no touch support, which would otherwise get nothing at all
+  from a touchscreen. Also false when the contact fell on no surface, or when
+  a mouse binding consumed it, because there is then nothing to deliver.
+
+  Latched once when the contact begins and cleared when it ends, so the
+  emulated press and its release always travel together. Read only by the
+  three touch_pointer_* functions in cursor.c, the only things that emit
+  pointer input for a finger. */
+  bool touch_emulates_pointer;
+
+  /* [COMMENT] Action purpose: Where an emulated contact started, in layout
+  pixels and in its surface's own frame.
+
+  Motion is reported as the surface-local start plus the layout displacement
+  since, rather than by re-hit-testing, so a finger dragged beyond the edge of
+  the window keeps reporting into it -- what a pointer drag does, and what a
+  client being dragged expects. Separate from normal mode's cursor_down_state
+  because a seat has one pointer but many fingers; sharing one anchor would
+  let a touch release tear down a mouse drag. */
+  double touch_pointer_lx;
+  double touch_pointer_ly;
+  double touch_pointer_sx;
+  double touch_pointer_sy;
+
+  struct hikari_touch_gesture_state touch_gesture;
 
   struct hikari_binding_group bindings[HIKARI_BINDING_GROUP_MASK];
 };

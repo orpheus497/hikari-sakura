@@ -1,0 +1,38 @@
+# Script function and purpose: Linux-PAM policy for the hikari screen-unlock
+# helper on systems whose system-wide authentication stack is system-auth --
+# Fedora, RHEL, CentOS Stream and Arch. `make install` selects this file by
+# probing the target machine; see the PAM block in the Makefile. Resuming a
+# locked session, not starting a new one.
+
+# Action purpose: `substack`, not `include`, and the same spelling for both
+# families rather than one file each. Fedora's own system-auth(5) says the file
+# "is included from nearly all individual service configuration files with the
+# help of the substack directive", and that `include` "limited the use of the
+# different action types of modules"; their login and su both open with
+# `auth substack system-auth`. That matters most on RHEL, whose default sssd
+# profile is full of numeric jumps and `default=die` actions -- substack is the
+# directive that keeps those contained inside the included stack instead of
+# letting them jump out into this one.
+#
+# Arch spells it `include` in its own system-login, and the two were measured
+# behaving identically against Arch's real pambase stack, because this policy
+# has nothing after the single line for a jump to land on. Distinguishing the
+# two families at install time is possible -- Fedora's system-auth is an
+# authselect symlink, Arch's is a regular file -- but that test is incidental to
+# what it would decide, it misfires after `authselect opt-out`, and the
+# difference it selects is cosmetic rather than a security property. One file
+# with the stricter directive is the simpler and safer choice.
+auth    substack system-auth
+
+# Action purpose: The account group is required, not optional, the moment
+# hikari-unlocker calls pam_acct_mgmt(). Linux-PAM falls back to the `other`
+# policy PER FACILITY when a service declares no modules for one, and both
+# Fedora's and Arch's `other` are pam_deny for all four groups, so omitting this
+# line would not skip the account check -- it would refuse every unlock, for
+# every user, forever. The line is live rather than defensive: the helper does
+# call pam_acct_mgmt(), after a successful authentication and before it reports
+# success, so this is the stack that decides an expired or locked account.
+#
+# `include` here, not substack, matching Fedora's own login and su, which use
+# substack for auth and include for account.
+account include system-auth

@@ -1,6 +1,6 @@
 NAME
 ====
-**hikari** - the Hikari Sakura Wayland compositor for FreeBSD
+**hikari** - the Hikari Sakura Wayland compositor for FreeBSD and Linux
 
 SYNTAX
 ======
@@ -12,8 +12,15 @@ DESCRIPTION
 **Hikari Sakura** is a FreeBSD-focused revamp and modernization of the original
 Hikari -- created by *raichoo* and later carried at
 <https://github.com/antaz/hikari>, which has since been abandoned upstream. It
-is explicitly designed as a comprehensive Wayland desktop environment for
-FreeBSD rather than as a compositor alone.
+is explicitly designed as a comprehensive Wayland desktop environment rather
+than as a compositor alone.
+
+FreeBSD is the first-class platform and Linux the second-class one. Both are
+supported and both are built from this one tree. Where the two differ the
+compositor takes the native interface on each rather than a lowest common
+denominator, and no FreeBSD behaviour is given up for the sake of the Linux
+build; the places where a dependency differs between them are named where they
+arise below.
 
 **Hikari Sakura** is the name of the desktop environment; **hikari** is the
 compositor binary, the configuration file and this manual page, and is what
@@ -203,13 +210,14 @@ grabbing input events and layout selection.
 CONFIGURATION
 =============
 
-**hikari** is configured using libucl(3) as a configuration file format. The
-configuration is located under _$XDG_CONFIG_HOME/hikari/hikari.conf_. If this
-file is not found **hikari** is going to try _hikari.conf_ from the install
-_etc_ directory.
+**hikari** is configured by a Lua 5.4 chunk. The configuration is located
+under _$XDG_CONFIG_HOME/hikari/hikari.lua_; when **XDG_CONFIG_HOME** is unset
+this is _~/.config/hikari/hikari.lua_. If no user configuration is readable
+**hikari** is going to try _hikari.lua_ from the install _etc_ directory.
 
-The default configuration is going to use **$TERMINAL** as your standard
-terminal application.
+The default configuration is going to use the **TERMINAL** environment
+variable as your standard terminal application, falling back to **foot** when
+it is unset.
 
 Structural changes like UI themes, custom actions, and new bindings can be
 hot-reloaded using the **reload** action. `xkb` settings configured natively in
@@ -223,38 +231,193 @@ restart of the compositor to apply.
 On startup **hikari** attempts to execute _~/.config/hikari/autostart_ to
 autostart applications.
 
+The configuration language
+--------------------------
+The file is a Lua chunk whose FIRST returned value must be a table, and every
+section documented below is an entry in that table. A chunk that returns
+nothing, or whose first value is not a table, fails the load and says so. Any
+further values are discarded rather than refused -- `return cfg, "note"` loads
+`cfg` and ignores the rest. That is Lua discarding the surplus because this
+reader asks a chunk for one result, not a check the reader forgot; it is not a
+property of Lua chunks in general, and **dofile**, which asks for all of them,
+would hand back every value. The file is
+read as source text only and never as precompiled bytecode: Lua's bytecode
+verifier is not a security boundary, since malformed bytecode corrupts memory
+rather than raising an error.
+
+Because the configuration is a program rather than a data file, a repetitive
+block -- the per-sheet bindings, say -- can be generated instead of typed.
+`for` loops, local functions, `string.format`, `table.insert`, `math.max`,
+`pairs` and `ipairs` are all available. The language itself is documented at
+<https://www.lua.org/manual/5.4/>, and the annotated default configuration
+installed in the _etc_ directory is the worked example for everything on this
+page.
+
+Five points catch most of a configuration translated by hand from the old
+format:
+
+* Entries in a table are separated by commas -- `key = value,`. A missing comma
+  is a syntax error naming the line, so it is a loud mistake rather than a
+  quiet one.
+
+* Strings are quoted, and there are no barewords: `spill = "drag"`, not
+  `spill = drag`. An unquoted word is a variable read, and rather than let it
+  be `nil` the sandbox refuses an undefined one by name and line.
+
+* A key that is not a plain Lua identifier goes in brackets and quotes:
+  `["blank-timeout-ac"]` because of the hyphen, `["end"]` because *end* is a
+  Lua keyword, `["L+Return"]` because of the punctuation. A bare
+  `blank-timeout-ac = 180` is read as a subtraction.
+
+* `["0"]` and `[0]` are different keys -- the first is the string, the second
+  the number. Layout registers and sheet-like names are strings, so write
+  `["0"]`.
+
+* Booleans are `true` and `false` only. `yes`, `no`, `on` and `off` are not
+  booleans in Lua, and a key given one of them is reported as a type error
+  naming the key.
+
+Comments start with `--` and run to the end of the line.
+
+Sandbox
+-------
+The configuration is executed with a restricted set of globals, built as a
+whitelist rather than a blacklist so that a future Lua release cannot widen it
+by accident. Available are `assert`, `error`, `ipairs`, `next`, `pairs`,
+`print`, `rawequal`, `rawget`, `rawlen`, `rawset`, `select`, `tonumber`,
+`tostring`, `type` and `_VERSION`, together with the `string`, `table` and
+`math` libraries.
+
+Absent, deliberately: `io`, `os` and `package`/`require`, so that a
+configuration may compute values but may not run commands; `load`, `loadfile`
+and `dofile`, which live in the base library rather than in `io` and are what
+would actually reach the filesystem; `pcall` and `xpcall`, so that a
+configuration cannot catch the resource errors described below and spin on them
+forever; `setmetatable` and `getmetatable`, which would let a configuration
+attach a `__gc` finalizer and run it outside those same limits; and `_G`,
+`collectgarbage` and `warn`, which have no use here.
+
+Four names are added to that set:
+
+* `env` -- the environment. See *Environment Variables* below.
+
+* `include(path [, optional])` -- the successor to the old format's include
+  macro. It loads another configuration file and *returns* its value for the
+  caller to splice in, rather than merging it in place. A relative *path*
+  resolves against the directory of the file that calls it, so an include is
+  independent of the compositor's working directory. A second argument of
+  `true` turns an unreadable file into `nil` instead of an error; a file that
+  is present but malformed is still fatal, because the author plainly meant to
+  load it. Includes may nest 8 deep, and a file that includes itself is
+  refused by name.
+
+* `CONFIG_FILE` -- the path of the ROOT configuration file, and `CONFIG_DIR`
+  the directory holding it. Both are fixed when the sandbox is built and do
+  NOT follow `include()`: inside an included file they still name the root,
+  not that file. This is rarely what anyone needs them for, because
+  `include()` already resolves a relative path against the directory of the
+  file that calls it -- so a nested include is written relative to its own
+  file and needs neither variable. Build a path from `CONFIG_DIR` only when
+  you want one anchored to the root configuration wherever it is reached from.
+
+Resource limits stop a mistake in the configuration from hanging the
+compositor at startup, where there is no desktop yet to report it on. A load
+may allocate at most 64 MiB and may execute at most 10,000,000 virtual-machine
+instructions. Three operations do their work inside a single C call, where the
+instruction count cannot reach, and so carry ceilings of their own: `string.rep`
+is capped at 1048576 repeats, the subject string handed to `string.find`,
+`string.match`, `string.gmatch` and `string.gsub` at 65536 bytes, and
+`table.move` at 1048576 elements. Each of these is orders of magnitude above
+anything written by hand -- a rule built with `string.rep("-", 80)` uses 80 of
+the million it is allowed -- and exceeding one fails the load with a message
+naming the limit that was hit.
+
 Duplicate keys
 --------------
-libucl neither merges a key that is written twice nor rejects it -- it keeps
-both values, and **hikari** reads only the first. The second therefore has no
-effect at all, which is easy to do by accident when two parts of a configuration
-both claim the same binding.
+A key written twice in the same table is neither merged nor rejected. This is
+Lua: a table constructor evaluates its entries in order and the **last**
+assignment wins, so `a = "first", a = "second"` yields *second* and the earlier
+value is gone before **hikari** is handed the table at all. Two *palette*
+tables written inside the same *ui* table are not merged into one either -- the
+second simply replaces the first.
 
-Rather than fail the whole configuration over it -- which would stop a desktop
-that had quietly carried a duplicate for months from starting -- **hikari**
-reports it on standard error and carries on:
+Both halves of the old rule have inverted. The old format kept the **first**
+value and **hikari** printed a *configuration warning:* line naming the value
+it was ignoring. Under Lua the surviving value is the last one, and -- this is
+the part that matters -- **there is no warning, and there cannot be one**. Lua
+collapses the pair while it builds the table, so the duplicate never reaches
+any code of the compositor's that could notice it. Nothing is printed on
+standard error, nothing appears in the startup output, and **reload** is just
+as silent.
 
-```
-configuration warning: "L+n" is set 2 times in bindings.keyboard -- hikari uses the first and ignores the rest
-    in effect: action-notifications
-    ignored:   workspace-switch-to-sheet-next-inhabited
-```
+That makes a duplicate key strictly more dangerous than it was. Before, a
+configuration that quietly carried one said so on every start; now it looks
+completely healthy and simply does the wrong thing. This applies to every
+section, not only bindings. If something you have configured appears to have no
+effect, check first that you have not written the same key twice in the same
+table -- nothing else is going to tell you.
 
-This applies to every section, not only bindings. If something configured
-appears to have no effect, check the startup output first. Note that warnings go
-to standard error, which a session started from a display manager may discard --
-see **HIKARI\_LOG** under **ENVIRONMENT** for how to capture it.
+A key written *wrong*, as opposed to twice, is a different matter and is loud.
+An unknown section, and an unknown key inside *ui*, *layout*, *outputs*,
+*inputs*, *views*, *colorscheme*, *bar*, *lock*, *animation* or *blur*, fails
+the load outright and names the offender on standard error. A failed load at
+startup stops the compositor; a failed load on **reload** leaves the running
+configuration in place. Those messages go to standard error too, which a
+session started from a display manager may discard -- see **HIKARI\_LOG** under
+**ENVIRONMENT** for how to capture it.
 
 Environment Variables
 ---------------------
 
-**hikari** supports the use of environment variables in its string values.
-Occurrences of `${VARIABLE}` or `$VARIABLE` inside a string will be substituted
-with the value of an environment variable named `VARIABLE`. If no such
-environment variable exists, no substituation takes place.
+A Lua string is literal, and **hikari** performs no substitution inside one.
+`"$HOME"`, `"${HOME}"` and `"$$HOME"` all reach the compositor as exactly those
+characters. The old format's `$VARIABLE` and `${VARIABLE}` expansion is gone,
+and with it the `$$` escape, which now has nothing left to escape -- a `$` in a
+string is simply a `$`. This is what makes a string destined for a shell easy
+to write: an action's command is run through `/bin/sh -c`, so `$`, `$(` and
+`${}` in it reach the shell exactly as typed, with no doubling.
 
-You can use double dollar signs to escape variables: `$${VARIABLE}` will result
-in `${VARIABLE}`, `$$VARIABLE` will result in `$VARIABLE`.
+The environment is read through a global table named `env` instead. `env.HOME`
+is the value of **HOME**, and a variable that is not set reads as `nil` rather
+than as the literal text of the reference -- so a default can be written with
+Lua's `or`, which the old spelling had no way to express:
+
+```
+terminal = env.TERMINAL or "foot",
+```
+
+The table reaches **getenv**(3) on each access rather than copying the
+environment, so a name is looked up at the moment it is used. Assigning to it
+is refused -- `env.FOO = "x"` fails the load with "env is read-only" -- so a
+configuration cannot change the compositor's environment through it, and could
+not change the process's environment even if it could write to the table.
+
+That refusal is a metatable guard, so `rawset`, whose whole purpose is to
+bypass metatables, goes around it as it would for any table:
+`rawset(env, "HOME", "x")` plants a literal value that shadows **getenv**(3)
+for that name for the rest of the load. Nothing outside the configuration is
+affected, and the next load starts clean -- a configuration can only mislead
+itself this way -- but it does mean `env` is not immutable, only
+unassignable.
+
+One edge the `or` idiom does not cover: a variable that is set but **empty**.
+An empty string is true in Lua, so `or` does not fire and the value becomes
+`""` -- for the line above, the keypress would then run nothing at all. Unset
+the variable rather than blanking it, or write
+
+```
+terminal = (env.TERMINAL ~= "" and env.TERMINAL) or "foot",
+```
+
+which covers both cases.
+
+`env` reads the **compositor's own** environment, which was fixed at the moment
+the compositor was executed. The **reload** action re-reads the configuration
+file inside that same process, so it sees the same environment it saw at
+startup. A variable exported in a shell after **hikari** has started can
+therefore never be picked up, and no reload will rescue it. Set the variable
+before starting **hikari**, or write the value into the configuration file and
+reload that.
 
 ACTIONS
 =======
@@ -615,16 +778,27 @@ To define an action *action-terminal* that launches sakura(1) one needs to
 defined the following.
 
 ```
-terminal = sakura
+terminal = "sakura",
 ```
 
-You can also define actions for laptop media controls, such as volume and brightness:
+You can also define actions for laptop media controls, such as volume and
+brightness:
 
 ```
-vol-up = "mixer vol +5"
-vol-down = "mixer vol -5"
-bright-up = "backlight +5"
+["vol-up"]      = "mixer vol +5",
+["vol-down"]    = "mixer vol -5",
+["bright-up"]   = "backlight incr 5",
+["bright-down"] = "backlight decr 5",
 ```
+
+Note the spelling of the brightness commands. backlight(8) takes the relative
+keyword as its OWN argument -- its usage gives `incr|+ value` and `decr|-
+value`, and it compares the whole argument, so `backlight + 5` works and
+`backlight +5` does not. The latter does not fail, which is the trap: it falls
+through to the absolute form and sets the brightness TO 5 percent, leaving the
+screen almost dark. *incr* and *decr* are used here because they cannot be
+misread that way. These are FreeBSD commands; on Linux the usual equivalent is
+brightnessctl, and the shipped configuration notes it.
 
 Now we can bind the newly defined *action-terminal* to a key combination in the
 *bindings* section.
@@ -655,17 +829,17 @@ key code. Key symbols and codes can be determined using wev(1).
 Once a key combination has been identified it can be bound to an action.
 
 ```
-"LS+a" = action1 # symbol binding
-"LS-38" = action2 # code binding
+["LS+a"]  = "action1",   -- symbol binding
+["LS-38"] = "action2",   -- code binding
 ```
 
 For laptop media keys, you can bind `XF86` keysyms directly without a modifier
 by using `0`:
 
 ```
-"0+XF86AudioRaiseVolume" = action-vol-up
-"0+XF86AudioLowerVolume" = action-vol-down
-"0+XF86MonBrightnessUp" = action-bright-up
+["0+XF86AudioRaiseVolume"] = "action-vol-up",
+["0+XF86AudioLowerVolume"] = "action-vol-down",
+["0+XF86MonBrightnessUp"]  = "action-bright-up",
 ```
 
 The *bindings* section can contain 2 subsections *keyboard* and *mouse* for
@@ -679,10 +853,10 @@ released or additional keys are pressed. It ensures that a *begin* action
 definitely is followed by the *end* action.
 
 ```
-"L+t"  = {
-  begin = action-push-to-talk-start
-  end = action-push-to-talk-stop
-}
+["L+t"] = {
+  begin   = "action-push-to-talk-start",
+  ["end"] = "action-push-to-talk-stop",
+},
 ```
 
 MARK CONFIGURATION
@@ -698,9 +872,9 @@ commands associated with the mark in the *marks* section in the configuration
 file.
 
 ```
-marks {
-  s = sakura
-}
+marks = {
+  s = "sakura",
+},
 ```
 
 VIEW CONFIGURATION
@@ -788,17 +962,17 @@ focus grabbing we would do something like this. Child views inherit the
 the other properties are set to their respective default values.
 
 ```
-systat = {
-  group = monitor
-  sheet = 0
+["systat"] = {
+  group    = "monitor",
+  sheet    = 0,
   position = {
-    x = 1429
-    y = 1077
-  }
-  focus = true
+    x = 1429,
+    y = 1077,
+  },
+  focus    = true,
 
-  inherit = [ group, sheet, { floating = true } ]
-}
+  inherit  = { "group", "sheet", { floating = true } },
+},
 ```
 
 LAYOUTS
@@ -845,17 +1019,39 @@ specify when the *left* and *right* hand side of the split should contain.
 
 ```
 {
-  left = ...
-  right = ...
+  left  = ...,
+  right = ...,
 }
 ```
 
 Respectively to split horizontally you have to specify *top* and *bottom*.
 
-Notice that the order in which you specify *left*, *right*, *top* and *bottom*
-is important, since it defined the orientation of the split. The side of the
-split that gets specified first is the part the gets filled first when tiling a
-sheet, it becomes the dominant part of the split.
+The side of the split that is laid out FIRST is the part that gets filled first
+when tiling a sheet, and it becomes the dominant part of the split.
+
+Which side that is used to be decided by the order in which the two keys were
+written. That no longer works, and this is the third rule the move to Lua
+inverted: a Lua table constructor has no order a reader can recover, so there
+is nothing for **hikari** to inspect. The orientation is written down instead,
+with an *orientation* key whose value is one of *left*, *right*, *top* or
+*bottom*:
+
+```
+  m = {
+    orientation = "right",
+    scale = 0.6,
+    left  = "full",
+    right = "stack",
+  },
+```
+
+Omitting it gives *left* for a *left*/*right* split and *top* for a
+*top*/*bottom* one -- which is exactly what writing *left* before *right*, or
+*top* before *bottom*, used to mean. Every split in the shipped configuration
+is written that way, so none of them needs the key. Only a configuration that
+relied on writing *right* before *left*, or *bottom* before *top*, has to say
+so now; one that does not, and is simply translated key for key, keeps the
+layout it had.
 
 Sometimes splitting a region of space should not result in equally sized
 subdivisions and the dominant part of the split should be scaled up or down.
@@ -867,9 +1063,9 @@ should take up 75% would be specified like so:
 
 ```
 {
-  scale = 0.75
-  top = ...
-  bottom = ...
+  scale  = 0.75,
+  top    = ...,
+  bottom = ...,
 }
 ```
 
@@ -883,11 +1079,11 @@ minimum and maximum scale values for the container. Omitting the values for
 ```
 {
   scale = {
-    min = 0.5
-    max = 0.75
-  }
-  left = single
-  right = stack
+    min = 0.5,
+    max = 0.75,
+  },
+  left  = "single",
+  right = "stack",
 }
 ```
 
@@ -937,7 +1133,7 @@ Binding a fullscreen layout to the layout register **f** can be trivially
 achieved.
 
 ```
-f = full
+f = "full",
 ```
 
 This layout does not subdivide the screen using splits in any way. The container
@@ -953,8 +1149,8 @@ like that:
 
 ```
 {
-  views = 4
-  layout = queue
+  views  = 4,
+  layout = "queue",
 }
 ```
 
@@ -977,7 +1173,7 @@ asking for it.
 
   Note that the two defaults differ on purpose. **hikari** itself defaults to
   *false*, so a configuration that says nothing about layout policy behaves as
-  it always has; the *hikari.conf* shipped with the distribution sets *true*,
+  it always has; the *hikari.lua* shipped with the distribution sets *true*,
   because that is the configuration the compositor is developed and tested
   against. If you started from the shipped file, automatic tiling is on and this
   is the line that turns it off.
@@ -1029,12 +1225,12 @@ the geometry they had until a tiling action is issued.
   same way rather than failing the configuration.
 
 ```
-layout {
-  auto             = false
-  insert           = append
-  reflow-on-close  = true
-  # default-register = "g"
-}
+layout = {
+  auto                = false,
+  insert              = "append",
+  ["reflow-on-close"] = true,
+  -- ["default-register"] = "g",
+},
 ```
 
 UI CONFIGURATION
@@ -1050,7 +1246,7 @@ of these configuration options are part of the *ui* section.
 Standard border thickness is set to **1**.
 
 ```
-border = 1
+border = 1,
 ```
 
 * **gap**
@@ -1061,7 +1257,7 @@ border = 1
 The standard **gap** value is 5.
 
 ```
-gap = 5
+gap = 5,
 ```
 
 * **spill**
@@ -1086,7 +1282,7 @@ gap = 5
   is, so no view is moved, resized or reported differently to its client.
 
 ```
-spill = drag
+spill = "drag",
 ```
 
 * **font**
@@ -1096,8 +1292,7 @@ spill = drag
 **hikari** uses *monospace 10* as its default font setting.
 
 ```
-font = "monospace 10"
-
+font = "monospace 10",
 ```
 
 * **step**
@@ -1108,7 +1303,7 @@ font = "monospace 10"
 The standard **step** value is 100.
 
 ```
-step = 100
+step = 100,
 ```
 
 Animation
@@ -1137,11 +1332,11 @@ travel from the corner of the output.
   One of *linear*, *ease-out* or *ease-in-out*, defaulting to *ease-out*.
 
 ```
-animation {
-  enabled  = false
-  duration = 120
-  easing   = ease-out
-}
+animation = {
+  enabled  = false,
+  duration = 120,
+  easing   = "ease-out",
+},
 ```
 
 Lock screen
@@ -1161,8 +1356,11 @@ that merely looks like a clock.
   Gaussian. Three is the standard approximation and is rarely worth changing.
 
 ```
-blur = false
-blur = { radius = 12; passes = 3 }
+blur = false,
+
+-- Or, instead of disabling it, a table tuning the strength. Write one form
+-- or the other -- a key written twice keeps the last one, silently.
+-- blur = { radius = 12, passes = 3 },
 ```
 
 * **clock**
@@ -1171,11 +1369,11 @@ blur = { radius = 12; passes = 3 }
   strings. Setting *date-format* to an empty string draws the time alone.
 
 ```
-clock        = true
-clock-format = "%H:%M"
-date-format  = "%A, %e %B"
-clock-font   = "sans 72"
-date-font    = "sans 20"
+clock            = true,
+["clock-format"] = "%H:%M",
+["date-format"]  = "%A, %e %B",
+["clock-font"]   = "sans 72",
+["date-font"]    = "sans 20",
 ```
 
 * **clock-color**
@@ -1188,7 +1386,7 @@ date-font    = "sans 20"
   White therefore stays legible over a light wallpaper without any configuration.
 
 ```
-clock-color = "#FFFFFF"
+["clock-color"] = "#FFFFFF",
 ```
 
 * **blank-timeout-ac**, **blank-timeout-battery**
@@ -1203,8 +1401,8 @@ clock-color = "#FFFFFF"
   while the screen is locked takes effect on the next keystroke.
 
 ```
-blank-timeout-ac      = 180
-blank-timeout-battery = 60
+["blank-timeout-ac"]      = 180,
+["blank-timeout-battery"] = 60,
 ```
 
 Views marked **public** are still displayed on the lock screen as before, and
@@ -1251,11 +1449,11 @@ session to be restarted.
   around, so that it reads as a continuous loop rather than snapping back.
 
 ```
-bar {
-  max-block-chars  = 26
-  scroll-interval  = 300
-  scroll-separator = "   •   "
-}
+bar = {
+  ["max-block-chars"]  = 26,
+  ["scroll-interval"]  = 300,
+  ["scroll-separator"] = "   •   ",
+},
 ```
 
 Palette
@@ -1277,24 +1475,24 @@ palette is resolved before anything that can refer to it, so it may be placed
 above or below *colorscheme*.
 
 ```
-palette {
-  color0  = "#2b1e3a"
-  color1  = "#c96464"
-  color2  = "#df9f87"
-  color3  = "#e4b382"
-  color4  = "#8e7cc3"
-  color5  = "#b18fc7"
-  color6  = "#9fa0a6"
-  color7  = "#d4d4d9"
-  color8  = "#5e5966"
-  color9  = "#df8787"
-  color10 = "#f2bda8"
-  color11 = "#f5cf9e"
-  color12 = "#aba0d9"
-  color13 = "#cfaedc"
-  color14 = "#b8b9be"
-  color15 = "#f0edf2"
-}
+palette = {
+  color0  = "#2b1e3a",
+  color1  = "#c96464",
+  color2  = "#df9f87",
+  color3  = "#e4b382",
+  color4  = "#8e7cc3",
+  color5  = "#b18fc7",
+  color6  = "#9fa0a6",
+  color7  = "#d4d4d9",
+  color8  = "#5e5966",
+  color9  = "#df8787",
+  color10 = "#f2bda8",
+  color11 = "#f5cf9e",
+  color12 = "#aba0d9",
+  color13 = "#cfaedc",
+  color14 = "#b8b9be",
+  color15 = "#f0edf2",
+},
 ```
 
 Note that a comment runs to the end of its line, so palette entries must be
@@ -1318,12 +1516,15 @@ battery block, which selects from the palette by charge level:
 Those bands are not separately configurable: they follow the palette, so
 retheming the desktop retints the battery with it.
 
-"Plugged in" is read from *hw.acpi.acline*, which reports the AC line itself
-rather than being deduced from what the battery is doing -- the same sysctl the
-lock screen consults to choose its blanking timeout. On a machine that has no
-such sysctl, a desktop or a VM, it falls back to the ACPI charge flags and
-accepts only the states that positively mean external power, so a critically
-flat battery is never painted as though it were on mains.
+"Plugged in" is read from the AC line itself rather than being deduced from
+what the battery is doing: *hw.acpi.acline* on FreeBSD, and the *online*
+attribute of a *Mains* supply under */sys/class/power\_supply* on Linux. Either
+way it is the same source the lock screen consults to choose its blanking
+timeout. On a machine that offers neither, a desktop or a VM, it falls back to
+what the battery itself reports -- the ACPI charge flags on FreeBSD, the
+supply's *status* on Linux -- and accepts only the states that positively mean
+external power, so a critically flat battery is never painted as though it were
+on mains.
 
 Note that **hikari-topbar** is spawned once at startup, so a palette change
 reaches the bar on the next start of the compositor rather than on a reload.
@@ -1338,10 +1539,13 @@ value (e.g. 0xE6DB74), or as a quoted string in either *"#RRGGBB"* or
 *"#RRGGBBAA"* form. The string form is the only way to specify an alpha channel:
 
 ```
-active = color15       # palette reference
-active = 0xFFFFFF      # integer, always fully opaque
-active = "#FFFFFF"     # identical, written explicitly
-active = "#FFFFFF80"   # 50% alpha
+active = "color15",       -- palette reference
+
+-- The same slot written the other three ways. Write one of the four, not
+-- all of them -- a key written twice keeps the last one, silently.
+-- active = 0xFFFFFF,     -- integer, always fully opaque
+-- active = "#FFFFFF",    -- identical, written explicitly
+-- active = "#FFFFFF80",  -- 50% alpha
 ```
 
 A palette reference cannot carry alpha, since the palette stores opaque colors;
@@ -1404,18 +1608,18 @@ derived from the default palette rather than carrying a literal of its own, so
 overriding the palette alone yields a coherent scheme.
 
 ```
-colorscheme {
-  background = color0
-  foreground = color0
-  active     = color15
-  inactive   = color8
-  selected   = color12
-  first      = color4
-  grouped    = color5
-  insert     = color13
-  conflict   = color9
-  bar        = "#2b1e3ae6"
-}
+colorscheme = {
+  background = "color0",
+  foreground = "color0",
+  active     = "color15",
+  inactive   = "color8",
+  selected   = "color12",
+  first      = "color4",
+  grouped    = "color5",
+  insert     = "color13",
+  conflict   = "color9",
+  bar        = "#2b1e3ae6",
+},
 ```
 
 INPUTS
@@ -1481,15 +1685,15 @@ are available.
 Configuring the *System mouse* input device could look like this.
 
 ```
-inputs {
-  pointers {
-    "System mouse" = {
-      accel = 1.0
-      scroll-method = on-button-down
-      scroll-button = middle
-    }
-  }
-}
+inputs = {
+  pointers = {
+    ["System mouse"] = {
+      accel             = 1.0,
+      ["scroll-method"] = "on-button-down",
+      ["scroll-button"] = "middle",
+    },
+  },
+},
 ```
 
 A special name "\*" is used to address all pointers. Values defined for this
@@ -1540,18 +1744,18 @@ attributes.
 Configuring the *AT keyboard* input device could look like this.
 
 ```
-inputs {
-  keyboards {
-    "*" = {
+inputs = {
+  keyboards = {
+    ["*"] = {
       xkb = {
-        layout = "de(nodeadkeys)"
-        options = "caps:escape"
-      }
-      repeat-rate = 25
-      repeat-delay = 600
-    }
-  }
-}
+        layout  = "de(nodeadkeys)",
+        options = "caps:escape",
+      },
+      ["repeat-rate"]  = 25,
+      ["repeat-delay"] = 600,
+    },
+  },
+},
 ```
 
 A special name "\*" is used to address all keyboards. Values defined for this
@@ -1581,37 +1785,59 @@ an identifier. The *begin* action is triggered when turning the switch on and
 *end* is triggered when turning it off.
 
 ```
-inputs {
-  switches {
-    "Control Method Lid Switch" = lock
-  }
-}
+inputs = {
+  switches = {
+    ["Control Method Lid Switch"] = "lock",
+  },
+},
 ```
 
 Gestures
 --------
-Trackpad gestures reported via *wlr\_pointer\_gestures\_v1* can be bound in the
-*gestures* subsection, same as switches. A binding key has the form
-*swipe-\<direction\>-\<fingers\>*, *pinch-\<direction\>-\<fingers\>*, or
-*hold-\<fingers\>*, where *direction* is one of *up*, *down*, *left*, *right*
-for swipe or *in*, *out* for pinch, and *fingers* is the number of touchpoints
-the gesture requires.
+Gestures can be bound in the *gestures* subsection, same as switches. A binding
+key has the form *swipe-\<direction\>-\<fingers\>*,
+*pinch-\<direction\>-\<fingers\>*, or *hold-\<fingers\>*, where *direction* is
+one of *up*, *down*, *left*, *right* for swipe or *in*, *out* for pinch, and
+*fingers* is the number of touchpoints the gesture requires.
 
-A gesture that matches a configured binding triggers that action instead of
-being forwarded to the focused client; any gesture without a matching binding
-is delivered to the client. Update events are buffered until the gesture ends
-(in case it turns out to match a binding); a gesture with more than 128 update
-events has the excess silently dropped from what is delivered to the client.
+One *gestures* block covers both touchpads and touchscreens, but the two are
+recognized in different places, and they do not behave identically.
+
+On a **touchpad**, recognition is libinput's. It reports the finished gesture
+and hikari only matches it against the bindings, so any finger count from 1 to
+5 works. A gesture that matches a binding triggers that action instead of being
+forwarded to the focused client; one without a matching binding is delivered to
+the client via *wlr\_pointer\_gestures\_v1*. Update events are buffered until
+the gesture ends, in case it turns out to match a binding; a gesture with more
+than 128 update events has the excess silently dropped from what is delivered
+to the client.
+
+On a **touchscreen**, recognition is hikari's own, because libinput does not do
+it: its gesture events come from touchpads only. Two differences follow.
+
+First, a touchscreen gesture needs at least **three** fingers. One- and
+two-finger sequences are how a client is driven -- tapping, dragging, selecting
+text, and its own pinch-to-zoom -- so hikari never takes those. A binding with a
+lower finger count is not an error; it simply only ever fires on a touchpad.
+
+Second, a touchscreen gesture is recognized while it is still being made, not
+replayed afterwards. Its touch points reach the client as usual until the
+moment a binding matches, at which point the client is sent *wl\_touch.cancel*
+-- the protocol's own signal that the compositor has taken the sequence over --
+and receives nothing further from it. Only one binding fires per sequence, and
+a sequence that matches nothing is never interrupted.
+
+Gestures are not recognized while the session is locked.
 
 ```
-inputs {
-  gestures {
-    "swipe-left-3"  = workspace-cycle-next
-    "swipe-right-3" = workspace-cycle-prev
-    "pinch-in-3"    = view-toggle-maximize-full
-    "hold-3"        = action-terminal
-  }
-}
+inputs = {
+  gestures = {
+    ["swipe-left-3"]  = "workspace-cycle-next",
+    ["swipe-right-3"] = "workspace-cycle-prev",
+    ["pinch-in-3"]    = "view-toggle-maximize-full",
+    ["hold-3"]        = "action-terminal",
+  },
+},
 ```
 
 Touch
@@ -1619,11 +1845,34 @@ Touch
 Touchscreen input is supported natively: a touch device is attached to the
 cursor's output layout like a pointer, and touch events are forwarded to
 clients via the standard Wayland touch protocol. The first touch point of a
-new touch sequence additionally drives the same focus, raise, move, and
-resize behavior as a left mouse click, so windows can be managed by tapping
-and dragging on a touchscreen without a mouse. Further simultaneous touch
-points are left untouched for the client to interpret (e.g. pinch-to-zoom in
-a PDF viewer).
+new touch sequence additionally drives focus, raise, move and resize, so
+windows can be managed by tapping and dragging on a touchscreen without a
+mouse, and a mouse binding on *BTN\_LEFT* fires from a touchscreen as it does
+from a mouse. Further simultaneous touch points are left untouched for the
+client to interpret (e.g. pinch-to-zoom in a PDF viewer).
+
+A finger is not treated as a mouse. The window management above is driven from
+the touch handlers directly rather than by synthesizing a button event and
+feeding it to the pointer path, which is what lets the compositor act on a
+contact without any client being told a mouse was involved.
+
+Whether the contact also reaches its client as pointer input depends on the
+client. A client that has bound *wl\_touch* is already receiving the real touch
+sequence and is sent nothing further: delivering a button as well would deliver
+one finger twice, and a toolkit that implements both protocols -- GTK, Qt,
+Firefox and Chromium all do -- can activate a control twice from a single tap.
+A client that has not bound *wl\_touch* would otherwise get nothing at all from
+a touchscreen, so for that one the contact is emulated as pointer input: an
+enter, a motion, the button, and the *wl\_pointer.frame* that commits them. The
+choice is made once per contact, from the client under the finger, so a press
+and its release always travel together. A contact that a mouse binding consumed
+is not emulated, exactly as a bound mouse press is not forwarded either.
+
+While the screen is locked a touch reaches no client at all, neither as touch
+nor as pointer input.
+
+Three or more fingers may be claimed by a gesture binding; see *Gestures*
+above.
 
 OUTPUTS
 =======
@@ -1653,18 +1902,18 @@ When defining a *background* object the following attributes are available.
 Configuring output *eDP-1* and *WL-1* could look like this.
 
 ```
-outputs {
-  "eDP-1" = {
-    background = "/path/to/wallpaper"
-  }
+outputs = {
+  ["eDP-1"] = {
+    background = "/path/to/wallpaper",
+  },
 
-  WL-1 = {
+  ["WL-1"] = {
     background = {
-      path = "/path/to/wallpaper"
-      fit = center
-    }
-  }
-}
+      path = "/path/to/wallpaper",
+      fit  = "center",
+    },
+  },
+},
 ```
 
 Runtime display configuration
@@ -1752,19 +2001,19 @@ Output position can be given explicitly using the *position* attribute. If none
 is given during startup **hikari** will automatically configure the output.
 
 ```
-"eDP-1" = {
+["eDP-1"] = {
   position = {
-    x = 1680
-    y = 0
-  }
-}
+    x = 1680,
+    y = 0,
+  },
+},
 
-"HDMI-A-1" = {
+["HDMI-A-1"] = {
   position = {
-    x = 0
-    y = 0
-  }
-}
+    x = 0,
+    y = 0,
+  },
+},
 ```
 
 PANELS AND DOCKS
@@ -1773,7 +2022,7 @@ PANELS AND DOCKS
 Panels, docks, notification daemons and wallpaper setters are ordinary clients
 speaking *wlr-layer-shell* (**saber**, **waybar**, **mako**, **swaybg**). The
 protocol is compiled in with *WITH\_LAYERSHELL*, which is on by default. There
-is nothing to configure for them in *hikari.conf*: a layer-shell client asks for
+is nothing to configure for them in *hikari.lua*: a layer-shell client asks for
 its position, its size and its share of the screen over the protocol, and the
 compositor honours the request.
 
@@ -1900,6 +2149,27 @@ fast-changing, and everything else once a second.
 | Battery | *hw.acpi.battery.\**, *hw.acpi.acline* | a battery is present |
 | Clock and date | **strftime**(3) | always |
 
+The sysctls and the **backlight**(8) pipeline in that table are the FreeBSD
+sources. Five of the sensors are written once per platform and the build links
+exactly one of the pair, so on Linux the same five blocks read *sysfs* and
+*procfs* directly instead -- no fork, no shell, and no tool to install:
+
+| Block | FreeBSD | Linux |
+| ----- | ------- | ----- |
+| CPU usage | *kern.cp\_time* | */proc/stat* |
+| RAM usage | *hw.physmem*, *vm.stats.vm.\** | */proc/meminfo* |
+| CPU temperature | *dev.cpu.0.temperature*, then *hw.acpi.thermal.tz0.temperature* | */sys/class/hwmon*, then */sys/class/thermal* |
+| Backlight | **backlight**(8) | */sys/class/backlight* |
+| Battery | *hw.acpi.battery.\**, *hw.acpi.acline* | */sys/class/power\_supply* |
+| GPU (AMD) | not available | */sys/class/drm/cardN/device* |
+
+The remaining blocks are platform-neutral and are the same code on both: the
+partition, media, network, volume and clock blocks all use the interfaces named
+in the first table, and so do the GPU blocks when an NVIDIA card answers. The sentinels, units and ranges of the
+five split sensors were taken from the FreeBSD implementation one function at a
+time, so a block that is omitted on one platform for want of a reading is
+omitted on the other for the same reason.
+
 A block whose source cannot be read is omitted entirely rather than drawn empty,
 so a desktop with no battery and integrated graphics simply has a shorter bar.
 
@@ -1917,11 +2187,32 @@ block that uses it.
 * A **Nerd Font**, installed and selected through *ui.font*. The blocks are
   labelled with private-use-area glyphs, so without one the bar renders boxes.
 
-* **playerctl** for the media block, **pactl** (PulseAudio or PipeWire-pulse)
-  for the volume block, **backlight**(8) -- part of the FreeBSD base system --
-  for the backlight block, and **nvidia-smi** for the GPU blocks. The NVIDIA
-  probe runs once at startup; on integrated-only machines the GPU blocks never
-  appear at all.
+* **playerctl** for the media block and **pactl** (PulseAudio or
+  PipeWire-pulse) for the volume block.
+
+* **nvidia-smi** for the GPU blocks on an NVIDIA machine, probed once at
+  startup. An AMD card on Linux needs no tool at all: *gpu\_busy\_percent*,
+  *mem\_info\_vram\_used*, *mem\_info\_vram\_total* and a hwmon temperature are
+  read from */sys/class/drm/cardN/device* directly, and all four must be
+  readable or the blocks are omitted, since a partial GPU reading is worse than
+  none. On a machine with several cards, the lowest-numbered one that answers
+  completely is used -- the card number says nothing about which GPU is
+  discrete, so the rule is chosen for stability rather than for guessing. When
+  an NVIDIA card and an AMD card are both present the NVIDIA reading wins,
+  because the bar has one GPU slot and changing which card an existing machine
+  reports would be a regression for its owner.
+
+  Intel is not supported, and that is a limitation of the interfaces rather
+  than an omission. Neither i915 nor xe exposes a utilisation figure in sysfs;
+  engine busyness is available only through their perf PMUs, which are
+  system-wide and therefore need *CAP\_PERFMON* on a kernel with the default
+  *perf\_event\_paranoid* of 2. Integrated graphics also has no VRAM pool to
+  report. Rather than show a different quantity under the same label, the
+  blocks are omitted, which is what they already do when no GPU answers.
+
+* **backlight**(8) for the backlight block, on FreeBSD only -- it is part of
+  the FreeBSD base system, so there is nothing to install. The Linux build
+  needs no tool for that block at all; it reads */sys/class/backlight* itself.
 
 How over-long blocks are handled is configured in the *bar* subsection of *ui*,
 described under **UI CONFIGURATION**. Those keys are read by the compositor
@@ -2055,16 +2346,20 @@ ok
 FILES
 =====
 
-* *$XDG\_CONFIG\_HOME/hikari/hikari.conf*
+* *$XDG\_CONFIG\_HOME/hikari/hikari.lua*
 
   User configuration. When **XDG\_CONFIG\_HOME** is unset this is
-  *~/.config/hikari/hikari.conf*.
+  *~/.config/hikari/hikari.lua*.
 
-* *${ETC\_PREFIX}/etc/hikari/hikari.conf*
+* *${ETC\_PREFIX}/etc/hikari/hikari.lua*
 
   System-wide default configuration, used when no user configuration is
-  readable. **ETC\_PREFIX** is fixed at compile time and defaults to
-  */usr/local*.
+  readable. **ETC\_PREFIX** is fixed at compile time. On FreeBSD it tracks
+  **PREFIX** and so defaults to */usr/local*, giving
+  */usr/local/etc/hikari/hikari.lua*. On Linux it is empty by default, so this
+  path is */etc/hikari/hikari.lua* -- Linux-PAM compiles */etc/pam.d* into the
+  library rather than resolving it under a prefix, and the two must agree. A
+  distribution packager can override it either way.
 
 * *~/.config/hikari/autostart*
 
@@ -2125,17 +2420,22 @@ ENVIRONMENT
 
 * **TERMINAL**
 
-  Terminal emulator spawned by the default configuration's *terminal* action.
+  Terminal emulator spawned by the default configuration's *terminal* action
+  and bound to its *s* mark, as `env.TERMINAL or "foot"` -- so **foot** is
+  used when it is unset. Read when the configuration file is read, not when
+  the action fires; see *Environment Variables* under **CONFIGURATION**.
 
 * **HIKARI\_LOG**
 
   When set to a writable file path, **start-hikari** redirects its own
   descriptors there before **exec**, capturing everything **hikari** and wlroots
-  write to standard error -- including the duplicate-key configuration warnings
-  described under **CONFIGURATION**, which a session started from a display
-  manager would otherwise discard. The redirect is a real **exec** rather than a
-  pipe, so the compositor's exit status and signal disposition are preserved.
-  Output no longer echoes to the terminal while logging.
+  write to standard error -- including the configuration errors described under
+  **CONFIGURATION**, which a session started from a display manager would
+  otherwise discard. Note that a duplicate key is *not* among them: Lua
+  collapses it before the compositor sees it, so no amount of logging will ever
+  surface one. The redirect is a real **exec** rather than a pipe, so the
+  compositor's exit status and signal disposition are preserved. Output no
+  longer echoes to the terminal while logging.
 
 * **XKB\_DEFAULT\_LAYOUT**, **XKB\_DEFAULT\_MODEL**, **XKB\_DEFAULT\_OPTIONS**,
   **XKB\_DEFAULT\_RULES**
@@ -2174,8 +2474,10 @@ ENVIRONMENT
 
   When unset, **start-hikari** wraps the compositor in **dbus-run-session**.
 
-Any environment variable may additionally be referenced from string values in
-the configuration file; see *Environment Variables* under **CONFIGURATION**.
+Any environment variable may additionally be read from the configuration file
+through the global `env` table -- `env.TERMINAL`, and so on. There is no
+substitution inside a string value; see *Environment Variables* under
+**CONFIGURATION**.
 
 EXIT STATUS
 ===========
@@ -2193,7 +2495,7 @@ normal user and is not rejected.
 SEE ALSO
 ========
 
-**sofi**(1), cwm(1), libucl(3), libinput(1), xkeyboard-config(7), strftime(3),
+**sofi**(1), cwm(1), libinput(1), xkeyboard-config(7), strftime(3),
 backlight(8), mixer(8), devd(8), acpi(4)
 
 * Hikari Sakura -- <https://github.com/orpheus497/hikari-sakura>

@@ -1,14 +1,14 @@
 #include <hikari/view_config.h>
-#include <hikari/config_key.h>
 
 #include <assert.h>
 #include <stdlib.h>
-#include <ucl.h>
 
+#include <hikari/config_lua.h>
 #include <hikari/geometry.h>
 #include <hikari/memory.h>
 #include <hikari/output.h>
 #include <hikari/server.h>
+#include <hikari/sheet.h>
 #include <hikari/view.h>
 
 static void
@@ -164,24 +164,21 @@ hikari_view_properties_resolve_position(
 static bool
 parse_property(struct hikari_view_properties *properties,
     const char *key,
-    const ucl_object_t *property_obj)
+    lua_State *L,
+    int idx)
 {
   bool success = false;
 
   if (!strcmp(key, "group")) {
     const char *group_name;
 
-    if (!ucl_object_tostring_safe(property_obj, &group_name)) {
-      fprintf(stderr,
-          "configuration error: expected string for \"views\" "
-          "\"group\"\n");
+    if (!hikari_config_string(L, idx, "a views entry", key, &group_name)) {
       goto done;
     }
 
     if (strlen(group_name) == 0) {
-      fprintf(stderr,
-          "configuration error: expected non-empty string for \"views\" "
-          "\"group\"\n");
+      hikari_config_error(
+          "a views entry", "expected non-empty string for \"group\"");
       goto done;
     }
 
@@ -189,10 +186,19 @@ parse_property(struct hikari_view_properties *properties,
     properties->group_name = strdup(group_name);
   } else if (!strcmp(key, "sheet")) {
     int64_t sheet_nr;
-    if (!ucl_object_toint_safe(property_obj, &sheet_nr)) {
-      fprintf(stderr,
-          "configuration error: expected integer for \"views\" "
-          "\"sheet\"\n");
+
+    if (!hikari_config_int(L, idx, "a views entry", key, &sheet_nr)) {
+      goto done;
+    }
+
+    /* Action purpose: hikari_view_properties_resolve_sheet() indexes
+    workspace->sheets with this number and -1 is its sentinel for "whichever
+    sheet is current", so anything outside that range reads past the end of an
+    array of HIKARI_NR_OF_SHEETS sheets. */
+    if (sheet_nr < -1 || sheet_nr >= HIKARI_NR_OF_SHEETS) {
+      hikari_config_error("a views entry",
+          "expected integer between 0 and 9, or -1 for the current sheet, for "
+          "\"sheet\"");
       goto done;
     }
 
@@ -200,32 +206,25 @@ parse_property(struct hikari_view_properties *properties,
   } else if (!strcmp(key, "mark")) {
     const char *mark_name;
 
-    if (!ucl_object_tostring_safe(property_obj, &mark_name)) {
-      fprintf(stderr,
-          "configuration error: expected string for \"views\" \"mark\"");
+    if (!hikari_config_string(L, idx, "a views entry", key, &mark_name)) {
       goto done;
     }
 
     if (strlen(mark_name) != 1 || mark_name[0] < 'a' || mark_name[0] > 'z') {
-      fprintf(stderr,
-          "configuration error: invalid \"mark\" register \"%s\" for "
-          "\"views\"\n",
-          mark_name);
+      hikari_config_error(
+          "a views entry", "invalid \"mark\" register \"%s\"", mark_name);
       goto done;
     }
 
     properties->mark = &hikari_marks[mark_name[0] - 'a'];
   } else if (!strcmp(key, "position")) {
-    if (!hikari_position_config_parse(&properties->position, property_obj)) {
+    if (!hikari_position_config_parse(&properties->position, L, idx)) {
       goto done;
     }
   } else if (!strcmp(key, "focus")) {
     bool focus;
 
-    if (!ucl_object_toboolean_safe(property_obj, &focus)) {
-      fprintf(stderr,
-          "configuration error: expected boolean for \"views\" "
-          "\"focus\"\n");
+    if (!hikari_config_bool(L, idx, "a views entry", key, &focus)) {
       goto done;
     }
 
@@ -233,10 +232,7 @@ parse_property(struct hikari_view_properties *properties,
   } else if (!strcmp(key, "invisible")) {
     bool invisible;
 
-    if (!ucl_object_toboolean_safe(property_obj, &invisible)) {
-      fprintf(stderr,
-          "configuration error: expected boolean for \"views\" "
-          "\"invisible\"\n");
+    if (!hikari_config_bool(L, idx, "a views entry", key, &invisible)) {
       goto done;
     }
 
@@ -244,10 +240,7 @@ parse_property(struct hikari_view_properties *properties,
   } else if (!strcmp(key, "floating")) {
     bool floating;
 
-    if (!ucl_object_toboolean_safe(property_obj, &floating)) {
-      fprintf(stderr,
-          "configuration error: expected boolean for \"views\" "
-          "\"floating\"\n");
+    if (!hikari_config_bool(L, idx, "a views entry", key, &floating)) {
       goto done;
     }
 
@@ -255,16 +248,13 @@ parse_property(struct hikari_view_properties *properties,
   } else if (!strcmp(key, "public")) {
     bool publicview;
 
-    if (!ucl_object_toboolean_safe(property_obj, &publicview)) {
-      fprintf(stderr,
-          "configuration error: expected boolean for \"views\" "
-          "\"public\"\n");
+    if (!hikari_config_bool(L, idx, "a views entry", key, &publicview)) {
       goto done;
     }
 
     properties->publicview = publicview;
   } else {
-    fprintf(stderr, "configuration error: unkown \"views\" key \"%s\"\n", key);
+    hikari_config_error("a views entry", "unknown key \"%s\"", key);
     goto done;
   }
 
@@ -277,112 +267,199 @@ done:
 
 static bool
 parse_properties(struct hikari_view_properties *properties,
-    const ucl_object_t *view_config_obj)
+    lua_State *L,
+    int view_config_idx)
 {
   bool success = false;
-  ucl_object_iter_t it = ucl_object_iterate_new(view_config_obj);
+  struct hikari_config_iter iter;
+  const char *key;
 
-  const ucl_object_t *cur;
-  while ((cur = ucl_object_iterate_safe(it, false)) != NULL) {
-    hikari_config_warn_duplicate_key(cur, "a views entry");
+  hikari_config_iter_init(&iter, L, view_config_idx);
 
-    const char *key = ucl_object_key(cur);
-
-    if (!strcmp(key, "inherit")) {
-      continue;
+  while (hikari_config_iter_next(&iter, L, &key, "a views entry")) {
+    if (strcmp(key, "inherit")) {
+      if (!parse_property(properties, key, L, iter.vidx)) {
+        goto done;
+      }
     }
 
-    if (!parse_property(properties, key, cur)) {
-      goto done;
-    }
+    /* Action purpose: lua_next() takes the cursor key from the top of the
+    stack, so everything this round pushed -- the value at iter.vidx included
+    -- has to be gone before the next one. */
+    lua_settop(L, iter.vidx - 1);
+  }
+
+  if (iter.failed) {
+    goto done;
   }
 
   success = true;
 
 done:
-  ucl_object_iterate_free(it);
+  hikari_config_iter_fini(&iter, L);
 
   return success;
+}
+
+/* Function purpose: Copy one named property of a views entry from the parent
+to the child properties. The name is the user's, so it is matched here rather
+than at the call sites; note that the direct key is "public" while the
+inheritable name for it is "publicview", an asymmetry hikari(1) documents and
+which a rename would quietly break. */
+static bool
+parse_inherited_property(struct hikari_view_properties *properties,
+    struct hikari_view_properties *child_properties,
+    const char *attr)
+{
+  if (!strcmp(attr, "group")) {
+    /* Action purpose: release any name already held before overwriting it.
+    The inherit list can name "group" more than once -- nothing rejects a
+    repeated entry -- and parse_property() frees first for exactly this reason.
+    hikari_free() tolerates NULL, so the unset case needs no guard. */
+    hikari_free(child_properties->group_name);
+
+    if (properties->group_name != NULL) {
+      child_properties->group_name = strdup(properties->group_name);
+    } else {
+      child_properties->group_name = NULL;
+    }
+  } else if (!strcmp(attr, "sheet")) {
+    child_properties->sheet_nr = properties->sheet_nr;
+  } else if (!strcmp(attr, "mark")) {
+    child_properties->mark = properties->mark;
+  } else if (!strcmp(attr, "position")) {
+    memcpy(&child_properties->position,
+        &properties->position,
+        sizeof(struct hikari_position_config));
+  } else if (!strcmp(attr, "focus")) {
+    child_properties->focus = properties->focus;
+  } else if (!strcmp(attr, "invisible")) {
+    child_properties->invisible = properties->invisible;
+  } else if (!strcmp(attr, "floating")) {
+    child_properties->floating = properties->floating;
+  } else if (!strcmp(attr, "publicview")) {
+    child_properties->publicview = properties->publicview;
+  } else {
+    hikari_config_error(
+        "a views entry", "unknown \"inherit\" property \"%s\"", attr);
+    return false;
+  }
+
+  return true;
 }
 
 static bool
 parse_inherited_properties(struct hikari_view_properties *properties,
     struct hikari_view_properties *child_properties,
-    const ucl_object_t *inherit_obj)
+    lua_State *L,
+    int inherit_idx)
 {
   bool success = false;
-  ucl_object_iter_t it = ucl_object_iterate_new(inherit_obj);
+  int entry_top = lua_gettop(L);
+  const char *attr;
+  lua_Integer nr_of_elements;
+  lua_Integer i;
 
-  const ucl_object_t *cur;
-  while ((cur = ucl_object_iterate_safe(it, false)) != NULL) {
-    ucl_type_t type = ucl_object_type(cur);
-    const char *attr;
+  inherit_idx = lua_absindex(L, inherit_idx);
 
-    switch (type) {
-      case UCL_STRING:
-        if (!ucl_object_tostring_safe(cur, &attr)) {
+  /* Action purpose: a bare string inherits a single property. libucl gave this
+  for nothing, because iterating a scalar yields the scalar once; in Lua a
+  string is not a table and needs its own branch to keep working. */
+  if (lua_type(L, inherit_idx) == LUA_TSTRING) {
+    if (!hikari_config_string(
+            L, inherit_idx, "a views entry", "inherit", &attr)) {
+      goto done;
+    }
+
+    success = parse_inherited_property(properties, child_properties, attr);
+    goto done;
+  }
+
+  if (lua_type(L, inherit_idx) != LUA_TTABLE) {
+    hikari_config_error("a views entry",
+        "\"inherit\" expects a string or a list of them, got %s",
+        lua_typename(L, lua_type(L, inherit_idx)));
+    goto done;
+  }
+
+  nr_of_elements = (lua_Integer)lua_rawlen(L, inherit_idx);
+
+  /* Action purpose: a table written as { floating = true } has no array part,
+  so the loop below would walk none of it and inherit nothing without a word.
+  An empty list is not that mistake -- it inherits nothing deliberately, as an
+  empty libucl array did -- so the two are told apart by asking whether the
+  table holds any entry at all. */
+  if (nr_of_elements == 0) {
+    lua_pushnil(L);
+
+    if (lua_next(L, inherit_idx) != 0) {
+      hikari_config_error("a views entry",
+          "\"inherit\" expects a list -- write inherit = { { floating = true "
+          "} }, not inherit = { floating = true }");
+      goto done;
+    }
+  }
+
+  for (i = 1; i <= nr_of_elements; i++) {
+    int element_idx;
+
+    lua_rawgeti(L, inherit_idx, i);
+    element_idx = lua_gettop(L);
+
+    switch (lua_type(L, element_idx)) {
+      case LUA_TSTRING:
+        if (!hikari_config_string(
+                L, element_idx, "a views entry", "inherit", &attr)) {
           goto done;
         }
 
-        if (!strcmp(attr, "group")) {
-          if (properties->group_name != NULL) {
-            child_properties->group_name = strdup(properties->group_name);
-          } else {
-            child_properties->group_name = NULL;
-          }
-        } else if (!strcmp(attr, "sheet")) {
-          child_properties->sheet_nr = properties->sheet_nr;
-        } else if (!strcmp(attr, "mark")) {
-          child_properties->mark = properties->mark;
-        } else if (!strcmp(attr, "position")) {
-          memcpy(&child_properties->position,
-              &properties->position,
-              sizeof(struct hikari_position_config));
-        } else if (!strcmp(attr, "focus")) {
-          child_properties->focus = properties->focus;
-        } else if (!strcmp(attr, "invisible")) {
-          child_properties->invisible = properties->invisible;
-        } else if (!strcmp(attr, "floating")) {
-          child_properties->floating = properties->floating;
-        } else if (!strcmp(attr, "publicview")) {
-          child_properties->publicview = properties->publicview;
+        if (!parse_inherited_property(properties, child_properties, attr)) {
+          goto done;
         }
         break;
 
-      case UCL_OBJECT:
-        if (!parse_properties(child_properties, cur)) {
+      case LUA_TTABLE:
+        if (!parse_properties(child_properties, L, element_idx)) {
           goto done;
         }
         break;
 
       default:
+        hikari_config_error("a views entry",
+            "\"inherit\" expects a string or a table, got %s",
+            lua_typename(L, lua_type(L, element_idx)));
         goto done;
     }
+
+    lua_settop(L, entry_top);
   }
 
   success = true;
 
 done:
-  ucl_object_iterate_free(it);
+  lua_settop(L, entry_top);
 
   return success;
 }
 
 bool
-hikari_view_config_parse(
-    struct hikari_view_config *view_config, const ucl_object_t *view_config_obj)
+hikari_view_config_parse(struct hikari_view_config *view_config,
+    lua_State *L,
+    int view_config_idx)
 {
   struct hikari_view_properties *properties = &view_config->properties;
   bool success = false;
+  int entry_top = lua_gettop(L);
 
-  if (!parse_properties(properties, view_config_obj)) {
+  view_config_idx = lua_absindex(L, view_config_idx);
+
+  if (!parse_properties(properties, L, view_config_idx)) {
     goto done;
   }
 
-  const ucl_object_t *inherit_obj =
-      ucl_object_lookup(view_config_obj, "inherit");
+  if (hikari_config_field(L, view_config_idx, "inherit") != LUA_TNIL) {
+    int inherit_idx = lua_gettop(L);
 
-  if (inherit_obj != NULL) {
     view_config->child_properties =
         hikari_malloc(sizeof(struct hikari_view_properties));
 
@@ -391,7 +468,7 @@ hikari_view_config_parse(
     init_properties(child_properties);
 
     if (!parse_inherited_properties(
-            properties, child_properties, inherit_obj)) {
+            properties, child_properties, L, inherit_idx)) {
       goto done;
     }
   }
@@ -399,6 +476,7 @@ hikari_view_config_parse(
   success = true;
 
 done:
+  lua_settop(L, entry_top);
 
   return success;
 }

@@ -5,6 +5,7 @@
 
 #include <hikari/action.h>
 #include <hikari/binding.h>
+#include <hikari/evdev.h>
 #include <hikari/binding_group.h>
 #include <hikari/configuration.h>
 #include <hikari/indicator.h>
@@ -29,6 +30,7 @@ struct cursor_down_state {
 };
 
 static struct cursor_down_state cursor_down_state;
+
 
 static bool
 handle_input(struct hikari_binding_group *map, uint32_t code)
@@ -167,12 +169,11 @@ modifiers_handler(struct hikari_keyboard *keyboard)
   }
 
   if (hikari_server.keyboard_state.mod_changed) {
-    /* [COMMENT] Action purpose: The Logo key going down or up is what drives
-    the indicator overlay on and off. This previously called
-    hikari_indicator_damage() for both transitions -- and that is just
-    hikari_indicator_position(), which used to force the frame visible -- so
-    releasing the key showed the overlay exactly as much as pressing it did,
-    and nothing ever took it back down. See DECISIONS_LOG Phase 59. */
+    /* [COMMENT] Action purpose: The Logo key going down or up drives the
+    indicator overlay on and off, and the two transitions need different
+    calls. hikari_indicator_damage() is only hikari_indicator_position(), so
+    using it for both shows the overlay on release as much as on press and
+    never takes it down. */
     if (hikari_server_is_indicating()) {
       if (focus_view != NULL) {
         hikari_group_damage(focus_view->group);
@@ -198,6 +199,32 @@ static void
 cancel(void)
 {}
 
+// Function purpose: Give a node keyboard/raise focus unless it already has it.
+static void
+focus_node_if_needed(struct hikari_node *node)
+{
+  struct hikari_workspace *focused = hikari_server.workspace;
+
+  /* Action purpose: A layer node is never equal to focus_view, so comparing
+  against that alone re-focused a hovered layer surface on every motion event
+  -- for a keyboard-interactive one, a full seat keyboard leave/enter per
+  event. */
+  struct hikari_node *focus_node = (struct hikari_node *)focused->focus_view;
+#ifdef HAVE_LAYERSHELL
+  struct hikari_node *focus_layer_node =
+      (struct hikari_node *)focused->focus_layer;
+#else
+  /* Action purpose: hikari_workspace::focus_layer only exists with
+  layer-shell support, and without it no layer node can be hovered, so the
+  comparison below is against nothing. */
+  struct hikari_node *focus_layer_node = NULL;
+#endif
+
+  if (node != focus_node && node != focus_layer_node) {
+    hikari_node_focus(node);
+  }
+}
+
 static void
 cursor_down_move(uint32_t time)
 {
@@ -220,6 +247,29 @@ cursor_move(uint32_t time)
 {
   assert(hikari_server_in_normal_mode());
 
+  /* [COMMENT] Action purpose: A held touch contact pins focus, exactly as a
+  held mouse button does by swapping this function out for cursor_down_move().
+
+  This function is reached by far more than pointer motion:
+  hikari_server_cursor_focus() calls it whenever the scene changes under the
+  cursor -- a window mapping or unmapping, a re-tile, a layer surface
+  appearing, a workspace switch. Each re-hit-tests and can focus and
+  pointer-enter a different surface, which during a contact is wrong three
+  times over: keyboard focus moves away from the window the finger is on,
+  wlroots resets its button accounting on the enter so the contact's release
+  is later dropped as unmatched, and the emulated motion goes on reporting
+  coordinates in the old surface's frame into the new one.
+
+  Tested here rather than by swapping in a pinned variant the way the mouse
+  does, because the two can overlap: a mouse press during a contact would
+  overwrite the swapped pointer and its release would restore the unpinned
+  one, losing the pin while the finger is still down. One condition cannot get
+  that wrong. Nothing below runs, pointer_constraint_refresh() included, which
+  is what cursor_down_move() also does for a mouse drag. */
+  if (hikari_server.cursor.has_primary_touch) {
+    return;
+  }
+
   double sx, sy;
   struct wlr_seat *seat = hikari_server.seat;
   struct wlr_surface *surface;
@@ -233,27 +283,8 @@ cursor_move(uint32_t time)
           &sx,
           &sy);
 
-if (node != NULL) {
-    struct hikari_workspace *focused = hikari_server.workspace;
-
-    /* Action purpose: A layer node is never equal to focus_view, so comparing
-    against that alone re-focused a hovered layer surface on every motion event
-    -- for a keyboard-interactive one, a full seat keyboard leave/enter per
-    event. */
-    struct hikari_node *focus_node = (struct hikari_node *)focused->focus_view;
-#ifdef HAVE_LAYERSHELL
-    struct hikari_node *focus_layer_node =
-        (struct hikari_node *)focused->focus_layer;
-#else
-    /* Action purpose: hikari_workspace::focus_layer only exists with
-    layer-shell support, and without it no layer node can be hovered, so the
-    comparison below is against nothing. */
-    struct hikari_node *focus_layer_node = NULL;
-#endif
-
-    if (node != focus_node && node != focus_layer_node) {
-      hikari_node_focus(node);
-    }
+  if (node != NULL) {
+    focus_node_if_needed(node);
 
     wlr_seat_pointer_notify_enter(seat, surface, sx, sy);
     wlr_seat_pointer_notify_motion(seat, time, sx, sy);
@@ -372,6 +403,81 @@ key_handler(
       hikari_server.seat, event->time_msec, event->keycode, event->state);
 }
 
+/* [COMMENT] Function purpose: Window management for a touch contact beginning,
+and nothing client-facing.
+
+Runs the mouse bindings, so a `pointer BTN_LEFT` binding fires from a
+touchscreen too, and the pending end action a press-and-hold binding leaves
+behind.
+
+Focus is taken here rather than left to cursor_move. A pointer has hovered the
+node before it clicks, so focus is already settled by the time the button
+arrives; a finger has not hovered anything, and wlr_cursor_warp() emits no
+motion signal, so nothing else would settle it until the contact ended. */
+static bool
+touch_begin(struct hikari_cursor *cursor, uint32_t time_msec)
+{
+  if (handle_pending_action()) {
+    return true;
+  }
+
+  double sx;
+  double sy;
+  struct wlr_surface *surface;
+  struct hikari_workspace *workspace;
+
+  struct hikari_node *node =
+      hikari_server_node_at(cursor->wlr_cursor->x,
+          cursor->wlr_cursor->y,
+          &surface,
+          &workspace,
+          &sx,
+          &sy);
+
+  if (node != NULL) {
+    focus_node_if_needed(node);
+  }
+
+  struct hikari_binding_group *map =
+      &cursor->bindings[hikari_server.keyboard_state.modifiers];
+
+  return handle_input(map, BTN_LEFT);
+}
+
+/* [COMMENT] Function purpose: Window management for a touch contact ending.
+
+First the pending end action: a press-and-hold mouse binding stores its end
+action when the press fires and expects the release to run it, and a finger
+must honour that the same way.
+
+Then focus is resynced, because the contact pinned it. cursor_move() returns
+early for the whole of a contact, so a physical mouse moved meanwhile warps
+the cursor without carrying pointer focus along; unresynced, the next click --
+which need not be preceded by any motion -- would go to whatever surface the
+contact had entered rather than the one now under the cursor.
+has_primary_touch is already false here, so the refresh does the full hit
+test.
+
+Not while a physical button is held. hikari_server_cursor_focus() dispatches
+through mode->cursor_move, which is cursor_down_move() for the duration of a
+pointer drag -- and that reports motion from the cursor's CURRENT position,
+which the contact warped to the finger. Refreshing here would jump the drag to
+wherever the finger was. stop_cursor_down_handling() refreshes focus when the
+button is released, which is the right moment for it.
+
+This cannot run during a lock: lock entry releases the contact through
+end_primary_touch(), which does not call this, and detaches the touch
+listeners before installing lock mode. */
+static void
+touch_end(struct hikari_cursor *cursor, uint32_t time_msec)
+{
+  handle_pending_action();
+
+  if (!is_cursor_down()) {
+    hikari_server_cursor_focus();
+  }
+}
+
 void
 hikari_normal_mode_init(struct hikari_normal_mode *normal_mode)
 {
@@ -381,6 +487,19 @@ hikari_normal_mode_init(struct hikari_normal_mode *normal_mode)
 
   normal_mode->mode.cancel = cancel;
   normal_mode->mode.cursor_move = cursor_move;
+
+  normal_mode->mode.touch_begin = touch_begin;
+  normal_mode->mode.touch_end = touch_end;
+
+  /* Action purpose: The only mode in which a contact is delivered to a
+  pointer-only client. See struct hikari_mode. */
+  normal_mode->mode.touch_emulates_pointer = true;
+  /* Action purpose: No touch_motion. A contact that has already begun must not
+  re-focus whatever it is dragged over -- a finger swiping inside a window is
+  scrolling it, not choosing a new one -- and the client's own motion is the
+  touch layer's to deliver. move_mode and resize_mode do set one, because there
+  the motion IS the window management. */
+
   normal_mode->pending_action = NULL;
 }
 

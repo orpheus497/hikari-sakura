@@ -2,7 +2,7 @@
 
 #include <string.h>
 
-#include <dev/evdev/input-event-codes.h>
+#include <hikari/evdev.h>
 
 #include <hikari/memory.h>
 

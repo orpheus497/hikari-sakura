@@ -77,11 +77,11 @@ get_user_autostart(void)
 static char *
 get_user_config_path(void)
 {
-  return get_default_path("hikari.conf");
+  return get_default_path("hikari.lua");
 }
 
 #define STR(s) #s
-#define DEFAULT_CONFIG(s) STR(s) "/etc/hikari/hikari.conf"
+#define DEFAULT_CONFIG(s) STR(s) "/etc/hikari/hikari.lua"
 #define DEFAULT_CONFIG_FILE DEFAULT_CONFIG(HIKARI_ETC_PREFIX)
 
 /* [COMMENT] Function purpose: Returns the default system-wide configuration
@@ -141,6 +141,25 @@ get_config_path(char *path)
     /* [COMMENT] Action purpose: Fallback to system default configuration if
      * user configuration is unavailable. */
     if (user_config == NULL) {
+      /* [COMMENT] Action purpose: Say so when the user has a configuration
+      this version no longer reads. hikari.conf was the libucl format; the
+      lookup above now asks for hikari.lua only, so a user upgrading with a
+      hikari.conf in place silently gets the system default and loses every
+      binding and setting they had, with nothing in the log to say why. One
+      line naming the file is the whole fix -- the file is not read, not
+      converted and not renamed, because guessing at a translation would be
+      worse than saying plainly that there is none. */
+      char *legacy_config = check_path(get_default_path("hikari.conf"), R_OK);
+
+      if (legacy_config != NULL) {
+        fprintf(stderr,
+            "configuration: %s is no longer read -- hikari now uses "
+            "hikari.lua (see hikari(1))\n",
+            legacy_config);
+
+        free(legacy_config);
+      }
+
       char *default_config = check_path(get_default_config_path(), R_OK);
 
       config = default_config;

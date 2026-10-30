@@ -3,7 +3,15 @@
 # back by the `.sinclude` loop at the end of the Makefile -- one per object, so
 # roughly seventy of them appear in the tree root on the first build.
 *.o
-*.d
+# Anchored to the tree root, and that anchor is load-bearing. A pattern with no
+# slash matches at every level AND matches directory names, so a bare `*.d`
+# also matched the `pam.d` DIRECTORY -- silently excluding every new file under
+# etc/pam.d/ from the repository. The FreeBSD policy only survived because it
+# was already tracked; the Linux policies added later were invisible to `git
+# add`, and `make install` would have looked for a file no clone contains.
+# The objects these dependency files accompany are built with bare names in the
+# tree root (see OBJS), so the root anchor matches exactly what it should.
+/*.d
 
 # Linked binaries. Anchored to the root so that only the build outputs match,
 # never a same-named file somewhere under src/ or share/.
@@ -24,8 +32,12 @@
 # build the roff page first, so nothing needs the generated copy committed.
 /share/man/man1/hikari.1
 
-# Release tarballs produced by `make dist`.
+# Release tarballs produced by `make dist`, and the staging directory the rule
+# builds them from. The staging directory is removed by the recipe itself; this
+# entry only covers an interrupted run, which would otherwise leave a tree of
+# every distributed file sitting untracked in the checkout.
 /hikari-*.tar.gz
+/hikari-*/
 
 # Core dumps. Kept out deliberately: they embed the full memory image of a
 # running compositor, which on this project means whatever was on screen.
@@ -65,5 +77,9 @@ hikari.log
 /2
 
 # An unpacked wlroots source tree, if one is kept alongside for reference when
-# checking compositor behaviour against the version actually linked.
-wlroots-0.20.0/
+# checking compositor behaviour against the version actually linked. Globbed
+# rather than pinned: the pattern named 0.20.0 while this tree links 0.20.2,
+# so the one tree a contributor is most likely to unpack was the one it did
+# not cover -- and an accidentally committed wlroots checkout is tens of
+# thousands of files.
+wlroots-*/
