@@ -179,7 +179,8 @@ configure_bindings(struct hikari_cursor *cursor, struct wl_list *bindings)
 // drag), so a touch_up or touch_cancel can never leave the mode state
 // machine stuck waiting for a release that will never arrive.
 static void
-release_primary_touch(struct hikari_cursor *cursor, uint32_t time_msec)
+release_primary_touch(
+    struct hikari_cursor *cursor, uint32_t time_msec, bool refresh_focus)
 {
   cursor->has_primary_touch = false;
 
@@ -213,7 +214,7 @@ release_primary_touch(struct hikari_cursor *cursor, uint32_t time_msec)
   Conditional rather than unconditional because when the client has no touch
   support nothing was suppressed, the in-band refresh already happened, and a
   second one would only repeat it. */
-  if (suppressed) {
+  if (suppressed && refresh_focus) {
     hikari_server_cursor_focus();
   }
 }
@@ -223,7 +224,7 @@ hikari_cursor_release_primary_touch(
     struct hikari_cursor *cursor, struct wlr_touch *touch)
 {
   if (cursor->has_primary_touch && cursor->primary_touch_device == touch) {
-    release_primary_touch(cursor, 0);
+    release_primary_touch(cursor, 0, true);
   }
 }
 
@@ -326,7 +327,7 @@ cursor_touch_up_handler(struct wl_listener *listener, void *data)
 
   if (cursor->has_primary_touch
       && event->touch_id == cursor->primary_touch_id) {
-    release_primary_touch(cursor, event->time_msec);
+    release_primary_touch(cursor, event->time_msec, true);
   }
 }
 
@@ -388,7 +389,7 @@ cursor_touch_cancel_handler(struct wl_listener *listener, void *data)
 
   if (cursor->has_primary_touch
       && event->touch_id == cursor->primary_touch_id) {
-    release_primary_touch(cursor, event->time_msec);
+    release_primary_touch(cursor, event->time_msec, true);
   }
 }
 
@@ -631,22 +632,18 @@ touch_displacement(
   *dy = n > 0 ? ty / n : 0;
 }
 
-/* [COMMENT] Function purpose: Take the sequence away from the clients holding
-it and hand it to the compositor.
+/* [COMMENT] Function purpose: Tell every client holding one of the tracked
+points that its touch sequence is over, each distinct client once -- several of
+the sequence's points may belong to the same one.
 
-wl_touch.cancel is the protocol's own word for this -- it tells a client the
-compositor has taken over the sequence and that it should undo whatever the
-touch had begun -- so a client that was mid-drag when the third finger landed
-is left consistent rather than stranded with a point that stops reporting.
-Each distinct client is told once; several of this sequence's points may
-belong to the same one.
-
-The synthesised button the first finger pressed is released here too.
-Without that the mode state machine would sit waiting for a release that the
-suppressed touch_up can no longer deliver. */
+Separate from touch_gesture_claim() because forgetting the points has to do
+this too. Whoever drops a tracked point must cancel its client first: once the
+id is gone from points[], nothing here can match that finger again, and the
+suppression `claimed` applies is by SEQUENCE rather than by point, so the
+finger's eventual lift is swallowed and its client is left holding a touch
+that never ends. */
 static void
-touch_gesture_claim(
-    struct hikari_touch_gesture_state *state, uint32_t time_msec)
+touch_cancel_client_sequences(struct hikari_touch_gesture_state *state)
 {
   struct wlr_seat *seat = hikari_server.seat;
   struct wlr_seat_client *seen[HIKARI_TOUCH_GESTURE_MAX_POINTS];
@@ -679,11 +676,29 @@ touch_gesture_claim(
     seen[nseen++] = point->client;
     wlr_seat_touch_notify_cancel(seat, point->client);
   }
+}
+
+/* [COMMENT] Function purpose: Take the sequence away from the clients holding
+it and hand it to the compositor.
+
+The cancel above is the protocol's own word for this -- it tells a client the
+compositor has taken over the sequence and that it should undo whatever the
+touch had begun -- so a client that was mid-drag when the third finger landed
+is left consistent rather than stranded with a point that stops reporting.
+
+The synthesised button the first finger pressed is released here too. Without
+that the mode state machine would sit waiting for a release that the
+suppressed touch_up can no longer deliver. */
+static void
+touch_gesture_claim(
+    struct hikari_touch_gesture_state *state, uint32_t time_msec)
+{
+  touch_cancel_client_sequences(state);
 
   state->claimed = true;
 
   if (hikari_server.cursor.has_primary_touch) {
-    release_primary_touch(&hikari_server.cursor, time_msec);
+    release_primary_touch(&hikari_server.cursor, time_msec, true);
   }
 }
 
@@ -1293,7 +1308,15 @@ hikari_cursor_deactivate(struct hikari_cursor *cursor)
     clock_gettime(CLOCK_MONOTONIC, &now);
     uint32_t time_msec =
         (uint32_t)(now.tv_sec * 1000LL + now.tv_nsec / 1000000LL);
-    release_primary_touch(cursor, time_msec);
+    /* [COMMENT] Action purpose: No focus refresh on this one. Lock entry
+    clears the seat's pointer focus deliberately -- "a client must not still
+    believe it holds the pointer while the screen is locked" -- and then calls
+    this function, with the switch to lock mode on the NEXT line. A refresh
+    here would therefore still run normal mode's cursor_move and hand the
+    client under the cursor a pointer enter and motion, undoing that clearing
+    a moment before the lock takes hold. The button release still happens: the
+    mode must not be left believing a button is held. */
+    release_primary_touch(cursor, time_msec, false);
   }
 
   // Action purpose: Clear any in-progress gesture. Deactivation happens
@@ -1313,7 +1336,14 @@ hikari_cursor_deactivate(struct hikari_cursor *cursor)
   `claimed` is the part that does real harm. It survives as true, and the
   down, motion, up and frame handlers all refuse to forward anything while it
   is set, so touch input would be silently dead after the reactivation with
-  nothing left able to clear it. */
+  nothing left able to clear it.
+
+  Cancelled before being forgotten: a finger still down here is about to lose
+  its entry in points[], and once the id is gone nothing can match that finger
+  again. Because the suppression `claimed` applies is by sequence rather than
+  by point, its eventual lift would then be swallowed by a later claimed
+  gesture and its client left holding a touch that never ends. */
+  touch_cancel_client_sequences(&cursor->touch_gesture);
   touch_gesture_reset();
 
   hikari_cursor_set_image(cursor, NULL);
