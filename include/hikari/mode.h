@@ -23,28 +23,20 @@ struct hikari_mode {
 
   void (*cancel)(void);
 
-  /* [COMMENT] Action purpose: A touch contact's compositor-side half, kept
-  separate from button_handler rather than fed through it as a fabricated
-  BTN_LEFT event.
+  /* [COMMENT] Action purpose: A touch contact's compositor-side half, separate
+  from button_handler because button_handler is written for a pointer: it
+  assumes motion settled focus before the button arrived (wlr_cursor_warp()
+  emits no motion signal, so for a contact nothing has), that a focus refresh
+  on release is always wanted, and that one cursor-down flag suffices for what
+  is one pointer but many fingers.
 
-  A finger is not a mouse, and button_handler is written for one: it assumes
-  motion has already settled pointer focus before the button arrives (true of a
-  pointer, false of a touch point, because wlr_cursor_warp() emits no motion
-  signal), it assumes a focus refresh on release is always wanted, and it keeps
-  a single cursor-down flag because a seat has one pointer but many fingers.
-  Routing touch through it therefore needed a suppression flag consulted at
-  every client-facing call inside one mode, which left the other modes
-  forwarding a finger as a click and the suppressed paths subtly wrong.
-
-  These three run the window management a contact asks for and NOTHING
-  client-facing. Delivering the contact to the client -- as real wl_touch, or
-  as emulated wl_pointer for a client that cannot speak it -- belongs to the
-  touch handlers in cursor.c alone, which is what makes one finger reach a
+  These three run window management and NOTHING client-facing. Delivering a
+  contact to its client -- real wl_touch, or emulated wl_pointer for a client
+  that cannot speak it -- belongs to cursor.c alone, so one finger reaches a
   client exactly once without any mode having to know about it.
 
   All three are optional. hikari_server is a zeroed global (server.c), so a
-  mode that leaves them unset ignores touch, which is the right answer for the
-  nine modes that do nothing with a pointer button either. */
+  mode that leaves them unset ignores touch. */
 
   /* Returns whether the contact was consumed by the compositor -- a mouse
   binding fired, or a pending end action ran. A consumed contact is not
@@ -69,11 +61,9 @@ struct hikari_mode {
   view the input and an enter elsewhere would break the grab; dnd must not
   have a finger inject a button into a pointer drag.
 
-  Normal mode is the only one that answers yes. Inferring this from
-  touch_begin's "consumed" was wrong: a mode without a touch_begin cannot
-  consume anything, so every one of the above would have had a complete
-  synthetic click delivered for it. A default of false means a mode added
-  later declines until it says otherwise, which is the safe direction. */
+  Normal mode is the only one that answers yes. The default of false means a
+  mode added later declines until it says otherwise, which is the safe
+  direction. */
   bool touch_emulates_pointer;
 };
 

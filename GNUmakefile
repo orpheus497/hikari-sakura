@@ -60,19 +60,16 @@ HIKARI_MAKEFLAGS = $(filter-out --% -O% -j $(MAKEOVERRIDES),$(MAKEFLAGS))
 # The two makes disagree about this letter. GNU make's -B is --always-make,
 # "unconditionally make all targets"; bmake's -B selects compatibility mode,
 # which rebuilds nothing extra. MAKEFLAGS collects short flags into its first
-# word, the filter above keeps it, and bmake honours MAKEFLAGS from the
-# environment -- so `make -B` reached bmake as compatibility mode and did an
-# ordinary incremental build. Measured on this tree: a real full build is 78
-# compiler invocations, `make -B` on an up-to-date tree ran 2. Someone changing
-# CFLAGS_EXTRA and typing -B to pick it up would have kept every stale object.
+# word and bmake honours MAKEFLAGS from the environment, so forwarding it
+# would silently turn a forced rebuild into an ordinary incremental one and
+# keep every object built with other flags.
 #
-# bmake has no --always-make equivalent to translate this into, and deleting
-# the user's objects on their behalf is not what -B means either, so the only
-# honest answer is to refuse and say what to run instead. Only the first word
-# is examined: GNU make puts short flags there, and no other short flag it
-# collects is an uppercase B. The test itself is the `case` in the dispatch
-# recipe below -- a make-level $(if) cannot carry the message, because $(if)
-# splits its arguments on commas and the text has commas in it.
+# bmake has no --always-make to translate into, and deleting the user's
+# objects is not what -B means either, so it is refused with a diagnostic
+# naming `make clean`. Only the first word is examined: GNU make puts short
+# flags there, and no other short flag it collects is an uppercase B. The test
+# is the `case` in the dispatch recipe -- a make-level $(if) cannot carry the
+# message, because $(if) splits its arguments on commas.
 
 HIKARI_FIRST := $(firstword $(HIKARI_GOALS))
 HIKARI_REST  := $(wordlist 2,$(words $(HIKARI_GOALS)),$(HIKARI_GOALS))
@@ -131,19 +128,15 @@ $(HIKARI_REST): $(HIKARI_FIRST)
 #     would send each one twice.
 #
 # Expanded in the recipe, never with `:=`. At parse time MAKEFLAGS does not yet
-# carry the job flags -- measured: parse-time filtering of `make -j4` yields an
-# empty string where the recipe correctly yields `-j4` -- so an immediate
-# assignment here would silently reintroduce the serial build it is meant to
-# prevent.
+# carry the job flags, so an immediate assignment would filter an empty string
+# and silently reintroduce the serial build this is meant to prevent.
 hikari-dispatch:
 # The leading + marks this line recursive. GNU make skips recipe lines under
-# -n, -t and -q unless it can tell they run a sub-make, and it only detects
-# that automatically for $(MAKE); this line invokes $(BMAKE). Without the +,
-# `make -n` printed the dispatch line and stopped, so a dry run showed nothing
-# whatever about the build it was asked to describe -- while on FreeBSD, where
-# make IS bmake, the same command worked. The MAKEFLAGS filter above already
-# preserves n, so bmake receives it and does the dry run itself; this is the
-# only thing that was stopping it from ever being reached.
+# -n, -t and -q unless it can tell they run a sub-make, and it detects that
+# automatically only for $(MAKE); this line invokes $(BMAKE). Without the +,
+# `make -n` prints the dispatch line and stops instead of describing the
+# build. The filter above preserves n, so bmake receives it and does the dry
+# run itself.
 	+@case '$(firstword $(HIKARI_MAKEFLAGS))' in \
 	*B*) \
 		echo 'make: -B (--always-make) cannot be forwarded to bmake.' >&2; \

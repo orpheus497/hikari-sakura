@@ -142,9 +142,8 @@ struct hikari_cursor {
 
   Latched once when the contact begins and cleared when it ends, so the
   emulated press and its release always travel together. Read only by the
-  three touch_pointer_* functions in cursor.c, which are the only things that
-  emit pointer input for a finger -- the modes emit none, which is what keeps
-  a client from being reached twice. */
+  three touch_pointer_* functions in cursor.c, the only things that emit
+  pointer input for a finger. */
   bool touch_emulates_pointer;
 
   /* [COMMENT] Action purpose: Where an emulated contact started, in layout
@@ -153,10 +152,9 @@ struct hikari_cursor {
   Motion is reported as the surface-local start plus the layout displacement
   since, rather than by re-hit-testing, so a finger dragged beyond the edge of
   the window keeps reporting into it -- what a pointer drag does, and what a
-  client being dragged expects. Kept here rather than in normal mode's
-  cursor_down_state because a seat has one pointer but many fingers, and
-  sharing that one anchor is what let a touch release tear down a mouse
-  drag. */
+  client being dragged expects. Separate from normal mode's cursor_down_state
+  because a seat has one pointer but many fingers; sharing one anchor would
+  let a touch release tear down a mouse drag. */
   double touch_pointer_lx;
   double touch_pointer_ly;
   double touch_pointer_sx;

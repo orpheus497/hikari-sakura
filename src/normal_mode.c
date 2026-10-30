@@ -169,12 +169,11 @@ modifiers_handler(struct hikari_keyboard *keyboard)
   }
 
   if (hikari_server.keyboard_state.mod_changed) {
-    /* [COMMENT] Action purpose: The Logo key going down or up is what drives
-    the indicator overlay on and off. This previously called
-    hikari_indicator_damage() for both transitions -- and that is just
-    hikari_indicator_position(), which used to force the frame visible -- so
-    releasing the key showed the overlay exactly as much as pressing it did,
-    and nothing ever took it back down. See DECISIONS_LOG Phase 59. */
+    /* [COMMENT] Action purpose: The Logo key going down or up drives the
+    indicator overlay on and off, and the two transitions need different
+    calls. hikari_indicator_damage() is only hikari_indicator_position(), so
+    using it for both shows the overlay on release as much as on press and
+    never takes it down. */
     if (hikari_server_is_indicating()) {
       if (focus_view != NULL) {
         hikari_group_damage(focus_view->group);
@@ -407,16 +406,14 @@ key_handler(
 /* [COMMENT] Function purpose: Window management for a touch contact beginning,
 and nothing client-facing.
 
-This is the half that used to arrive as a fabricated BTN_LEFT press through
-button_handler. It keeps what a mouse press genuinely shares with a finger --
-the mouse bindings, so a `pointer BTN_LEFT` binding still fires from a
-touchscreen, and the pending end action a press-and-hold binding leaves behind
--- and drops what it does not.
+Runs the mouse bindings, so a `pointer BTN_LEFT` binding fires from a
+touchscreen too, and the pending end action a press-and-hold binding leaves
+behind.
 
 Focus is taken here rather than left to cursor_move. A pointer has hovered the
 node before it clicks, so focus is already settled by the time the button
 arrives; a finger has not hovered anything, and wlr_cursor_warp() emits no
-motion signal, so nothing would settle it until the contact ended. */
+motion signal, so nothing else would settle it until the contact ended. */
 static bool
 touch_begin(struct hikari_cursor *cursor, uint32_t time_msec)
 {
@@ -454,19 +451,16 @@ action when the press fires and expects the release to run it, and a finger
 must honour that the same way.
 
 Then focus is resynced, because the contact pinned it. cursor_move() returns
-early for the whole of a contact, so a physical mouse moved while a finger was
-down warped the cursor without moving pointer focus with it; left unresynced,
-the next click -- which need not be preceded by any motion -- would go to
-whatever surface the contact had entered rather than the one now under the
-cursor. has_primary_touch is already false by the time this runs, so the
-refresh does the full hit test.
+early for the whole of a contact, so a physical mouse moved meanwhile warps
+the cursor without carrying pointer focus along; unresynced, the next click --
+which need not be preceded by any motion -- would go to whatever surface the
+contact had entered rather than the one now under the cursor.
+has_primary_touch is already false here, so the refresh does the full hit
+test.
 
-This is NOT the refresh that leaked a pointer enter into a locking screen.
-That one was stop_cursor_down_handling()'s, reached because lock entry
-dispatched a synthetic release through the mode vtable. Lock entry now goes
-through end_primary_touch(), which does not call this function at all, and the
-touch listeners are detached before lock mode is installed, so neither this
-nor anything else here can run during a lock. */
+This cannot run during a lock: lock entry releases the contact through
+end_primary_touch(), which does not call this, and detaches the touch
+listeners before installing lock mode. */
 static void
 touch_end(struct hikari_cursor *cursor, uint32_t time_msec)
 {

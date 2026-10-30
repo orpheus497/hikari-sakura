@@ -82,7 +82,21 @@ cursor_move(uint32_t time_msec)
   }
 }
 
-// [COMMENT] Function purpose: Handle pointer button events during resize mode.
+/* [COMMENT] Function purpose: Leave resize mode when the input driving the
+drag ends.
+
+KNOWN LIMITATION: none of these three handlers checks which input started the
+drag, so any one of them ends it. Hold a mouse button or rest a finger on the
+screen, enter resize mode from the keyboard (`L+r` in the default config), and
+releasing that unrelated button or lifting that finger leaves resize mode while
+the keyboard binding is still held. key_handler has the same shape: it exits on
+any key release, not only the one that entered.
+
+Fixing it needs the initiating input recorded when the mode is entered, and
+hikari_server_enter_resize_mode() cannot see it -- the action is reached
+through handle_input() from key_handler, button_handler and touch_begin alike
+-- so it has to be threaded through the action dispatch and matched in all
+three handlers at once. Deferred to its own change. */
 static void
 button_handler(
     struct hikari_cursor *cursor, struct wlr_pointer_button_event *event)
@@ -93,12 +107,8 @@ button_handler(
 }
 
 // [COMMENT] Function purpose: Initialize resize mode state and handlers.
-/* [COMMENT] Function purpose: End the drag when the finger lifts, exactly as
-button_handler ends it when the mouse button is released.
-
-Set rather than left NULL because here the contact IS the window management:
-resize mode exists only for the duration of a drag, and a finger that lifts with
-no way to say so would leave the mode entered with nothing driving it. */
+/* [COMMENT] Function purpose: End the drag when the finger lifts.
+See the limitation noted on button_handler above. */
 static void
 touch_end(struct hikari_cursor *cursor, uint32_t time_msec)
 {

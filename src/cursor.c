@@ -536,17 +536,13 @@ cursor_touch_cancel_handler(struct wl_listener *listener, void *data)
 static void
 cursor_touch_frame_handler(struct wl_listener *listener, void *data)
 {
-  /* [COMMENT] Action purpose: Always, even for a sequence that has just been
-  claimed. wlr_seat_touch_send_frame() walks the seat's clients and sends only
-  to those whose needs_touch_frame is set, clearing it as it goes, so this is
-  already a no-op for a client with nothing pending.
-
-  Guarding it on `claimed` instead was wrong in the one case that matters: a
-  hold is recognised from inside the up handler, so the up has already been
-  forwarded and its client's needs_touch_frame already set by the time the
-  claim lands. Skipping the frame left that client holding an uncommitted up --
-  a finger that never lifts, since GTK, Qt and Chromium all batch on
-  wl_touch.frame -- until some unrelated client's sequence flushed it. */
+  /* [COMMENT] Action purpose: Sent unconditionally, a claimed sequence
+  included. wlr_seat_touch_send_frame() sends only to clients whose
+  needs_touch_frame is set, so it is already a no-op for a client with nothing
+  pending -- and a hold is recognised from inside the up handler, so by the
+  time the claim lands that client's up is already forwarded and awaiting the
+  frame that commits it. GTK, Qt and Chromium all batch on wl_touch.frame, so
+  withholding it there reads as a finger that never lifts. */
   wlr_seat_touch_notify_frame(hikari_server.seat);
 }
 
@@ -1428,12 +1424,11 @@ hikari_cursor_deactivate(struct hikari_cursor *cursor)
 
   wl_list_remove() leaves the link in an invalid state -- libwayland sets both
   pointers to NULL -- and this runs twice with nothing in between on an
-  ordinary path: lock_mode.c deactivates the cursor on lock entry, only its
-  unlock path reactivates, and hikari_cursor_fini() deactivates again, so
-  ending the session while the screen is locked reached the second
-  wl_list_remove() and dereferenced NULL. wl_list_init() leaves an empty,
-  removable link, which hikari_cursor_set_image() already relies on for the
-  same reason. */
+  ordinary path: lock_mode.c deactivates on lock entry, only its unlock path
+  reactivates, and hikari_cursor_fini() deactivates again, so ending the
+  session while the screen is locked reaches a second wl_list_remove(). Re-
+  initing leaves an empty, removable link, as hikari_cursor_set_image() also
+  relies on. */
   wl_list_remove(&cursor->motion_absolute.link);
   wl_list_init(&cursor->motion_absolute.link);
   wl_list_remove(&cursor->frame.link);
