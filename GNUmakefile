@@ -110,9 +110,8 @@ $(HIKARI_REST): $(HIKARI_FIRST)
 #     bmake exits 2 with the usage line -- so that one ordinary flag broke the
 #     build outright on Linux, which is the one thing this file exists to
 #     prevent. `--warn-undefined-variables` does the same. This pattern
-#     subsumes the jobserver flags (--jobserver-auth=, --jobserver-fds=) that
-#     first motivated the filter, --output-sync in all its forms, and the bare
-#     `--` separator.
+#     subsumes the jobserver flags (--jobserver-auth=, --jobserver-fds=),
+#     --output-sync in all its forms, and the bare `--` separator.
 #   -O%  the SHORT form of output synchronisation, which `--%` cannot catch.
 #     It travels in MAKEFLAGS alongside -j and bmake has no equivalent.
 #     `make -j4 -Otarget` exports ` -j4 -Otarget

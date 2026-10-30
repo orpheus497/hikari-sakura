@@ -458,6 +458,13 @@ contact had entered rather than the one now under the cursor.
 has_primary_touch is already false here, so the refresh does the full hit
 test.
 
+Not while a physical button is held. hikari_server_cursor_focus() dispatches
+through mode->cursor_move, which is cursor_down_move() for the duration of a
+pointer drag -- and that reports motion from the cursor's CURRENT position,
+which the contact warped to the finger. Refreshing here would jump the drag to
+wherever the finger was. stop_cursor_down_handling() refreshes focus when the
+button is released, which is the right moment for it.
+
 This cannot run during a lock: lock entry releases the contact through
 end_primary_touch(), which does not call this, and detaches the touch
 listeners before installing lock mode. */
@@ -466,7 +473,9 @@ touch_end(struct hikari_cursor *cursor, uint32_t time_msec)
 {
   handle_pending_action();
 
-  hikari_server_cursor_focus();
+  if (!is_cursor_down()) {
+    hikari_server_cursor_focus();
+  }
 }
 
 void
