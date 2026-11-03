@@ -1,9 +1,10 @@
 #include <hikari/keyboard_config.h>
-#include <hikari/config_key.h>
+#include <hikari/config_lua.h>
 
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #define HIKARI_KEYBOARD_CONFIG_DEFAULT_REPEAT_RATE 25
 #define HIKARI_KEYBOARD_CONFIG_DEFAULT_REPEAT_DELAY 600
@@ -18,71 +19,74 @@ init_default_repeat(struct hikari_keyboard_config *keyboard_config)
 }
 
 static bool
-parse_xkb_rules(
-    struct hikari_xkb_config *xkb_config, const ucl_object_t *xkb_obj)
+parse_xkb_rules(struct hikari_xkb_config *xkb_config, lua_State *L, int idx)
 {
   bool success = false;
-  const ucl_object_t *cur;
+  struct hikari_config_iter iter;
+  const char *key;
 
-  ucl_object_iter_t it = ucl_object_iterate_new(xkb_obj);
-  while ((cur = ucl_object_iterate_safe(it, false)) != NULL) {
-    hikari_config_warn_duplicate_key(cur, "an inputs.keyboards xkb block");
-
-    const char *key = ucl_object_key(cur);
-
+  hikari_config_iter_init(&iter, L, idx);
+  while (hikari_config_iter_next(
+      &iter, L, &key, "inputs.keyboards xkb block")) {
     if (!strcmp("rules", key)) {
       const char *rules;
-      if (!ucl_object_tostring_safe(cur, &rules)) {
-        fprintf(stderr, "configuration error: expected string for \"rules\"\n");
+      if (!hikari_config_string(
+              L, iter.vidx, "inputs.keyboards xkb block", key, &rules)) {
         goto done;
       }
 
       hikari_xkb_config_set_rules(xkb_config, strdup(rules));
     } else if (!strcmp("model", key)) {
       const char *model;
-      if (!ucl_object_tostring_safe(cur, &model)) {
-        fprintf(stderr, "configuration error: expected string for \"model\"\n");
+      if (!hikari_config_string(
+              L, iter.vidx, "inputs.keyboards xkb block", key, &model)) {
         goto done;
       }
 
       hikari_xkb_config_set_model(xkb_config, strdup(model));
     } else if (!strcmp("layout", key)) {
       const char *layout;
-      if (!ucl_object_tostring_safe(cur, &layout)) {
-        fprintf(
-            stderr, "configuration error: expected string for \"layout\"\n");
+      if (!hikari_config_string(
+              L, iter.vidx, "inputs.keyboards xkb block", key, &layout)) {
         goto done;
       }
 
       hikari_xkb_config_set_layout(xkb_config, strdup(layout));
     } else if (!strcmp("variant", key)) {
       const char *variant;
-      if (!ucl_object_tostring_safe(cur, &variant)) {
-        fprintf(
-            stderr, "configuration error: expected string for \"variant\"\n");
+      if (!hikari_config_string(
+              L, iter.vidx, "inputs.keyboards xkb block", key, &variant)) {
         goto done;
       }
 
       hikari_xkb_config_set_variant(xkb_config, strdup(variant));
     } else if (!strcmp("options", key)) {
       const char *options;
-      if (!ucl_object_tostring_safe(cur, &options)) {
-        fprintf(
-            stderr, "configuration error: expected string for \"options\"\n");
+      if (!hikari_config_string(
+              L, iter.vidx, "inputs.keyboards xkb block", key, &options)) {
         goto done;
       }
 
       hikari_xkb_config_set_options(xkb_config, strdup(options));
     } else {
-      fprintf(stderr, "configuration error: invalid \"xkb\" key \"%s\"\n", key);
+      hikari_config_error(
+          "inputs.keyboards xkb block", "invalid \"xkb\" key \"%s\"", key);
       goto done;
     }
+  }
+
+  /* Action purpose: the loop also ends when a malformed entry abandoned the
+  walk, and only iter.failed tells that apart from reaching the end of the
+  block. Without this test a reported error would still be followed by
+  success = true. */
+  if (iter.failed) {
+    goto done;
   }
 
   success = true;
 
 done:
-  ucl_object_iterate_free(it);
+  hikari_config_iter_fini(&iter, L);
 
   return success;
 }
@@ -98,8 +102,8 @@ load_xkb_file(struct hikari_xkb *xkb, const char *xkb_file)
   FILE *keymap_file = fopen(xkb_file, "r");
 
   if (!keymap_file) {
-    fprintf(stderr,
-        "configuration error: failed to open \"xkb\" file \"%s\"\n",
+    hikari_config_error("inputs.keyboards entry",
+        "failed to open \"xkb\" file \"%s\"",
         xkb_file);
     goto done;
   }
@@ -110,6 +114,15 @@ load_xkb_file(struct hikari_xkb *xkb, const char *xkb_file)
       XKB_KEYMAP_FORMAT_TEXT_V1,
       XKB_KEYMAP_COMPILE_NO_FLAGS);
   xkb_context_unref(context);
+
+  /* [COMMENT] Action purpose: Close the stream as soon as xkbcommon is done
+  reading it, which is the moment the call above returns. xkb_keymap_new_from_
+  file() takes a FILE * and reads the keymap from it; xkbcommon.h documents no
+  transfer of ownership, so closing is the caller's job and nothing downstream
+  holds the handle. Placed here rather than at `done:` because it covers both
+  remaining paths -- a NULL keymap and a successful one -- with one call.
+  remaining paths -- a NULL keymap and a successful one -- with one call. */
+  fclose(keymap_file);
 
   if (keymap == NULL) {
     goto done;
@@ -132,44 +145,49 @@ done:
 
 bool
 hikari_keyboard_config_parse(struct hikari_keyboard_config *keyboard_config,
-    const ucl_object_t *keyboard_config_obj)
+    lua_State *L,
+    int idx)
 {
   bool success = false;
-  const ucl_object_t *cur;
+  struct hikari_config_iter iter;
+  const char *key;
 
-  ucl_object_iter_t it = ucl_object_iterate_new(keyboard_config_obj);
-  while ((cur = ucl_object_iterate_safe(it, false)) != NULL) {
-    hikari_config_warn_duplicate_key(cur, "an inputs.keyboards entry");
-
-    const char *key = ucl_object_key(cur);
-
+  hikari_config_iter_init(&iter, L, idx);
+  while (hikari_config_iter_next(&iter, L, &key, "inputs.keyboards entry")) {
     if (!strcmp("xkb", key)) {
-      ucl_type_t type = ucl_object_type(cur);
+      int type = lua_type(L, iter.vidx);
 
-      if (type == UCL_OBJECT) {
+      if (type == LUA_TTABLE) {
         keyboard_config->xkb.type = HIKARI_XKB_TYPE_RULES;
 
-        if (!parse_xkb_rules(&keyboard_config->xkb.value.rules, cur)) {
-          fprintf(stderr, "configuration error: failed to parse xkb rules\n");
+        if (!parse_xkb_rules(&keyboard_config->xkb.value.rules, L, iter.vidx)) {
+          hikari_config_error(
+              "inputs.keyboards entry", "failed to parse xkb rules");
           goto done;
         }
-      } else if (type == UCL_STRING) {
+      } else if (type == LUA_TSTRING) {
         const char *xkb_file;
-        if (!ucl_object_tostring_safe(cur, &xkb_file) ||
+        if (!hikari_config_string(
+                L, iter.vidx, "inputs.keyboards entry", key, &xkb_file) ||
             !load_xkb_file(&keyboard_config->xkb, xkb_file)) {
           goto done;
         }
       } else {
-        fprintf(stderr,
-            "configuration error: expected string or object for \"xkb\"\n");
+        hikari_config_error("inputs.keyboards entry",
+            "expected string or table for \"xkb\"");
         goto done;
       }
     } else if (!strcmp("repeat-rate", key)) {
       int64_t repeat_rate;
 
-      if (!ucl_object_toint_safe(cur, &repeat_rate) || repeat_rate < 0) {
-        fprintf(stderr,
-            "configuration error: expected positive integer \"repeat-rate\"\n");
+      if (!hikari_config_int(
+              L, iter.vidx, "inputs.keyboards entry", key, &repeat_rate)) {
+        goto done;
+      }
+
+      if (repeat_rate < 0) {
+        hikari_config_error("inputs.keyboards entry",
+            "expected positive integer \"repeat-rate\"");
         goto done;
       }
 
@@ -177,26 +195,33 @@ hikari_keyboard_config_parse(struct hikari_keyboard_config *keyboard_config,
     } else if (!strcmp("repeat-delay", key)) {
       int64_t repeat_delay;
 
-      if (!ucl_object_toint_safe(cur, &repeat_delay) || repeat_delay < 0) {
-        fprintf(stderr,
-            "configuration error: expected positive integer "
-            "\"repeat-delay\"\n");
+      if (!hikari_config_int(
+              L, iter.vidx, "inputs.keyboards entry", key, &repeat_delay)) {
+        goto done;
+      }
+
+      if (repeat_delay < 0) {
+        hikari_config_error("inputs.keyboards entry",
+            "expected positive integer \"repeat-delay\"");
         goto done;
       }
 
       hikari_keyboard_config_set_repeat_delay(keyboard_config, repeat_delay);
     } else {
-      fprintf(stderr,
-          "configuration error: invalid \"keyboard\" key \"%s\"\n",
-          key);
+      hikari_config_error(
+          "inputs.keyboards entry", "invalid \"keyboard\" key \"%s\"", key);
       goto done;
     }
+  }
+
+  if (iter.failed) {
+    goto done;
   }
 
   success = true;
 
 done:
-  ucl_object_iterate_free(it);
+  hikari_config_iter_fini(&iter, L);
 
   return success;
 }

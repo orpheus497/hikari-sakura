@@ -2,7 +2,12 @@
 #define HIKARI_POSITION_CONFIG_H
 
 #include <stdbool.h>
-#include <ucl.h>
+
+/* Declared rather than included: this header reaches most of the tree through
+view_config.h and output_config.h, and <lua.h> belongs only to the
+configuration reader. lua_State is a typedef of this struct, so the two
+spellings are the same type. */
+struct lua_State;
 
 struct hikari_position_config_absolute {
   int x;
@@ -55,10 +60,12 @@ hikari_position_config_relative_parse(
 bool
 hikari_position_config_absolute_parse(
     struct hikari_position_config *position_config,
-    const ucl_object_t *position_config_obj);
+    struct lua_State *L,
+    int idx);
 
 bool
 hikari_position_config_parse(struct hikari_position_config *position_config,
-    const ucl_object_t *position_config_obj);
+    struct lua_State *L,
+    int idx);
 
 #endif

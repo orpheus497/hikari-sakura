@@ -5,7 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include <dev/evdev/input-event-codes.h>
+#include <hikari/evdev.h>
 
 #include <wlr/types/wlr_keyboard.h>
 

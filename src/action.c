@@ -1,8 +1,11 @@
 #include <hikari/action.h>
 
+#include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include <hikari/action_config.h>
+#include <hikari/config_lua.h>
 #include <hikari/configuration.h>
 #include <hikari/server.h>
 
@@ -21,16 +24,16 @@ lookup_action(struct wl_list *action_configs, const char *action_name)
 
 static bool
 parse_binding(struct wl_list *action_configs,
-    const ucl_object_t *obj,
+    lua_State *L,
+    int idx,
+    const char *key,
     void (**action)(void *),
     void **arg)
 {
   const char *str;
   bool success = false;
 
-  if (!ucl_object_tostring_safe(obj, &str)) {
-    fprintf(
-        stderr, "configuration error: expected string for binding action\n");
+  if (!hikari_config_string(L, idx, "a binding action", key, &str)) {
     goto done;
   }
 
@@ -432,16 +435,15 @@ parse_binding(struct wl_list *action_configs,
       char *command = NULL;
       const char *action_name = &str[7];
       if ((command = lookup_action(action_configs, action_name)) == NULL) {
-        fprintf(stderr,
-            "configuration error: unknown action \"%s\"\n",
-            action_name);
+        hikari_config_error(
+            "a binding action", "unknown action \"%s\"", action_name);
         goto done;
       } else {
         *action = hikari_server_execute_command;
         *arg = command;
       }
     } else {
-      fprintf(stderr, "configuration error: unknown action \"%s\"\n", str);
+      hikari_config_error("a binding action", "unknown action \"%s\"", str);
       goto done;
     }
   }
@@ -461,43 +463,91 @@ hikari_action_init(struct hikari_action *action)
   action->end.arg = NULL;
 }
 
-bool
-hikari_action_parse(struct hikari_action *action,
+/* Function purpose: Read the { begin = ..., end = ... } form of a binding
+value. It is a walk rather than two lookups so that a key which is neither is
+caught, and a walk holds a Lua stack cursor that has to be released on every
+exit -- which is what this function and its `done:` label exist for. */
+static bool
+parse_event_actions(struct hikari_action *action,
     struct wl_list *action_configs,
-    const ucl_object_t *action_obj)
+    lua_State *L,
+    int idx)
 {
   bool success = false;
-  ucl_type_t type = ucl_object_type(action_obj);
+  struct hikari_config_iter iter;
+  const char *key;
 
-  if (type == UCL_OBJECT) {
-    const ucl_object_t *begin_obj = ucl_object_lookup(action_obj, "begin");
-    const ucl_object_t *end_obj = ucl_object_lookup(action_obj, "end");
+  hikari_config_iter_init(&iter, L, idx);
+  while (hikari_config_iter_next(&iter, L, &key, "a binding action")) {
+    struct hikari_event_action *event_action;
 
-    struct hikari_event_action *begin = &action->begin;
-    struct hikari_event_action *end = &action->end;
-
-    if (begin_obj != NULL) {
-      if (!parse_binding(
-              action_configs, begin_obj, &begin->action, &begin->arg)) {
-        goto done;
-      }
+    if (!strcmp(key, "begin")) {
+      event_action = &action->begin;
+    } else if (!strcmp(key, "end")) {
+      event_action = &action->end;
+    } else {
+      /* Action purpose: libucl looked "begin" and "end" up by name and never
+      saw the rest, so `{ begin = x, ennd = y }` loaded clean and half worked.
+      Every other unknown key in the configuration is fatal; this one now is
+      too. */
+      hikari_config_error("a binding action", "unknown key \"%s\"", key);
+      goto done;
     }
-
-    if (end_obj != NULL) {
-      if (!parse_binding(action_configs, end_obj, &end->action, &end->arg)) {
-        goto done;
-      }
-    }
-
-  } else if (type == UCL_STRING) {
-    struct hikari_event_action *event_action = &action->begin;
 
     if (!parse_binding(action_configs,
-            action_obj,
+            L,
+            iter.vidx,
+            key,
             &event_action->action,
             &event_action->arg)) {
       goto done;
     }
+  }
+
+  if (iter.failed) {
+    goto done;
+  }
+
+  success = true;
+
+done:
+  hikari_config_iter_fini(&iter, L);
+
+  return success;
+}
+
+bool
+hikari_action_parse(struct hikari_action *action,
+    struct wl_list *action_configs,
+    struct lua_State *L,
+    int idx)
+{
+  bool success = false;
+  int type = lua_type(L, idx);
+
+  if (type == LUA_TTABLE) {
+    if (!parse_event_actions(action, action_configs, L, idx)) {
+      goto done;
+    }
+  } else if (type == LUA_TSTRING) {
+    struct hikari_event_action *event_action = &action->begin;
+
+    if (!parse_binding(action_configs,
+            L,
+            idx,
+            "action",
+            &event_action->action,
+            &event_action->arg)) {
+      goto done;
+    }
+  } else {
+    /* Action purpose: libucl fell out of both branches and still returned
+    true, so a binding whose value was neither a string nor an object was
+    accepted and silently did nothing. */
+    hikari_config_error("a binding action",
+        "expected string or table, got %s",
+        lua_typename(L, type));
+    goto done;
   }
 
   success = true;

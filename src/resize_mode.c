@@ -82,7 +82,21 @@ cursor_move(uint32_t time_msec)
   }
 }
 
-// [COMMENT] Function purpose: Handle pointer button events during resize mode.
+/* [COMMENT] Function purpose: Leave resize mode when the input driving the
+drag ends.
+
+KNOWN LIMITATION: none of these three handlers checks which input started the
+drag, so any one of them ends it. Hold a mouse button or rest a finger on the
+screen, enter resize mode from the keyboard (`L+r` in the default config), and
+releasing that unrelated button or lifting that finger leaves resize mode while
+the keyboard binding is still held. key_handler has the same shape: it exits on
+any key release, not only the one that entered.
+
+Fixing it needs the initiating input recorded when the mode is entered, and
+hikari_server_enter_resize_mode() cannot see it -- the action is reached
+through handle_input() from key_handler, button_handler and touch_begin alike
+-- so it has to be threaded through the action dispatch and matched in all
+three handlers at once. Deferred to its own change. */
 static void
 button_handler(
     struct hikari_cursor *cursor, struct wlr_pointer_button_event *event)
@@ -93,6 +107,14 @@ button_handler(
 }
 
 // [COMMENT] Function purpose: Initialize resize mode state and handlers.
+/* [COMMENT] Function purpose: End the drag when the finger lifts.
+See the limitation noted on button_handler above. */
+static void
+touch_end(struct hikari_cursor *cursor, uint32_t time_msec)
+{
+  hikari_server_enter_normal_mode(NULL);
+}
+
 void
 hikari_resize_mode_init(struct hikari_resize_mode *resize_mode)
 {
@@ -102,6 +124,13 @@ hikari_resize_mode_init(struct hikari_resize_mode *resize_mode)
 
   resize_mode->mode.cancel = cancel;
   resize_mode->mode.cursor_move = cursor_move;
+
+  /* Action purpose: A touch drag moves the window by the same code a pointer
+  drag does -- cursor_move here reads the cursor position, which the touch
+  motion handler has already warped to the finger, and emits no client input of
+  its own, so it is correct for either source. */
+  resize_mode->mode.touch_motion = cursor_move;
+  resize_mode->mode.touch_end = touch_end;
 
   resize_mode->anchor_x = 0;
   resize_mode->anchor_y = 0;

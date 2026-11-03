@@ -10,6 +10,11 @@
 struct hikari_mark;
 struct hikari_view;
 
+/* Declared rather than included: this header reaches most of the tree through
+view.h, and <lua.h> belongs only to the configuration reader. lua_State is a
+typedef of this struct, so the two spellings are the same type. */
+struct lua_State;
+
 struct hikari_view_properties {
   char *group_name;
   int sheet_nr;
@@ -59,6 +64,7 @@ hikari_view_properties_resolve_position(
 
 bool
 hikari_view_config_parse(struct hikari_view_config *view_config,
-    const ucl_object_t *view_config_obj);
+    struct lua_State *L,
+    int view_config_idx);
 
 #endif

@@ -555,6 +555,7 @@ hikari_output_init(struct hikari_output *output, struct wlr_output *wlr_output)
   output->lock_indicator_node = NULL;
   output->lock_backdrop_node = NULL;
   output->lock_clock_node = NULL;
+  output->lock_message_node = NULL;
   output->background = NULL;
 
   /* Action purpose: hikari_malloc() does not zero, and these two are otherwise
@@ -755,6 +756,11 @@ destroy_output_nodes(struct hikari_output *output)
   if (output->lock_clock_node != NULL) {
     wlr_scene_node_destroy(&output->lock_clock_node->node);
     output->lock_clock_node = NULL;
+  }
+
+  if (output->lock_message_node != NULL) {
+    wlr_scene_node_destroy(&output->lock_message_node->node);
+    output->lock_message_node = NULL;
   }
 }
 

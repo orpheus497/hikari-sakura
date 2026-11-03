@@ -18,6 +18,10 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+/* Action purpose: closefrom() is a base-system call on FreeBSD and absent on
+Linux, where compat.h supplies it. */
+#include <hikari/compat.h>
+
 #include <cairo/cairo.h>
 #include <pango/pangocairo.h>
 

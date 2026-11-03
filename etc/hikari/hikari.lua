@@ -1,0 +1,1137 @@
+-- Script function and purpose: Default hikari configuration installed to
+-- ${ETC_PREFIX}/etc/hikari/hikari.lua by `make install`. The literal token
+-- PREFIX in the outputs section is rewritten to the install prefix by the
+-- Makefile sed rule. Copy to ~/.config/hikari/hikari.lua to customize, or run
+-- `make install-user` to have that copy made for you with the wallpaper path
+-- already pointed at your home directory.
+--
+-- hikari(1) is the complete reference for every section and every action name
+-- below; this file is the annotated defaults.
+--
+-- ---------------------------------------------------------------------------
+-- READING THIS FILE
+--
+-- Everything here is a default made explicit. Delete any key and the compositor
+-- keeps the value shown -- nothing below is required, and a section you never
+-- write behaves exactly as if you had written what is printed.
+--
+-- Reload with `LS+r` (see bindings, at the bottom). Colours, layouts, bindings,
+-- gaps and input settings all take effect immediately. Two things do not: the
+-- top bar helper is spawned once at startup, so `ui.palette` reaches it only
+-- on the next compositor start, and `outputs` `position` re-applies on reload
+-- only when `output_management_overrides_config` is false and the value
+-- actually changed.
+--
+-- A key written twice is neither merged nor a warning: this is Lua, and the
+-- LAST assignment wins, silently. Two `palette` tables inside the same `ui`
+-- table are not merged into one -- the second simply replaces the first. There
+-- is no diagnostic for this, so if something here appears to do nothing, check
+-- first that you have not written the same key twice in the same table.
+--
+-- A key written WRONG is a different matter. An unknown section, and an unknown
+-- key inside `ui`, `layout`, `outputs`, `inputs`, `views`, `colorscheme`,
+-- `bar`, `lock`, `animation` or `blur`, fails the load outright and names the
+-- offender -- on a reload the running configuration simply stays in place.
+-- That now includes the two spots that used to be quiet: an unrecognised
+-- property name inside a `views` `inherit` list, and an unrecognised key inside
+-- a binding's `{ begin = ..., ["end"] = ... }` table, are both errors rather
+-- than being skipped without a word.
+--
+-- ---------------------------------------------------------------------------
+-- SYNTAX
+--
+-- This file is a Lua chunk. It must `return` exactly one table, which is what
+-- the outermost `return {` ... `}` below is; everything in this file is an
+-- entry in it. A chunk that returns nothing is an error that says so.
+--
+-- Nine Lua facts are all you need to read or edit it:
+--
+--   1. `key = value,` -- the trailing COMMA separates entries. A missing one
+--      is a syntax error naming the line, so this is a loud mistake.
+--   2. `key = { ... },` is a nested section.
+--   3. A key that is not a plain identifier goes in brackets and quotes:
+--      `["blank-timeout-ac"] = 180` because of the hyphen, `["end"]` because
+--      `end` is a Lua keyword, `["L+Return"] = "quit"` because of the
+--      punctuation. A bare `blank-timeout-ac = 180` is read as a subtraction.
+--   4. Strings are quoted. There are no barewords: `spill = "drag"`, not
+--      `spill = drag`. An unquoted word is a variable read, and the
+--      configuration sandbox refuses it by name and line.
+--   5. `["0"]` and `[0]` are DIFFERENT keys -- the first is the string "0" and
+--      the second the number 0. Layout registers and sheet-like names are
+--      strings: write `["0"]`.
+--   6. Booleans are `true` and `false` only. `yes`, `no`, `on` and `off` are
+--      not booleans in Lua.
+--   7. Comments start with `--` and run to the end of the line.
+--   8. `env.NAME` reads the environment variable NAME, or is `nil` when it is
+--      unset -- the successor to the old `$NAME` expansion, and unlike it,
+--      `env.TERMINAL` cannot be confused with `env.TERM`. `env.X or "y"`
+--      supplies a fallback. `CONFIG_FILE` and `CONFIG_DIR` hold this file's
+--      path and the directory holding it.
+--   9. `include("other.lua")` loads another configuration file relative to
+--      this one and RETURNS its value for you to place; a second argument of
+--      `true` makes a missing file `nil` instead of an error.
+--
+-- Because this is a program, `string.format`, `table.insert`, `math.max`,
+-- `pairs`, `ipairs`, `for` loops and local functions are all available, and a
+-- repetitive block such as the sheet bindings at the bottom can be generated
+-- rather than typed. `io`, `os` and `package` deliberately are not: a
+-- configuration file may compute values, not run commands or read files.
+--
+-- Modifier letters for bindings: L=Logo(Super) S=Shift A=Alt C=Ctrl 5=Mod5.
+-- Key syntax: "MODS+keysym" (symbol) or "MODS-keycode" (numeric evdev code).
+-- Mouse syntax: "MODS+left|right|middle|side|extra|forward|back|task" or
+-- "MODS-<evdev button code>".
+-- Note for laptops: XF86 keysyms are fully supported and typically bound without
+-- modifiers (e.g. "0+XF86AudioRaiseVolume").
+-- ---------------------------------------------------------------------------
+
+return {
+
+ui = {
+  -- =========================================================================
+  -- PALETTE -- sixteen positional colours, and the one place to change the
+  -- theme.
+  --
+  -- Almost none of these carry meaning on their own. Every colour the compositor
+  -- draws with is one of the semantic slots in `colorscheme` below, and each of
+  -- those is written here as a reference ("color0", "color12", ...) instead of a
+  -- literal. Change a palette entry and everything referring to it follows.
+  --
+  -- The exception is the top bar's battery block, which picks its colour from
+  -- the charge level and so refers to specific entries directly:
+  --
+  --   plugged in / charging   color6    grey
+  --   75-100%                 color4    purple
+  --   60-75%                  color5    pink-purple
+  --   50-60%                  color11   light yellow
+  --   35-50%                  color3    yellow-orange
+  --   20-35%                  color2    orange
+  --   10-20%                  color9    light red
+  --    0-10%                  color1    red
+  --
+  -- Those bands are not separately configurable -- they follow whatever you put
+  -- in the palette, so retheming the desktop retints the battery with it. The
+  -- bar is spawned once at startup, so a palette change reaches it on the next
+  -- compositor start rather than on a reload.
+  --
+  -- The layout is the conventional terminal one -- 0-7 normal, 8-15 bright --
+  -- which is what lets the same sixteen values dress the compositor and the top
+  -- bar, and what makes a terminal theme droppable in wholesale.
+  --
+  -- The palette is resolved before anything that can refer to it, so it does not
+  -- matter whether this block appears above or below `colorscheme`.
+  --
+  -- -------------------------------------------------------------------------
+  -- THREE THEMES SHIP HERE: Sakura, Sakura Dark and Sakura Light. Exactly ONE
+  -- of the three `palette` tables below is uncommented -- Sakura by default.
+  --
+  -- To switch:
+  --   1. Comment out the table that is currently active.
+  --   2. Uncomment the one you want.
+  --   3. Set the `bar` line in `colorscheme` below to match. Each table names
+  --      its own value, and it is always that theme's color0 with `e6` on the
+  --      end -- the same rule the compositor uses for its own default.
+  --
+  -- Nothing else changes between the three. Every other colour in
+  -- `colorscheme` is a "colorN" reference, so it re-derives from whichever
+  -- palette is active.
+  --
+  -- If you leave two of them uncommented you get no warning at all: Lua keeps
+  -- the LAST assignment to `palette` and discards the earlier one entirely --
+  -- not merged, replaced. Comment out the one you are not using.
+  --
+  -- Commenting all three out is harmless and silent: every colour falls back
+  -- to the palette compiled into hikari, which is Sakura.
+  -- -------------------------------------------------------------------------
+
+  -- ------------------------------------------------------------- SAKURA ----
+  -- Violet and dusty rose. The default.            bar = "#2b1e3ae6"
+  palette = {
+    color0  = "#2b1e3a",   -- base
+    color1  = "#c96464",   -- red
+    color2  = "#df9f87",   -- orange
+    color3  = "#e4b382",   -- yellow
+    color4  = "#8e7cc3",   -- violet
+    color5  = "#b18fc7",   -- mauve
+    color6  = "#9fa0a6",   -- grey
+    color7  = "#d4d4d9",   -- text
+
+    color8  = "#5e5966",   -- bright base
+    color9  = "#df8787",   -- bright red
+    color10 = "#f2bda8",   -- bright orange
+    color11 = "#f5cf9e",   -- bright yellow
+    color12 = "#aba0d9",   -- bright violet
+    color13 = "#cfaedc",   -- bright mauve
+    color14 = "#b8b9be",   -- bright grey
+    color15 = "#f0edf2",   -- bright text
+  },
+
+  -- -------------------------------------------------------- SAKURA DARK ----
+  -- Ash black, muted berry and plum.               bar = "#161618e6"
+  -- palette = {
+  --   color0  = "#161618",   -- base (ash black)
+  --   color1  = "#802b2b",   -- red (muted dark red)
+  --   color2  = "#8c5338",   -- orange (muted dark orange)
+  --   color3  = "#782639",   -- formerly yellow -> muted berry red
+  --   color4  = "#63255a",   -- formerly violet -> muted plum
+  --   color5  = "#70264b",   -- formerly mauve -> muted dark rose
+  --   color6  = "#525257",   -- grey
+  --   color7  = "#9e9ea3",   -- text
+  --
+  --   color8  = "#2e2e32",   -- bright base (charcoal)
+  --   color9  = "#a34242",   -- bright red
+  --   color10 = "#ab6c4e",   -- bright orange
+  --   color11 = "#9e3b52",   -- bright berry red
+  --   color12 = "#873b7d",   -- bright plum
+  --   color13 = "#963d6b",   -- bright dark rose
+  --   color14 = "#6f6f75",   -- bright grey
+  --   color15 = "#cacace",   -- bright text
+  -- },
+
+  -- ------------------------------------------------------- SAKURA LIGHT ----
+  -- Pearl white, emerald and slate blue. Inverts   bar = "#d9d9d9e6"
+  -- the text pair, so color15 is near-black and
+  -- borders keep the same contrast as the others.
+  -- palette = {
+  --   color0  = "#d9d9d9",   -- base (pearl white)
+  --   color1  = "#437a54",   -- green (muted emerald)
+  --   color2  = "#357a80",   -- teal (muted sea glass)
+  --   color3  = "#2a6c85",   -- cyan/blue (deep slate blue-green)
+  --   color4  = "#3d598a",   -- deep blue (muted denim)
+  --   color5  = "#4a789c",   -- soft blue (muted steel blue)
+  --   color6  = "#a1a5b0",   -- grey (light slate)
+  --   color7  = "#4b515d",   -- text (dark slate grey)
+  --
+  --   color8  = "#e8e9ec",   -- bright base (soft silver-grey)
+  --   color9  = "#529968",   -- bright green
+  --   color10 = "#459ea6",   -- bright teal
+  --   color11 = "#3a8ba8",   -- bright cyan/blue
+  --   color12 = "#5274b0",   -- bright deep blue
+  --   color13 = "#5f9bc9",   -- bright soft blue
+  --   color14 = "#757a85",   -- bright grey (medium slate)
+  --   color15 = "#1e2126",   -- bright text (deep charcoal/near black)
+  -- },
+
+  -- =========================================================================
+  -- COLOURSCHEME -- what each colour is FOR.
+  --
+  -- Each key accepts three forms:
+  --
+  --   active = "color15"       a palette reference (recommended)
+  --   active = 0xF0EDF2        an integer, always fully opaque
+  --   active = "#F0EDF2"       the same, written explicitly
+  --   active = "#F0EDF2CC"     with alpha -- string form only
+  --
+  -- Alpha cannot be given as an integer: 0x0080FFCC and 0x80FFCC are
+  -- indistinguishable once parsed, so an 8-vs-6 digit guess would silently
+  -- misread any colour whose red channel is zero. The quoted form makes the
+  -- digit count explicit. A palette entry likewise cannot carry alpha; write the
+  -- literal string form on the one or two slots that need it, as `bar` does.
+  --
+  -- Note the quotes on the palette references. An unquoted `color15` is a
+  -- variable read in Lua, not a name, and the configuration sandbox rejects it
+  -- by name and line rather than letting it arrive as nothing.
+  -- =========================================================================
+  colorscheme = {
+    -- Desktop background. Only visible where no wallpaper is set for an output.
+    background = "color0",
+
+    -- Text drawn inside the indicator bars (the title/sheet/group/mark strip
+    -- that appears while Logo is held). Every indicator background below is a
+    -- light tone, so this wants to be dark.
+    foreground = "color0",
+
+    -- Border of the FOCUSED window, and of every unfocused one. This contrast is
+    -- the only cue to which window has focus -- keep them far apart.
+    active     = "color15",
+    inactive   = "color8",
+
+    -- The three group indicators, shown as a frame around windows while Logo is
+    -- held. `selected` is the focused window; `first` is the anchor of its group
+    -- (where the group-cycling actions start); `grouped` is the rest of that
+    -- group. Neighbouring tones read as one family, which is the point.
+    selected   = "color12",
+    first      = "color4",
+    grouped    = "color5",
+
+    -- Shown while a modal operation is taking input (`mode-enter-*`), and when
+    -- the mark or name being typed is already taken.
+    insert     = "color13",
+    conflict   = "color9",
+
+    -- Top bar background. Independent of `background`, so the bar can be tinted
+    -- or faded without touching what sits behind your windows. Written as a
+    -- literal because it is the one slot that wants alpha -- this is color0 at
+    -- ~90%, and a palette reference cannot carry alpha of its own.
+    --
+    -- This is the ONE line to change when you switch the palette above. It is
+    -- always that theme's color0 with `e6` appended:
+    --
+    --   SAKURA        "#2b1e3ae6"
+    --   SAKURA DARK   "#161618e6"
+    --   SAKURA LIGHT  "#d9d9d9e6"
+    bar        = "#2b1e3ae6",
+  },
+
+  -- =========================================================================
+  -- ANIMATION -- window motion.
+  --
+  -- POSITION ONLY, and that boundary is not a matter of taste. A window's size
+  -- is not the compositor's to interpolate: a resize is a protocol round trip,
+  -- so there are no intermediate sizes to draw, only the old buffer and then the
+  -- new one. Anything calling itself a resize animation is really scaling a
+  -- stale buffer, which is visibly soft on text. Position has no such problem --
+  -- the compositor owns it outright.
+  --
+  -- So this smooths windows MOVING: re-tiling when a window opens or closes,
+  -- `view-snap-*`, `view-move-*`, and applying a layout. Interactive dragging is
+  -- never animated -- lag behind the pointer is the opposite of what you want --
+  -- and neither is the first placement of a new window, which would otherwise
+  -- fly in from the corner of the screen.
+  -- =========================================================================
+  animation = {
+    -- Off by default. Set to true to enable.
+    enabled  = false,
+
+    -- Milliseconds for a window to travel, 0-1000. Around 100-160 reads as
+    -- responsive; past ~250 the desktop starts to feel slow. 0 means instant,
+    -- the same as `enabled = false`.
+    duration = 120,
+
+    -- "linear", "ease-out" or "ease-in-out". ease-out starts fast and settles,
+    -- which is what most window managers use and what makes a short duration
+    -- feel immediate.
+    easing   = "ease-out",
+  },
+
+  -- Border width in pixels, drawn OUTSIDE a window's own area. 0 disables
+  -- borders entirely -- note that focus then has no visual indicator.
+  border = 1,
+
+  -- Space between tiled windows, and between a tiled window and the screen edge.
+  gap    = 5,
+
+  -- Whether a window may be painted outside the screen it belongs to. Each
+  -- screen shows its own sheet, so an overhanging window is drawn over a screen
+  -- showing DIFFERENT windows -- not merely off-centre.
+  --
+  --   "drag"   -- overhang while you are dragging or resizing, cropped once you
+  --               let go. A window you placed by hand yourself is left alone.
+  --   "always" -- never crop anything. This is how every release before this one
+  --               behaved.
+  --   "never"  -- always crop to the window's own screen, including mid-drag and
+  --               including windows you positioned by hand.
+  spill  = "drag",
+
+  -- Pixels moved or resized per keypress by `view-move-*` and
+  -- `view-{increase,decrease}-size-*`.
+  step   = 100,
+
+  -- Font for the indicator bars. Any Pango description.
+  font   = "monospace 10",
+
+  -- Top bar. Long blocks -- in practice the media block, whose text is whatever
+  -- the current track happens to be called -- are capped and then scrolled as a
+  -- banner, so the whole title stays readable without letting one block run
+  -- across the clock and the status icons.
+  --
+  -- Note these are read by the compositor, not by the hikari-topbar helper, so
+  -- they take effect on a config reload rather than needing a restart.
+  bar = {
+    -- Longest a block may be, in characters, before it starts scrolling.
+    -- Counted in characters and not bytes, so accented and CJK titles are cut
+    -- where you would expect. 0 disables capping and scrolling entirely; the
+    -- bar still refuses to let a block paint outside its own section.
+    ["max-block-chars"] = 26,
+
+    -- Milliseconds per character of scroll. The timer only runs while some
+    -- block is actually over the limit, so a bar with nothing playing costs
+    -- nothing. Accepts 50-10000.
+    ["scroll-interval"] = 300,
+
+    -- Placed between the end of the text and its start as the banner wraps, so
+    -- it reads as a loop rather than snapping back.
+    ["scroll-separator"] = "   •   ",
+  },
+
+  -- Lock screen. Everything here is drawn by the compositor itself, so it is
+  -- present with no session running, survives a client crash, and cannot be
+  -- impersonated by a window that merely looks like a clock.
+  lock = {
+    -- Blur the workspace as it looked at the moment you locked. Set to false
+    -- for a plain backdrop, or give it a table to tune the strength:
+    --
+    --   blur = false
+    --   blur = { radius = 20, passes = 3 }
+    --
+    -- `radius` is in pixels; `passes` is how many box-blur passes approximate a
+    -- Gaussian (3 is the standard approximation, and rarely worth changing).
+    blur = { radius = 12, passes = 3 },
+
+    -- Clock and date, as strftime(3) formats. Set `clock = false` to draw
+    -- neither, or `date-format = ""` for the time alone.
+    clock          = true,
+    ["clock-format"] = "%H:%M",
+    ["date-format"]  = "%A, %e %B",
+    ["clock-font"]   = "sans 72",
+    ["date-font"]    = "sans 20",
+
+    -- Drawn with a soft shadow behind it, so it stays legible over a light
+    -- wallpaper. Accepts palette references and the same literal forms as the
+    -- colourscheme above.
+    ["clock-color"] = "color15",
+
+    -- Seconds of inactivity before the outputs power down while locked. Split
+    -- by power source because the useful values differ by an order of
+    -- magnitude: on battery the screen should die quickly, on mains a visible
+    -- clock is rather the point. 0 disables blanking entirely.
+    ["blank-timeout-ac"]      = 180,
+    ["blank-timeout-battery"] = 60,
+  },
+},
+
+-- ===========================================================================
+-- LAYOUT POLICY -- whether a sheet re-tiles itself without being asked.
+--
+-- Note the singular. This section decides WHEN a layout is applied; the
+-- `layouts` section below defines WHAT the layouts are.
+--
+-- hikari is a stacking compositor with tiling available on demand. `auto = true`
+-- makes a sheet behave like a conventional tiling window manager: open a window
+-- and the layout takes it in; close one and the survivors close the gap. That is
+-- what this file ships with.
+--
+-- Setting `auto = false` restores hikari's historical, stacking-first behaviour,
+-- in which opening a window does not disturb an existing layout and you decide
+-- when to fold it in -- with `layout-restack-append` or by applying a layout.
+-- Nothing below changes meaning between the two; `auto` only decides whether the
+-- re-tile happens on its own or when you ask for it.
+--
+-- ---------------------------------------------------------------------------
+-- PANELS, DOCKS AND THE USABLE AREA
+--
+-- A layout is never applied to the whole screen. Each output keeps a "usable
+-- area", and that is the box the layout is applied to:
+--
+--     the full output
+--   - the top bar's strip, always reserved, its height following `ui.font`
+--   - every layer-shell exclusive zone on that output: a panel such as saber
+--     or waybar, a dock, a status bar
+--   = what your layouts get
+--
+-- None of that is configured here. A panel asks for its own strip over the
+-- wlr-layer-shell protocol and the compositor honours the request; there is no
+-- key in this file that grants or refuses it, and no need to leave a gap by
+-- hand for a panel that reserves space. What this section decides is what
+-- happens to the WINDOWS when that reserved space changes -- a panel starting
+-- or exiting, growing, hiding on autohide, or moving to another output.
+--
+-- With `auto = true` the sheet on that output re-tiles itself into the new box,
+-- exactly as it does when an output is moved or changes mode. With
+-- `auto = false` nothing moves on its own: tiled windows keep the geometry they
+-- had, which may now sit under the panel, until you fold them back in with
+-- `layout-restack-append` or by applying a layout.
+--
+-- Floating windows are never re-tiled in either case -- that is what floating
+-- means -- so a floating window can end up beneath a panel that appeared after
+-- it. Move it, or make it tiled. A panel that reserves nothing (an overlay
+-- launcher such as sofi, whose exclusive zone is zero) draws over the layout on
+-- purpose and changes none of this.
+-- ---------------------------------------------------------------------------
+-- ===========================================================================
+layout = {
+  -- The master switch. false is the historical, stacking-first behaviour.
+  auto = true,
+
+  -- Where a newly incorporated window lands in the layout order. "append" puts
+  -- it last, leaving the main window alone; "prepend" makes the new window the
+  -- main one. Existing tiled windows keep their relative order either way, so
+  -- turning this on does not reshuffle your arrangement every time a dialog
+  -- opens.
+  insert = "append",
+
+  -- Whether closing a window also re-tiles. Separate from `auto` on purpose:
+  -- folding a new window in only adds, whereas closing one moves every
+  -- survivor, and not everyone wants both.
+  ["reflow-on-close"] = true,
+
+  -- Which layout register to adopt for a sheet that has no layout yet. Unset by
+  -- default, in which case the per-sheet default registers "1" to "9" apply
+  -- (see `layouts`) -- and if those are undefined too, the sheet simply stays
+  -- stacking. Set this to make one layout the answer for every sheet:
+  --
+  --   ["default-register"] = "g",
+},
+
+-- ===========================================================================
+-- LAYOUTS -- the layout registers.
+--
+-- A layout is bound to a register: "a" to "z" for ones you apply by hand, and
+-- "1" to "9" which are the DEFAULTS for the sheet of the same number -- sheet 3
+-- reaches for register "3". Registers "1"-"9" are undefined below, which is why
+-- a fresh sheet stays stacking until you ask for a layout.
+--
+-- The letter registers are plain Lua identifiers, so they are written bare:
+-- `s = "single"`. The digit registers are NOT -- write `["3"] = "single"`, in
+-- brackets and in quotes. A bare `[3]` is the NUMBER three and is a different
+-- key, which the loader rejects by name rather than silently filing under
+-- nothing.
+--
+-- A layout is a tree. Its leaves are CONTAINERS, which consume windows and
+-- arrange them by an algorithm; its branches are SPLITS, which cut the screen in
+-- two and hand each half to a subtree.
+--
+-- The six container algorithms:
+--
+--   single   one window, filling the container. Consumes exactly one.
+--   full     every window, each filling the container, stacked on top of one
+--            another.
+--   queue    equal horizontal shares, left to right.
+--   stack    equal vertical shares, top to bottom.
+--   grid     equal shares both ways. If the count does not divide evenly the
+--            last cells are left empty.
+--   empty    consumes nothing, and so keeps that region of screen clear.
+--
+-- Excess pixels from integer division go to the first window (and, for `grid`,
+-- the first row and column).
+-- ===========================================================================
+layouts = {
+  -- The simple form: just name the algorithm. The container takes the whole
+  -- screen, minus `gap` and `border`.
+  s = "single",
+  f = "full",
+  g = "grid",
+  q = "queue",
+  t = "stack",
+
+  -- A container can be capped, so it takes only the first N windows and passes
+  -- the rest along to the next container in the tree:
+  --
+  --   { layout = "queue", views = 3 }
+  --
+  -- `views` accepts 2-256 and cannot be combined with `single` or `empty`,
+  -- which have a fixed count of their own (1 and 0).
+
+  -- SPLITS. Give a `left`/`right` pair to divide vertically, or `top`/`bottom`
+  -- to divide horizontally. The side laid out FIRST is filled first and is the
+  -- dominant half.
+  --
+  -- Which side that is used to be decided by which key you wrote first. A Lua
+  -- table has no order, so it is now written down, with `orientation`:
+  --
+  --   orientation = "left"    (the default for a left/right split)
+  --   orientation = "right"
+  --   orientation = "top"     (the default for a top/bottom split)
+  --   orientation = "bottom"
+  --
+  -- Omit it and you get "left" or "top", which is what writing `left` before
+  -- `right` -- as every split below does -- used to mean. Only a configuration
+  -- that wrote `right` before `left` needs the key.
+  --
+  -- `scale` is the dominant half's share, 0.1 to 0.9, defaulting to 0.5. The
+  -- classic master-and-stack: one window on the left taking 60%, everything
+  -- else stacked down the right.
+  --
+  -- m = {
+  --   scale = 0.6,
+  --   left  = "single",
+  --   right = "stack",
+  -- },
+
+  -- DYNAMIC SCALE. Instead of a fixed share, give `min` and `max` and the split
+  -- sizes itself from the first window in the container -- so a window you have
+  -- resized by hand keeps its size, clamped to the range. Omitting `min` or
+  -- `max` defaults them to 0.1 and 0.9.
+  --
+  c = {
+    scale = { min = 0.5, max = 0.75 },
+    left  = "single",
+    right = "stack",
+  },
+
+  -- Splits nest, so any subtree can itself be a split. Main window left, two
+  -- stacked right, and the bottom strip deliberately left clear:
+  --
+  w = {
+    scale = 0.6,
+    left  = "single",
+    right = {
+      top    = { layout = "stack", views = 2 },
+      bottom = "empty",
+    },
+  },
+},
+
+inputs = {
+  -- Device names are the ones libinput reports -- `libinput list-devices` as
+  -- root, or the compositor's own startup output. "*" addresses every device of
+  -- that kind; a named device overrides the keys it sets for itself and takes
+  -- the rest from "*". A setting the hardware does not support is ignored by
+  -- libinput rather than being an error, so a touchpad table does no harm on a
+  -- machine that has only a mouse.
+  pointers = {
+    ["*"] = {
+      -- Acceleration, -1.0 (slowest) to 1.0 (fastest).
+      accel = 1.0,
+
+      -- How that acceleration is applied. "adaptive" scales it with how fast
+      -- the device is moving, which is the usual desktop feel; "flat" applies a
+      -- constant factor, which is what you want on a mouse you aim with; "none"
+      -- turns the profile off. Left unset the device keeps libinput's own
+      -- default.
+      -- ["accel-profile"] = "adaptive",
+
+      -- Ignore the touchpad while the keyboard is being typed on.
+      ["disable-while-typing"] = true,
+
+      -- Scrolling follows the fingers rather than the content.
+      ["natural-scrolling"] = true,
+
+      -- Touchpad tapping: tap to click, tap-then-drag to move a window, and
+      -- whether such a drag survives briefly lifting the finger.
+      tap = true,
+      ["tap-drag"] = true,
+      ["tap-drag-lock"] = false,
+
+      -- Synthesise a middle click from a simultaneous left and right press, for
+      -- mice with no middle button.
+      ["middle-emulation"] = false,
+
+      -- Button scrolling, as trackballs and thumb-button mice use: hold a
+      -- button and move the device to scroll. "on-button-down" enables it and
+      -- `scroll-button` picks the button -- left, right, middle, side, extra,
+      -- forward, back or task. "no-scroll" disables scrolling for the device
+      -- entirely. Both are unset here, leaving the device's own default.
+      -- ["scroll-method"] = "on-button-down",
+      -- ["scroll-button"] = "middle",
+    },
+  },
+
+  keyboards = {
+    ["*"] = {
+      -- XKB settings, either as the table below or as a string naming a keymap
+      -- file to load whole:
+      --
+      --   xkb = "/path/to/keymap.xkb",
+      --
+      -- Every field of the table is optional. An unset one falls back to the
+      -- matching XKB_DEFAULT_* environment variable and then to the xkb default,
+      -- so an empty table is the same as no table at all.
+      xkb = {
+        -- rules   = "evdev",
+        -- model   = "pc105",
+        -- layout  = "us,de",     -- comma-separated for a switchable pair
+        -- variant = "dvorak",
+        -- options = "ctrl:nocaps,grp:alt_shift_toggle",
+      },
+
+      -- Repeats per second once repeating starts, and the milliseconds a key is
+      -- held before it does.
+      ["repeat-rate"] = 25,
+      ["repeat-delay"] = 600,
+    },
+  },
+
+  -- Hardware switches -- laptop lids and tablet-mode toggles. The key is the
+  -- device name as libinput reports it, the value any action, built in
+  -- ("lock", "quit", ...) or one of your own from the `actions` section below
+  -- (written as "action-<name>"). The action fires when the switch turns ON --
+  -- the lid closing -- and nothing fires on the way back unless the action has
+  -- an end half of its own. Switches are ignored entirely while the session is
+  -- locked, so a lid closed twice cannot stack anything up.
+  switches = {
+    -- Lock the screen when the lid is closed
+    ["Control Method Lid Switch"] = "lock",
+  },
+
+  -- Gesture bindings, for touchpads and touchscreens alike.
+  -- Keys are "<swipe|pinch>-<direction>-<fingers>" or "hold-<fingers>";
+  -- swipe directions are up/down/left/right, pinch directions are in/out.
+  -- A gesture that matches a binding here fires the action instead of
+  -- being forwarded to the focused client; unmatched gestures pass
+  -- through to clients exactly as wlroots reported them.
+  --
+  -- On a touchpad libinput does the recognising and any count from 1 to 5
+  -- works. On a touchscreen hikari does it, because libinput's gesture
+  -- events come from touchpads only, and there a gesture needs at least
+  -- THREE fingers: one- and two-finger sequences belong to the client, for
+  -- tapping, dragging, selecting text and its own pinch-to-zoom. A binding
+  -- with fewer than three fingers is still valid; it just only ever fires
+  -- on a touchpad. See hikari(1) under "Gestures".
+  gestures = {
+    ["swipe-left-3"]  = "workspace-cycle-next",
+    ["swipe-right-3"] = "workspace-cycle-prev",
+    -- ["pinch-in-3"] = "view-toggle-maximize-full",
+    -- ["hold-3"]     = "action-terminal",
+  },
+},
+
+-- Who leads display configuration: wlr-randr, or this file.
+--
+-- true (the default) lets output-management clients -- wlr-randr, kanshi,
+-- wdisplays -- change output position, resolution, refresh rate, scale and
+-- transform, and stops a configuration reload from dragging an output back to
+-- the `position` written below. The outputs table still SEEDS a monitor when it
+-- first appears, so a position set here is still applied on plug-in; what
+-- changes is whether this file goes on asserting it afterwards.
+--
+-- false puts this file in charge. wlr-randr can still LIST outputs and their
+-- modes, which is the useful half of it, but anything that would change one is
+-- refused and the reason is logged; a reload re-applies the position below.
+-- Choose this if you want the display layout to live in one place, in version
+-- control, rather than in whatever the last command happened to set.
+--
+-- It is one setting for every output, not one per output: the protocol answers
+-- a whole configuration with a single yes or no, and wlr-randr sends every
+-- monitor on every invocation, so pinning one output individually would make
+-- every command fail. Switching an output off moves its windows to another
+-- screen first, and switching it back on returns it where it was; the windows
+-- stay where they went, as they do when a monitor is unplugged.
+output_management_overrides_config = true,
+
+outputs = {
+  ["*"] = {
+    background = "PREFIX/share/backgrounds/hikari/hikari_wallpaper.png",
+  },
+
+  -- Example for specific monitor setup and wallpaper fitting
+  -- ["eDP-1"] = {
+  --   background = {
+  --     path = "PREFIX/share/backgrounds/hikari/hikari_wallpaper.png",
+  --     fit = "stretch", -- "center", "stretch", or "tile"
+  --   },
+  --   position = {
+  --     x = 0,
+  --     y = 0,
+  --   },
+  -- },
+},
+
+views = {
+  -- Per-application rules, matched on the window's app_id (Wayland) or class
+  -- (XWayland). `hikari-unlocker`-style helpers aside, the app_id is what
+  -- `windows` in the launcher shows, and the compositor prints it for a focused
+  -- window on request. Every property below is optional and applies once, when
+  -- the window first appears -- nothing here is re-applied later.
+  --
+  --   group      Put the window in a named group. The group is created if it
+  --              does not exist; without this the group is the app_id itself.
+  --   sheet      Sheet number, 0-9, the window is assigned to. A window whose
+  --              sheet is neither 0 nor the sheet on display arrives as
+  --              "borrowed" rather than yanking the view away from you.
+  --   mark       A mark register, "a" to "z", bound to this window -- ignored
+  --              if that mark already belongs to another window.
+  --   position   Either a named spot -- "top-left", "top-middle", "top-right",
+  --              "center-left", "center", "center-right", "bottom-left",
+  --              "bottom-middle", "bottom-right" -- or a table of absolute
+  --              { x = ..., y = ... } coordinates.
+  --              Named positions are resolved against the usable area, so they
+  --              stay clear of the top bar and of any panel.
+  --   focus      Take focus when it first appears. Default false, which is what
+  --              keeps a background application from stealing your typing.
+  --   floating   Never take the window into a layout. This is what you want for
+  --              dialogs, pickers and anything you place by hand.
+  --   invisible  Start hidden.
+  --   public     Start public -- visible on every sheet of the workspace.
+  --   inherit    What the window's CHILDREN (its dialogs) take from it, as a
+  --              list. Each entry is either a property name as a string or a
+  --              table setting a property outright for the children. Anything
+  --              not listed reverts to its default for the child, and with no
+  --              `inherit` at all a child simply reuses the parent's whole
+  --              configuration. Note the spelling: the inheritable name for
+  --              `public` is "publicview". A name that matches nothing is now
+  --              an error naming the offender rather than being skipped in
+  --              silence, and the list must be a LIST: write
+  --              `inherit = { { floating = true } }`, not
+  --              `inherit = { floating = true }`.
+  --
+  -- ["firefox"] = {
+  --   group = "web",
+  -- },
+  --
+  -- ["floating_app"] = {
+  --   floating = true,
+  --   position = "center",
+  -- },
+  --
+  -- ["dialog"] = {
+  --   inherit = { "group", "sheet", "floating" },
+  -- },
+  --
+  -- ["systat"] = {
+  --   group    = "monitor",
+  --   sheet    = 0,
+  --   mark     = "m",
+  --   position = "top-right",
+  --   focus    = true,
+  --   public   = true,
+  --   inherit  = { "group", "sheet", { floating = true } },
+  -- },
+},
+
+marks = {
+  -- This register and the `terminal` action below both spelled their value
+  -- `"$TERMINAL"` in the old configuration language, which expanded `$NAME`
+  -- from the environment while it parsed the file. A Lua string is literal
+  -- and expands nothing, so the lookup is written out: `env.TERMINAL` reads
+  -- the variable, and `or "foot"` supplies a default the old spelling had no
+  -- way to express. Set TERMINAL before starting hikari. Exporting it in a
+  -- shell afterwards has no effect, and a reload does not rescue it: `env`
+  -- reads the COMPOSITOR's environment, which was fixed when it was executed
+  -- and which no later shell can reach into. `LS+r` re-reads this file in
+  -- that same process, so it sees the same environment it saw the first time.
+  -- To change it in a running session, edit the value here and reload.
+  --
+  -- One edge the fallback does not cover: TERMINAL exported but EMPTY. An
+  -- empty string is true in Lua, so `or` does not fire and the command
+  -- becomes "" -- the keypress then runs nothing. Unset the variable rather
+  -- than blanking it, or write
+  -- `(env.TERMINAL ~= "" and env.TERMINAL) or "foot"` to cover both cases.
+  s = env.TERMINAL or "foot",
+},
+
+actions = {
+  -- Was `"$TERMINAL"`; see the note on `marks.s` above for the substitution
+  -- and its one edge case.
+  terminal = env.TERMINAL or "foot",
+  -- Screenshots. Both need `grim`; the second also needs `slurp`.
+  --
+  -- Each creates ~/Pictures/Screenshots before writing into it, because grim
+  -- does not create parent directories -- on a machine where that folder does
+  -- not exist yet it simply fails, and since a session started by a display
+  -- manager discards standard error, the keypress would appear to do nothing at
+  -- all. `mkdir -p` succeeds silently when the directory is already there, so
+  -- this costs one syscall per screenshot and removes the failure entirely.
+  --
+  -- Actions run through `/bin/sh -c`, which is what makes `&&`, `~` and the
+  -- `$(...)` timestamp work here. A Lua string is literal, so there is nothing
+  -- to escape: `$`, `$(` and `${}` all reach the shell exactly as written.
+  -- Where you want the COMPOSITOR's environment instead of the shell's, build
+  -- the string yourself -- `env.HOME .. "/Pictures"`.
+
+  -- Capture entire screen to Pictures folder
+  screenshot = "mkdir -p ~/Pictures/Screenshots && grim ~/Pictures/Screenshots/$(date +%Y-%m-%d-%H%M%S).png",
+
+  -- Capture selected area to Pictures folder
+  screenclip = "mkdir -p ~/Pictures/Screenshots && grim -g \"$(slurp)\" ~/Pictures/Screenshots/$(date +%Y-%m-%d-%H%M%S).png",
+  -- =========================================================================
+  -- THE SHELL -- these four are sofi, the layer-shell companion this desktop
+  -- is built around: <https://github.com/orpheus497/sofi>. One binary, one
+  -- invocation per surface, no configuration file needed.
+  --
+  --   drun                  application menu, bottom centre
+  --   window                the control panel, a strip along the bottom -- one
+  --                         button per sofi surface, and the way to reach the
+  --                         ones with no key of their own (volume, network,
+  --                         keys, and the window switcher `windowlist`)
+  --   sheets                sheet switcher, a row of ten chips under this bar
+  --   notification-history  notification history, right edge
+  --
+  -- `sheets` is the one that is more than a launcher: it reads and drives this
+  -- compositor's sheets over the control socket at $XDG_RUNTIME_DIR/hikari.sock,
+  -- because no Wayland protocol expresses a sheet. See CONTROL SOCKET in
+  -- hikari(1).
+  --
+  -- sofi is NOT required. Without it these four bindings (L+Space, L+w, L+e,
+  -- L+n) simply do nothing -- so either install it, or point these actions at
+  -- whatever you use instead:
+  --
+  --   menu = "wofi --show drun",
+  --
+  -- Its notification daemon has no binding because it is a daemon; start it
+  -- from ~/.config/hikari/autostart:
+  --
+  --   sofi -notification-daemon &
+  --
+  -- `sofi -tray-daemon` is the OTHER daemon, and it is conditional: add it only
+  -- if you are NOT running saber, which owns the persistent tray. Running both
+  -- is the one mistake to avoid here -- see the saber block below.
+  -- =========================================================================
+  menu = "sofi -show drun",
+  windows = "sofi -show window",
+  sheets = "sofi -show sheets",
+  notifications = "sofi -show notification-history",
+
+  -- =========================================================================
+  -- THE PANEL -- these three drive saber, the other layer-shell companion:
+  -- <https://github.com/orpheus497/saber>. A persistent vertical launcher in
+  -- the tradition of the Unity 7 launcher, driven through its `saberctl`
+  -- control tool.
+  --
+  --   dash      the application grid
+  --   spread    the window spread, an exposé of everything open
+  --   panel     show/hide the panel column itself
+  --
+  -- saber and sofi do not overlap, and the difference is persistence: every
+  -- sofi surface appears on a keypress and dismisses on selection, whereas
+  -- saber is on screen for the whole session. That is also why saber has no
+  -- binding here to start it -- it is not summoned, it is running already.
+  -- Start it from ~/.config/hikari/autostart:
+  --
+  --   saber &
+  --
+  -- If you run saber, do NOT also run `sofi -tray-daemon`. Both are system
+  -- tray hosts, and exactly one process on a session bus can own
+  -- org.kde.StatusNotifierWatcher -- whichever starts second finds the name
+  -- taken and shows an empty tray. Notifications are unaffected;
+  -- `sofi -notification-daemon` should keep running either way.
+  --
+  -- Worth knowing about stacking, because it is not obvious and nothing warns
+  -- you: saber's panel sits on the layer-shell TOP layer, so a fullscreen
+  -- window covers it, while saber's dash and spread sit on OVERLAY and draw
+  -- ABOVE a fullscreen window. Both are hidden by the lock screen.
+  --
+  -- saber is NOT required. Without it these three bindings do nothing.
+  -- =========================================================================
+  dash = "saberctl dash",
+  spread = "saberctl spread",
+  panel = "saberctl toggle",
+
+  -- Laptop Media Controls
+  -- Volume goes through `pactl`, so these work unchanged wherever PulseAudio or
+  -- PipeWire is running -- FreeBSD and Linux alike. On a machine with neither,
+  -- swap them for FreeBSD's native mixer:
+  --
+  --   ["vol-up"] = "mixer vol +5",   ["vol-down"] = "mixer vol -5",
+  --   ["vol-mute"] = "mixer vol.mute=^",
+  --
+  -- Brightness is the FreeBSD-specific half: `backlight` is a base-system tool
+  -- and is what to replace with `brightnessctl` when porting to Linux.
+  ["vol-up"]       = "pactl set-sink-volume @DEFAULT_SINK@ +5%",
+  ["vol-down"]     = "pactl set-sink-volume @DEFAULT_SINK@ -5%",
+  ["vol-mute"]     = "pactl set-sink-mute @DEFAULT_SINK@ toggle",
+  ["bright-up"]    = "backlight incr 5",
+  ["bright-down"]  = "backlight decr 5",
+  ["pause-play"]   = "playerctl play-pause",
+  ["media-next"]   = "playerctl next",
+  ["media-prev"]   = "playerctl previous",
+},
+
+bindings = {
+  keyboard = {
+    -- session control
+    ["LS+q"]    = "quit",
+    ["LS+r"]    = "reload",
+    ["L+l"]     = "lock",
+
+    -- launching
+    ["L+Return"] = "action-terminal",
+    ["L+Space"] = "action-menu",
+    ["L+w"] = "action-windows",
+    ["L+e"] = "action-sheets",
+    ["L+n"] = "action-notifications",
+
+    -- the saber panel. Shifted counterparts of the sofi keys above, so the
+    -- two companions stay on one mental map: unshifted summons a sofi
+    -- surface, shifted drives the panel that is already on screen.
+    ["LS+d"] = "action-dash",
+    ["LS+e"] = "action-spread",
+    ["LS+p"] = "action-panel",
+
+    -- laptop media keys (unmodified)
+    ["0+XF86AudioRaiseVolume"]  = "action-vol-up",
+    ["0+XF86AudioLowerVolume"]  = "action-vol-down",
+    ["0+XF86AudioMute"]         = "action-vol-mute",
+    ["0+XF86MonBrightnessUp"]   = "action-bright-up",
+    ["0+XF86MonBrightnessDown"] = "action-bright-down",
+    ["0+XF86AudioPlay"]         = "action-pause-play",
+    ["0+XF86AudioPause"]        = "action-pause-play",
+    ["0+XF86AudioNext"]         = "action-media-next",
+    ["0+XF86AudioPrev"]         = "action-media-prev",
+
+    -- Screenshots
+    ["0+Print"] = "action-screenclip",
+    ["LS+Print"] = "action-screenshot",
+
+    -- view cycling and lifecycle
+    ["L+Tab"]   = "view-cycle-next",
+    ["LS+Tab"]  = "view-cycle-prev",
+    ["L+q"]     = "view-quit",
+    ["L+u"]     = "view-raise",
+    ["L+d"]     = "view-lower",
+    ["L+h"]     = "view-hide",
+    ["L+o"]     = "view-only",
+    ["L+0"]     = "view-reset-geometry",
+
+    -- view state toggles
+    ["L+f"]     = "view-toggle-maximize-full",
+    ["L+x"]     = "view-toggle-maximize-horizontal",
+    ["L+y"]     = "view-toggle-maximize-vertical",
+    ["L+v"]     = "view-toggle-floating",
+    ["L+i"]     = "view-toggle-invisible",
+    ["L+p"]     = "view-toggle-public",
+
+    -- modal operations
+    ["L+m"]     = "mode-enter-move",
+    ["L+r"]     = "mode-enter-resize",
+    ["L+g"]     = "mode-enter-group-assign",
+    ["LS+s"]    = "mode-enter-sheet-assign",
+    ["LS+m"]    = "mode-enter-mark-assign",
+    ["L+apostrophe"] = "mode-enter-mark-select",
+    ["L+s"]     = "mode-enter-layout",
+
+    -- sheet switching and pinning
+    ["L+1"]     = "workspace-switch-to-sheet-1",
+    ["L+2"]     = "workspace-switch-to-sheet-2",
+    ["L+3"]     = "workspace-switch-to-sheet-3",
+    ["L+4"]     = "workspace-switch-to-sheet-4",
+    ["L+5"]     = "workspace-switch-to-sheet-5",
+    ["L+6"]     = "workspace-switch-to-sheet-6",
+    ["L+7"]     = "workspace-switch-to-sheet-7",
+    ["L+8"]     = "workspace-switch-to-sheet-8",
+    ["L+9"]     = "workspace-switch-to-sheet-9",
+    ["LS+1"]    = "view-pin-to-sheet-1",
+    ["LS+2"]    = "view-pin-to-sheet-2",
+    ["LS+3"]    = "view-pin-to-sheet-3",
+    ["LS+4"]    = "view-pin-to-sheet-4",
+    ["LS+5"]    = "view-pin-to-sheet-5",
+    ["LS+6"]    = "view-pin-to-sheet-6",
+    ["LS+7"]    = "view-pin-to-sheet-7",
+    ["LS+8"]    = "view-pin-to-sheet-8",
+    ["LS+9"]    = "view-pin-to-sheet-9",
+
+    -- The twenty lines above are what a Lua configuration can generate
+    -- instead of typing, which is the one thing the old format could not do.
+    -- For reference, written as a loop before the table is returned:
+    --
+    --   local keys = {}
+    --   for i = 1, 9 do
+    --     keys["L+"  .. i] = "workspace-switch-to-sheet-" .. i
+    --     keys["LS+" .. i] = "view-pin-to-sheet-" .. i
+    --   end
+
+    -- layout registers (see the layouts section above)
+    ["LC+s"]    = "layout-apply-s",
+    ["LC+f"]    = "layout-apply-f",
+    ["LC+g"]    = "layout-apply-g",
+    ["LC+q"]    = "layout-apply-q",
+    ["LC+t"]    = "layout-apply-t",
+
+    -- LAYOUT MANIPULATION. These work on the sheet's current layout and are the
+    -- manual half of what `layout.auto = true` does for you.
+    --
+    --   layout-restack-append/prepend  fold every untiled window on the sheet
+    --                                  into the layout, at the end or the
+    --                                  front, without disturbing the order of
+    --                                  the windows already in it. With no
+    --                                  layout yet, applies the sheet's default
+    --                                  register.
+    --   layout-reset                   take every window back out of the
+    --                                  layout and restore its floating
+    --                                  geometry -- back to stacking.
+    --   layout-cycle-view-*            move focus along the layout order rather
+    --                                  than the stacking order.
+    --   layout-exchange-view-*         swap the focused window with its
+    --                                  neighbour, or with the main window.
+    ["LC+Return"]     = "layout-restack-append",
+    ["LCS+Return"]    = "layout-restack-prepend",
+    ["LC+0"]          = "layout-reset",
+    ["LC+j"]          = "layout-cycle-view-next",
+    ["LC+k"]          = "layout-cycle-view-prev",
+    ["LCS+j"]         = "layout-exchange-view-next",
+    ["LCS+k"]         = "layout-exchange-view-prev",
+    ["LCS+Home"]      = "layout-exchange-view-main",
+
+    -- WINDOW PLACEMENT. `view-move-<dir>` nudges by `step` pixels;
+    -- `view-snap-<dir>` throws the window to that screen edge. Directions are
+    -- up, down, left, right; view-move also takes the nine named positions
+    -- top-left, top-middle, top-right, center-left, center, center-right,
+    -- bottom-left, bottom-middle, bottom-right.
+    ["LA+Left"]       = "view-move-left",
+    ["LA+Right"]      = "view-move-right",
+    ["LA+Up"]         = "view-move-up",
+    ["LA+Down"]       = "view-move-down",
+    ["LAS+Left"]      = "view-snap-left",
+    ["LAS+Right"]     = "view-snap-right",
+    ["LAS+Up"]        = "view-snap-up",
+    ["LAS+Down"]      = "view-snap-down",
+    ["LA+c"]          = "view-move-center",
+
+    -- RESIZING BY KEY. Every one of these moves exactly ONE EDGE by `step`
+    -- pixels; the direction names which way that edge travels and
+    -- increase/decrease says whether the window grows. Two families follow from
+    -- that, and mixing them is a trap:
+    --
+    --   LC+arrows  move the RIGHT and BOTTOM edges. The top-left corner never
+    --              moves, so grow and shrink are exact inverses -- LC+Right
+    --              then LC+Left leaves the window exactly as it was.
+    --
+    --   LCS+arrows move the LEFT and TOP edges, which is the only way to extend
+    --              a window leftwards or upwards. These necessarily move the
+    --              window's origin as well as its size.
+    --
+    -- The pairing matters. Binding a right-edge grow against a left-edge shrink
+    -- (LC+Right = increase-size-right, LC+Left = decrease-size-RIGHT) looks
+    -- symmetric and is not: each round trip leaves the size unchanged and the
+    -- window `step` pixels further right, so it walks off the screen and no
+    -- binding can bring it back.
+    ["LC+Right"]      = "view-increase-size-right",
+    ["LC+Left"]       = "view-decrease-size-left",
+    ["LC+Down"]       = "view-increase-size-down",
+    ["LC+Up"]         = "view-decrease-size-up",
+    ["LCS+Left"]      = "view-increase-size-left",
+    ["LCS+Right"]     = "view-decrease-size-right",
+    ["LCS+Up"]        = "view-increase-size-up",
+    ["LCS+Down"]      = "view-decrease-size-down",
+
+    -- SHEETS AND GROUPS. `sheet-show-*` reveals windows on the current sheet
+    -- that are hidden or marked invisible; `workspace-*` acts across every
+    -- sheet on the output.
+    -- `L+n` is taken by action-notifications above. Moved to the bracket pair
+    -- so both directions stay adjacent. (A key bound twice in this table is no
+    -- longer a warning and no longer keeps the first: Lua keeps the LAST
+    -- assignment, silently, so a stray duplicate quietly wins.)
+    ["L+bracketright"] = "workspace-switch-to-sheet-next-inhabited",
+    ["L+bracketleft"]  = "workspace-switch-to-sheet-prev-inhabited",
+    ["LS+n"]          = "workspace-cycle-next",
+    ["LS+b"]          = "workspace-cycle-prev",
+    ["L+a"]           = "sheet-show-all",
+    ["LS+i"]          = "sheet-show-invisible",
+    ["LS+g"]          = "sheet-show-group",
+    ["LS+a"]          = "workspace-show-all",
+    ["LS+c"]          = "workspace-clear",
+    ["LC+n"]          = "group-cycle-next",
+    ["LC+b"]          = "group-cycle-prev",
+    ["LC+u"]          = "group-raise",
+    ["LC+d"]          = "group-lower",
+    ["LC+o"]          = "group-only",
+    ["LC+h"]          = "group-hide",
+
+    -- MARKS. `mark-show-<a-z>` reveals the marked window in place;
+    -- `mark-switch-to-<a-z>` switches to its sheet first. Assign with
+    -- `mode-enter-mark-assign` (LS+m above).
+    ["L+grave"]       = "mark-show-s",
+    ["LS+grave"]      = "mark-switch-to-s",
+
+    -- A binding may also be a table with a separate press and release half,
+    -- which is what guarantees the release action runs. `end` is a Lua
+    -- keyword, so it is the one key in this file that MUST be written in
+    -- brackets and quotes:
+    --
+    --   ["L+t"] = {
+    --     begin   = "action-push-to-talk-start",
+    --     ["end"] = "action-push-to-talk-stop",
+    --   },
+
+    -- virtual terminal switching
+    ["CA+F1"]   = "vt-switch-to-1",
+    ["CA+F2"]   = "vt-switch-to-2",
+    ["CA+F3"]   = "vt-switch-to-3",
+    ["CA+F4"]   = "vt-switch-to-4",
+    ["CA+F5"]   = "vt-switch-to-5",
+    ["CA+F6"]   = "vt-switch-to-6",
+    ["CA+F7"]   = "vt-switch-to-7",
+    ["CA+F8"]   = "vt-switch-to-8",
+    ["CA+F9"]   = "vt-switch-to-9",
+  },
+
+  mouse = {
+    -- Both modes now grab the window where you take hold of it, so a window
+    -- dragged from its middle stays under the pointer instead of snapping a
+    -- corner to it.
+    ["L+left"]  = "mode-enter-move",
+    ["L+right"] = "mode-enter-resize",
+  },
+},
+
+}
