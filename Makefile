@@ -398,22 +398,39 @@ LIBINPUT_LIBS != ${PKG_CONFIG} --libs libinput
 # probe on such a machine selects a module that cannot compile and the build
 # dies on a wrong-argument-count error pointing at a call site that looks
 # correct -- not on the .error below, which exists to say something useful.
-# src/config_lua.c carries a matching #if LUA_VERSION_NUM guard for the case
-# where LUA_CFLAGS is set by hand and never reaches this probe at all.
+# src/config_lua.c carries a matching #if LUA_VERSION_NUM guard for a build
+# that supplies LUA_CFLAGS and LUA_LIBS itself rather than through pkg-config.
 LUA_PKG != for m in lua-5.4 lua5.4 lua54 lua; do \
 	if ${PKG_CONFIG} --exists "$$m >= 5.4" "$$m < 5.5" 2>/dev/null; then \
 		echo $$m; break; fi; \
 	done
 
+# [COMMENT] Action purpose: Whether this invocation can proceed without Lua.
+#
+# Two cases can. A build that was handed both LUA_CFLAGS and LUA_LIBS needs no
+# pkg-config module to find: that is the escape hatch for a machine carrying
+# Lua 5.4 with no .pc file. And clean and distclean only remove files, so they
+# must work on a machine that cannot build at all -- being unable to clean a
+# tree because a dependency is missing is its own trap. Any other target list,
+# the empty one that means `all` included, needs the real flags.
+LUA_OPTIONAL = no
+.if defined(LUA_CFLAGS) && defined(LUA_LIBS)
+LUA_OPTIONAL = yes
+.elif !empty(.TARGETS) && empty(.TARGETS:Nclean:Ndistclean)
+LUA_OPTIONAL = yes
+.endif
+
 # [COMMENT] Action purpose: Fail at parse time with a sentence a human can act
 # on. Without this the two assignments below expand to empty, the compile dies
 # on a missing lua.h, and nothing says which package is absent.
 .if empty(LUA_PKG)
-.error Lua 5.4 development files not found. Tried pkg-config modules lua-5.4, lua5.4, lua54 and lua. Install FreeBSD lang/lua54, Debian/Ubuntu liblua5.4-dev, Fedora lua-devel or Arch lua.
-.endif
-
+.  if ${LUA_OPTIONAL} == "no"
+.error Lua 5.4 development files not found. Tried pkg-config modules lua-5.4, lua5.4, lua54 and lua. Install FreeBSD lang/lua54, Debian/Ubuntu liblua5.4-dev, Fedora lua-devel or Arch lua. Alternatively set LUA_CFLAGS and LUA_LIBS yourself.
+.  endif
+.else
 LUA_CFLAGS != ${PKG_CONFIG} --cflags ${LUA_PKG}
 LUA_LIBS != ${PKG_CONFIG} --libs ${LUA_PKG}
+.endif
 
 .if ${OS} == "FreeBSD"
 EPOLL_SHIM_CFLAGS != ${PKG_CONFIG} --cflags epoll-shim

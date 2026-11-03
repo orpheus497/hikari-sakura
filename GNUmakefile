@@ -49,10 +49,37 @@ HIKARI_GOALS := $(if $(MAKECMDGOALS),$(MAKECMDGOALS),all)
 #
 # $(MAKEOVERRIDES) carries command-line variable assignments through, so
 # `make PREFIX=/usr WITH_XWAYLAND=NO install` reaches bmake intact.
-# [COMMENT] Action purpose: The MAKEFLAGS actually handed to bmake, named here
-# so the -B check below and the dispatch recipe cannot drift apart. Expanded in
-# the recipe, never with `:=` -- see the note above hikari-dispatch.
-HIKARI_MAKEFLAGS = $(filter-out --% -O% -j $(MAKEOVERRIDES),$(MAKEFLAGS))
+# [COMMENT] Action purpose: GNU make's short-option GROUP: the one word of
+# MAKEFLAGS that carries single-letter options without a dash, e.g. `rR` for
+# -R, `p` for -p, `Bn` for -B -n. Options that take an argument carry their own
+# dash and sit in later words instead, e.g. `-I/opt/inc`, `-j4`, `-l2`.
+#
+# Isolated because the two need different treatment, and because the -B check
+# below must look ONLY here: tested against the whole first word it also
+# matches a path, so `make -I/opt/Build` would be refused for the B in "Build"
+# while bmake accepts that option quite happily.
+HIKARI_SHORTFLAGS = $(filter-out -%,$(firstword $(MAKEFLAGS)))
+
+# [COMMENT] Action purpose: Letters bmake does not accept, removed from the
+# group before it is forwarded. bmake takes -BeikNnqrstWwX; of the letters GNU
+# make can place in this group, R, p, L and d are not among them, and bmake
+# exits with its usage message -- or, for d, "option requires an argument" --
+# before it ever reads Makefile.
+HIKARI_SAFEFLAGS = $(subst R,,$(subst p,,$(subst L,,$(subst d,,$(HIKARI_SHORTFLAGS)))))
+
+# [COMMENT] Action purpose: The dashed words, minus the ones bmake cannot take.
+# --% covers every GNU long option, including the jobserver flags
+# (--jobserver-auth=, --jobserver-fds=), --output-sync in all its forms, and the
+# bare `--` separator. -O% covers the short output-sync spellings, bare -j the
+# unlimited job count, and -l% GNU's load-limit option, which bmake reads as a
+# target named `l`. Bounded -jN and the options both makes share, -I among
+# them, are kept.
+HIKARI_DASHFLAGS = \
+	$(filter-out --% -O% -j -l% $(HIKARI_SHORTFLAGS) $(MAKEOVERRIDES),$(MAKEFLAGS))
+
+# [COMMENT] Action purpose: What is actually handed to bmake. Expanded in the
+# recipe, never with `:=` -- see the note above hikari-dispatch.
+HIKARI_MAKEFLAGS = $(strip $(HIKARI_SAFEFLAGS) $(HIKARI_DASHFLAGS))
 
 # [COMMENT] Action purpose: Detect GNU make's -B, which must not reach bmake.
 #
@@ -65,10 +92,9 @@ HIKARI_MAKEFLAGS = $(filter-out --% -O% -j $(MAKEOVERRIDES),$(MAKEFLAGS))
 #
 # bmake has no --always-make to translate into, and deleting the user's
 # objects is not what -B means either, so it is refused with a diagnostic
-# naming `make clean`. Only the first word is examined: GNU make puts short
-# flags there, and no other short flag it collects is an uppercase B. The test
-# is the `case` in the dispatch recipe -- a make-level $(if) cannot carry the
-# message, because $(if) splits its arguments on commas.
+# naming `make clean`. The test is the `case` in the dispatch recipe, against
+# HIKARI_SHORTFLAGS and not the raw first word -- a make-level $(if) cannot
+# carry the message, because $(if) splits its arguments on commas.
 
 HIKARI_FIRST := $(firstword $(HIKARI_GOALS))
 HIKARI_REST  := $(wordlist 2,$(words $(HIKARI_GOALS)),$(HIKARI_GOALS))
@@ -135,7 +161,7 @@ hikari-dispatch:
 # `make -n` prints the dispatch line and stops instead of describing the
 # build. The filter above preserves n, so bmake receives it and does the dry
 # run itself.
-	+@case '$(firstword $(HIKARI_MAKEFLAGS))' in \
+	+@case '$(HIKARI_SHORTFLAGS)' in \
 	*B*) \
 		echo 'make: -B (--always-make) cannot be forwarded to bmake.' >&2; \
 		echo 'make: bmake reads -B as compatibility mode and rebuilds' >&2; \

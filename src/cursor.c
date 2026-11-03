@@ -428,12 +428,8 @@ cursor_touch_down_handler(struct wl_listener *listener, void *data)
 static void
 cursor_touch_up_handler(struct wl_listener *listener, void *data)
 {
-  /* [COMMENT] Action purpose: A touch cannot be seen while the screen is
-  locked, and nothing here has to test for it. hikari_lock_mode_enter() calls
-  hikari_cursor_deactivate() -- which removes this listener -- BEFORE it
-  installs lock mode, and only lock mode's cancel() reattaches, so these
-  handlers are detached for the whole of a lock. The same reasoning and the
-  same assertion guard the pointer handlers further down this file. */
+  /* Action purpose: Touch listeners are detached for the whole of a lock; see
+  hikari_cursor_deactivate(). */
   assert(!hikari_server_in_lock_mode());
 
   struct wlr_touch_up_event *event = data;
@@ -457,12 +453,8 @@ cursor_touch_up_handler(struct wl_listener *listener, void *data)
 static void
 cursor_touch_motion_handler(struct wl_listener *listener, void *data)
 {
-  /* [COMMENT] Action purpose: A touch cannot be seen while the screen is
-  locked, and nothing here has to test for it. hikari_lock_mode_enter() calls
-  hikari_cursor_deactivate() -- which removes this listener -- BEFORE it
-  installs lock mode, and only lock mode's cancel() reattaches, so these
-  handlers are detached for the whole of a lock. The same reasoning and the
-  same assertion guard the pointer handlers further down this file. */
+  /* Action purpose: Touch listeners are detached for the whole of a lock; see
+  hikari_cursor_deactivate(). */
   assert(!hikari_server_in_lock_mode());
 
   struct wlr_touch_motion_event *event = data;
