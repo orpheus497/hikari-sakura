@@ -942,16 +942,21 @@ started at login — that is a reason to prefer `Hikari` quite apart from the
 runtime directory.
 
 The third difference decides which *display* the compositor tries to drive.
-`start-hikari` unsets `WAYLAND_DISPLAY` and `DISPLAY` before exec'ing; the
-direct entry passes on whatever it was handed. That matters because wlroots
-picks its backend from those variables in preference to the hardware:
+`start-hikari` unsets `WAYLAND_DISPLAY`, `WAYLAND_SOCKET` and `DISPLAY` before
+exec'ing; the direct entry passes on whatever it was handed. That matters
+because wlroots picks its backend from those variables ahead of the hardware:
 `wlr_backend_autocreate` tests `WAYLAND_DISPLAY` and `WAYLAND_SOCKET` first and,
 if either is set, builds a *nested* Wayland backend and stops looking
 (`backend/backend.c:367` in wlroots 0.20.2); `DISPLAY` does the same for X11 at
-`:381`. Only when none of them is set does it reach DRM and libinput. Neither
-path falls back, so a stale `WAYLAND_DISPLAY` inherited from the login path does
+`:381`. Only when none of the three is set does it reach DRM and libinput.
+Neither path falls back, so a stale value inherited from the login path does
 not produce a session on a nested window — it makes the compositor fail to
 start at all, with a valid `XDG_RUNTIME_DIR` and nothing obviously wrong.
+
+That cuts the other way if nesting is what you want. Running Hikari inside an
+existing graphical session needs those variables *kept*, which is exactly what
+`start-hikari` removes — so for deliberate nesting use the `Hikari Sakura`
+entry, or the binary directly, rather than the wrapper.
 
 Nothing else between the two entries is load-bearing.
 
@@ -976,11 +981,15 @@ So:
   this.
 * **Where nothing provides it, pick `Hikari`.** A PAM stack that omits
   `pam_xdg`, Linux without logind, or a login manager that drops the variable.
-* **Where `WAYLAND_DISPLAY` or `DISPLAY` may be set, pick `Hikari`.** This is
-  the third difference above. The wrapper unsets both; the direct entry inherits
-  them, and wlroots then chooses a nested backend over the hardware and does not
-  fall back. Starting the compositor from inside an existing graphical session,
-  or from a login path that exports either variable, is the case to watch.
+* **For a standalone session where `WAYLAND_DISPLAY`, `WAYLAND_SOCKET` or
+  `DISPLAY` may be set, pick `Hikari`.** This is the third difference above. The
+  wrapper unsets all three; the direct entry inherits them, and wlroots then
+  chooses a nested backend over the hardware and does not fall back. A login
+  path that exports any of the three is the case to watch.
+* **To nest Hikari inside an existing graphical session, pick `Hikari Sakura`.**
+  The same clearing that makes the wrapper right for a standalone session makes
+  it wrong here: nesting needs those variables kept, and the wrapper removes
+  them. The direct entry passes them through.
 * **Where the login path sets up a session bus you rely on, pick `Hikari`.**
   This is the second difference above, and it is independent of the runtime
   directory: a user-level service manager or an agent started at login
