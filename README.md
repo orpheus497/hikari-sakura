@@ -920,8 +920,9 @@ greetd — offers both at the login screen:
 Both declare `DesktopNames=Sakura`, so the desktop is reported under the same
 name whichever is chosen.
 
-**Two things differ: who supplies `XDG_RUNTIME_DIR`, and who supplies the
-session message bus.** Nothing else between them is load-bearing.
+**Three things differ: who supplies `XDG_RUNTIME_DIR`, who supplies the
+session message bus, and what the compositor inherits in `WAYLAND_DISPLAY` and
+`DISPLAY`.**
 
 `Hikari Sakura` starts the compositor binary directly, with `dbus-run-session`
 in front of it to provide the session message bus that portals, the system tray
@@ -939,6 +940,20 @@ is empty, and otherwise keeps the one it was handed. So if your login path sets
 up a session bus you care about — a user-level service manager, an agent
 started at login — that is a reason to prefer `Hikari` quite apart from the
 runtime directory.
+
+The third difference decides which *display* the compositor tries to drive.
+`start-hikari` unsets `WAYLAND_DISPLAY` and `DISPLAY` before exec'ing; the
+direct entry passes on whatever it was handed. That matters because wlroots
+picks its backend from those variables in preference to the hardware:
+`wlr_backend_autocreate` tests `WAYLAND_DISPLAY` and `WAYLAND_SOCKET` first and,
+if either is set, builds a *nested* Wayland backend and stops looking
+(`backend/backend.c:367` in wlroots 0.20.2); `DISPLAY` does the same for X11 at
+`:381`. Only when none of them is set does it reach DRM and libinput. Neither
+path falls back, so a stale `WAYLAND_DISPLAY` inherited from the login path does
+not produce a session on a nested window — it makes the compositor fail to
+start at all, with a valid `XDG_RUNTIME_DIR` and nothing obviously wrong.
+
+Nothing else between the two entries is load-bearing.
 
 `Hikari` runs the wrapper, which creates a runtime directory if nothing else
 did, verifies its owner and mode, warns when it sits on a filesystem where
@@ -961,6 +976,11 @@ So:
   this.
 * **Where nothing provides it, pick `Hikari`.** A PAM stack that omits
   `pam_xdg`, Linux without logind, or a login manager that drops the variable.
+* **Where `WAYLAND_DISPLAY` or `DISPLAY` may be set, pick `Hikari`.** This is
+  the third difference above. The wrapper unsets both; the direct entry inherits
+  them, and wlroots then chooses a nested backend over the hardware and does not
+  fall back. Starting the compositor from inside an existing graphical session,
+  or from a login path that exports either variable, is the case to watch.
 * **Where the login path sets up a session bus you rely on, pick `Hikari`.**
   This is the second difference above, and it is independent of the runtime
   directory: a user-level service manager or an agent started at login
