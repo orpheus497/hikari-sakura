@@ -45,87 +45,31 @@ is the name of the compositor binary, the configuration file, the manual page
 and the configuration directory — those keep the short name and are written in
 lower case throughout this document and in hikari(1).
 
-## Companion projects
+## The display manager
 
-Hikari Sakura is designed to be used with three sibling projects, and takes the
-second half of its name from the display manager:
+Hikari Sakura takes the second half of its name from its companion project:
 
 | Project | Written in | Role |
 | --- | --- | --- |
-| [**sakura**](https://github.com/orpheus497/sakura) | Zig | **The display manager.** A TUI login manager built exclusively for FreeBSD: it runs on a virtual terminal, talks to OpenPAM directly, and needs no graphical toolkit, session bus or login-manager framework. It comes first, and it is what hands the machine over to the rest. |
-| [**sofi**](https://github.com/orpheus497/sofi) | C | **The shell — everything summoned rather than always present.** Control panel, application menu, sheet switcher, volume and network panes, notification daemon and history, and message toasts, from one binary. The name is an acronym: **S**akura **O**fficial **F**ull **I**ndexer. |
-| [**saber**](https://github.com/orpheus497/saber) | C | **The panel — the one surface that is always there.** A persistent vertical launcher in the tradition of the Unity 7 launcher: running indicators, quicklists, application dash, window spread, system tray and session controls, in one always-present column. FreeBSD only, and written for this compositor alone. |
+| [**sakura**](https://github.com/orpheus497/sakura) | Zig | **The display manager.** A TUI login manager built exclusively for FreeBSD: it runs on a virtual terminal, talks to OpenPAM directly, and needs no graphical toolkit, session bus or login-manager framework. It comes first, and it is what hands the machine over to the compositor. |
 
-`sofi` and `saber` complement rather than duplicate each other, and the
-difference is persistence — which decides every case between them. Every `sofi`
-surface is summoned: it appears on a keypress, does one job, dismisses on
-selection, and **reserves no space**, so it draws over your windows. `saber` is
-on screen for the whole session and **reserves an exclusive zone**, so windows
-tile beside it rather than under it — aimed at without looking, showing at a
-glance what is running.
+`sakura` launches the session through whichever installed entry you pick, the
+same as any other display manager that reads
+`${PREFIX}/share/wayland-sessions` — see
+[The two session entries](#the-two-session-entries).
 
-**The persistent system tray is `saber`'s.** `sofi` keeps a `-tray-daemon` for
-sessions that do not run `saber`, but it draws no surface of its own — so run
-one tray host, not both: exactly one process on a session bus can own
-`org.kde.StatusNotifierWatcher`. See [Autostart](#autostart).
+It is optional. Hikari Sakura runs on its own, any display manager (GDM, SDDM,
+greetd) works in its place, and so does starting `hikari` from a console login.
+The two are built and installed independently, and neither requires the other at
+build time.
 
-Notifications are `sofi`'s either way. The *status readout* — CPU, RAM,
-temperature, network, battery, volume, media and the clock — belongs to this
-compositor's own [top bar](#the-top-bar) and is duplicated by neither of them;
-`sofi`'s volume and network panes are summoned **controls**, not a readout.
-
-All three are optional — Hikari Sakura runs on its own, and any layer-shell
-client (`waybar`, `wofi`, `mako`) or display manager (GDM, SDDM, greetd) works
-in their place.
-
-They are, however, what the defaults assume:
-
-* **The shipped configuration binds four keys to `sofi`** —
-  `L+Space` (application menu), `L+w` (the control panel, which is the entry
-  point to every other sofi surface), `L+e` (sheet switcher) and `L+n`
-  (notification history). Without `sofi` installed those four bindings do
-  nothing. Either install it or rebind the corresponding `actions` entries in
-  `hikari.lua`.
-* **`sofi` has more surfaces than the four bound here** — volume, network, a
-  key-binding reference and a window switcher (`sofi -show windowlist`) among
-  them. All are reachable from the control panel on `L+w`, and any of them can
-  be given a key of its own by adding an `actions` entry. The four bound by
-  default are simply the ones worth a dedicated key.
-* **`sofi` needs `zwlr_layer_shell_v1` at version 4**, which this compositor
-  offers. Version 4 is where `on_demand` keyboard interactivity arrived, and
-  `sofi`'s notification daemon relies on it to avoid stealing focus. Note the
-  limitation recorded under Capabilities & Limitations above: Hikari Sakura
-  currently treats `on_demand` as `exclusive`, so a toast can take the keyboard
-  when it should not. `sofi` also has `xcb` and `xdg-shell` fallbacks for other
-  environments; neither is used here.
-* **`sofi`'s sheet switcher and `saber`'s sheet indicator are both clients of
-  the compositor's control socket.** Hikari Sakura's ten-sheet-per-output model
-  is not expressible in any standards-track Wayland protocol, so the compositor
-  exposes it over a small Unix socket instead — see
-  [The control socket](#the-control-socket).
-* **The shipped configuration binds three keys to `saber`** — `LS+d` (the
-  application grid), `LS+e` (the window spread) and `LS+p` (show/hide the panel
-  column), each driven through `saberctl`. They are the shifted counterparts of
-  the `sofi` keys above, so the two companions stay on one mental map:
-  unshifted summons a `sofi` surface, shifted drives the panel that is already
-  on screen. There is no binding to *start* `saber` — it is not summoned, it
-  runs for the whole session. Start it from [autostart](#autostart).
-* **`saber` is otherwise a plain Wayland client and patches nothing.** It lists
-  and acts on windows through `wlr-foreign-toplevel-management` and places its
-  surfaces with `wlr-layer-shell`, so it needs `WITH_LAYERSHELL` and
-  `WITH_FOREIGN_TOPLEVEL_MANAGEMENT` — both on by default.
-* **`saber` sits on two different layers, which decides what covers what.** Its
-  panel is a layer-shell `TOP` surface, so a fullscreen window covers it. Its
-  application grid and window spread are `OVERLAY` surfaces, which sit above
-  the fullscreen band and therefore draw over a fullscreen window. Both are
-  hidden by the lock screen — see Capabilities & Limitations under
-  [Configuration & Customization](#configuration--customization).
-* **`sakura` launches the session through whichever installed entry you pick**,
-  the same as any other display manager that reads
-  `${PREFIX}/share/wayland-sessions` — see [The two session entries](#the-two-session-entries).
-
-Each project is built and installed independently; none of them requires
-another at build time.
+Everything else on the session is an ordinary Wayland client. Panels, docks,
+launchers, notification daemons and wallpaper setters speak `wlr-layer-shell`
+(`waybar`, `wofi`, `mako`, `swaybg`): the compositor honours what they ask for
+over the protocol, and there is nothing to configure for them in `hikari.lua`.
+The *status readout* — CPU, RAM, temperature, network, battery, volume, media
+and the clock — is not among them, because it belongs to this compositor's own
+[top bar](#the-top-bar).
 
 ## Setting up Wayland on FreeBSD
 
@@ -309,10 +253,10 @@ The configuration file allows you to define:
   wallpaper, `BOTTOM`, ordinary windows, `TOP`, fullscreen windows, `OVERLAY`,
   and the lock screen. The consequence worth knowing is that **fullscreen sits
   between `TOP` and `OVERLAY`**: a fullscreen window covers a panel on `TOP`
-  (which is where `saber`'s panel and most bars place themselves) but does not
-  cover an `OVERLAY` surface (where `saber`'s application grid and window
-  spread place themselves). A client chooses its own layer, so this is what
-  decides whether a given surface is covered.
+  (which is where most panels and bars place themselves) but does not cover an
+  `OVERLAY` surface (where pop-up launchers and application grids usually place
+  themselves). A client chooses its own layer, so this is what decides whether
+  a given surface is covered.
 - The lock screen disables every one of those bands except the wallpaper, and
   disabling a band disables everything inside it. No client can put a surface
   back on screen while locked, including one mapped after the lock began.
@@ -383,25 +327,18 @@ carries only wallpaper and position, not modes.
 ### Autostart
 
 On startup `hikari` executes `~/.config/hikari/autostart` if that file exists
-and is both readable and executable. Use it to start `saber`, `sofi`'s daemons,
-a notification agent, a portal, or anything else your session needs:
+and is both readable and executable. Use it to start a panel, a notification
+daemon, a portal, or anything else your session needs:
 
 ```sh
 #!/bin/sh
-saber &
-sofi -notification-daemon &
+waybar &
+mako &
 ```
 
-If you run `saber`, do **not** also run `sofi -tray-daemon`. Both claim
-`org.kde.StatusNotifierWatcher`, and exactly one process on a session bus can
-own it — the second to start finds the name taken and its tray stays empty.
-`saber` is the one that draws a persistent tray; `sofi -tray-daemon` has no
-surface of its own and exists for sessions that do not run `saber`. So run it
-only if you are not running `saber`.
-
-Notifications are unaffected either way: `sofi -notification-daemon` and
-`sofi -show notification-history` should keep running whichever tray host you
-choose.
+Run exactly one system tray host. Exactly one process on a session bus can own
+`org.kde.StatusNotifierWatcher`, so whichever starts second finds the name taken
+and its tray stays empty.
 
 `hikari -a <executable>` overrides the path for a single run.
 
@@ -497,8 +434,7 @@ to call.
 The compositor supplies that missing surface as a small request/response text
 socket at `$XDG_RUNTIME_DIR/hikari.sock`, mode `0600`. It reports which sheet is
 displayed and how many views each sheet holds, and accepts the two operations a
-switcher needs (`sheet` and `pin`). This is what `sofi -show sheets` and
-`saber`'s sheet indicator speak.
+switcher needs (`sheet` and `pin`).
 
 It is deliberately minimal and is not a general scripting interface: anything
 expressible as a Wayland protocol belongs in a Wayland protocol. Every request
@@ -783,9 +719,9 @@ including `YES` — enables the feature.
 | `WITH_XWAYLAND` | on | Runs X11 clients through XWayland. |
 | `WITH_SCREENCOPY` | on | `wlr-screencopy`, used by `grim` and by screen sharing. |
 | `WITH_GAMMACONTROL` | on | Gamma control, needed by tools like `redshift`. |
-| `WITH_LAYERSHELL` | on | `zwlr_layer_shell_v1` — **required by `sofi` and `saber`**, and by `waybar`, `wofi` and `slurp`. |
+| `WITH_LAYERSHELL` | on | `zwlr_layer_shell_v1`, offered at version 4 — needed by panels, docks, launchers, notification daemons and wallpaper setters such as `waybar`, `wofi`, `mako`, `swaybg` and `slurp`. |
 | `WITH_VIRTUAL_INPUT` | on | Virtual keyboard and pointer, needed by applications like `wayvnc`. |
-| `WITH_FOREIGN_TOPLEVEL_MANAGEMENT` | on | `wlr-foreign-toplevel-management`, which is how external taskbars — including `sofi -show window` and `saber`'s launcher — enumerate and activate windows. **Required by `saber`.** Its wlroots header declares itself unstable, so the switch exists to build without it if a future wlroots drops the protocol. |
+| `WITH_FOREIGN_TOPLEVEL_MANAGEMENT` | on | `wlr-foreign-toplevel-management`, which is how external taskbars and window switchers enumerate and activate windows. Its wlroots header declares itself unstable, so the switch exists to build without it if a future wlroots drops the protocol. |
 | `WITH_EXT_IMAGE_CAPTURE` | **off** | `ext-image-copy-capture-v1`. Excluded from `WITH_ALL` on purpose — see below. |
 | `WITH_SUID` | **off** | Installs `hikari` itself setuid root (`4555` instead of `555`). |
 
@@ -1009,10 +945,8 @@ effect.
   layouts, the UI/palette/colorscheme/animation/lock/bar configuration, inputs,
   outputs, and the control socket protocol.
 * `etc/hikari/hikari.lua` — the annotated default configuration.
-* [sofi](https://github.com/orpheus497/sofi),
-  [saber](https://github.com/orpheus497/saber) and
-  [sakura](https://github.com/orpheus497/sakura) document their own
-  configuration in their respective repositories.
+* [sakura](https://github.com/orpheus497/sakura) documents its own
+  configuration in its own repository.
 
 ## Contributing
 
