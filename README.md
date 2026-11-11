@@ -638,35 +638,30 @@ considered `unstable`.
 * XWayland (optional) — only for X11 clients
 * The portal stack (optional) — screen sharing and screenshots for applications
   that request them through the portal. All three pieces belong together:
-  * `xdg-desktop-portal` **1.17.1 or newer**, which is a patch release later
-    than the one that introduced `portals.conf`. 1.17.0 reads
-    `DESKTOP-portals.conf`, but only from `$XDG_CONFIG_HOME` and its own
-    build-time `sysconfdir`; the search of `$XDG_DATA_DIRS` and `datadir` — the
-    directories `${PREFIX}/share/xdg-desktop-portal/` normally falls under —
-    arrived in 1.17.1. Below that floor the installed `sakura-portals.conf` is
-    never opened, backend selection falls back to matching `UseIn=` against
-    `XDG_CURRENT_DESKTOP`, and since this desktop reports itself as `Sakura`
-    nothing matches — see
-    [the desktop name](#the-desktop-name-and-why-screen-sharing-depends-on-it).
-    Check what you actually have — `xdg-desktop-portal --version` — rather than
-    assuming: a distribution on an older stable release can package something
-    below this floor, and 1.17.0 is not the only version that misses the file.
-    FreeBSD's `deskutils/xdg-desktop-portal` is well past it.
+  * `xdg-desktop-portal` **1.17.1 or newer**. `portals.conf` itself arrived in
+    1.17.0, but the search of `$XDG_DATA_DIRS` and `datadir` — where
+    `${PREFIX}/share/xdg-desktop-portal/` is installed — came only in 1.17.1,
+    so anything earlier never opens the map at all.
 
-    **A non-default `PREFIX` needs one more thing.** Being new enough is
-    necessary, not sufficient: the portal looks in `$XDG_DATA_DIRS` and its own
-    build-time `datadir`, and `${PREFIX}/share` has to be one of those. The
-    default `PREFIX=/usr/local` is, because the XDG Base Directory
-    Specification makes `$XDG_DATA_DIRS` default to
-    `/usr/local/share/:/usr/share/`. Something like `PREFIX=/opt/hikari` is
-    not, so `sakura-portals.conf` lands where nothing looks and capture fails
-    exactly as if the file were missing. Either put `${PREFIX}/share` on
-    `$XDG_DATA_DIRS` **for the portal service's own environment** — it is
-    `xdg-desktop-portal` that reads the variable, not the compositor, so
-    exporting it only in your session is not enough if the service is
-    D-Bus-activated from a different environment — or install the map into a
-    directory already searched, such as
-    `${sysconfdir}/xdg-desktop-portal/sakura-portals.conf`.
+    **Being new enough is necessary, not sufficient: it also has to be
+    installed somewhere the portal searches.** `${PREFIX}/share` must be in the
+    `$XDG_DATA_DIRS` seen by the `xdg-desktop-portal` *service* — not by the
+    compositor, since the service is usually D-Bus-activated and need not
+    inherit your session's environment — or be its build-time `datadir`. The
+    default `PREFIX=/usr/local` satisfies that when `$XDG_DATA_DIRS` is unset
+    or empty, the XDG Base Directory Specification defaulting it to
+    `/usr/local/share/:/usr/share/`; a prefix such as `/opt/hikari`, or a
+    service environment that sets the variable to something narrower, does not.
+
+    `portals.conf(5)` lists every directory searched and in what order, which
+    is worth reading before changing any of this, because the first match wins
+    — a file under `~/.config/xdg-desktop-portal/` takes precedence over
+    anything installed system-wide. When capture finds no provider, check in
+    this order: which portal version is installed, which `portals.conf` files
+    exist and which of them wins, and whether `${PREFIX}/share` is on the
+    service's `$XDG_DATA_DIRS`. See also
+    [the desktop name](#the-desktop-name-and-why-screen-sharing-depends-on-it),
+    which has the same symptom for a different reason.
   * `xdg-desktop-portal-wlr` — the `wlr` backend, which is what
     `sakura-portals.conf` pins Screenshot and ScreenCast to. It is the only
     backend that can capture from a wlroots compositor.
