@@ -2375,6 +2375,15 @@ FILES
   **XDG\_DATA\_DIRS** and *datadir*, which is where this file is installed,
   only in 1.17.1.
 
+  That search is also why a non-default *PREFIX* needs attention:
+  *${PREFIX}/share* must itself be in **XDG\_DATA\_DIRS** or be the portal's
+  build-time *datadir*. The default */usr/local* is, since **XDG\_DATA\_DIRS**
+  defaults to */usr/local/share/:/usr/share/*; a prefix such as */opt/hikari*
+  is not, and this file is then never read. Add *${PREFIX}/share* to
+  **XDG\_DATA\_DIRS** in the environment of the xdg-desktop-portal service
+  itself, not merely the session, or install the map under a directory the
+  portal already searches.
+
 * *${PREFIX}/share/backgrounds/hikari/hikari\_wallpaper.png*
 
   Default wallpaper, which the default configuration's *outputs.background*

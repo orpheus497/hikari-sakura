@@ -642,14 +642,31 @@ considered `unstable`.
     than the one that introduced `portals.conf`. 1.17.0 reads
     `DESKTOP-portals.conf`, but only from `$XDG_CONFIG_HOME` and its own
     build-time `sysconfdir`; the search of `$XDG_DATA_DIRS` and `datadir` — the
-    directories `${PREFIX}/share/xdg-desktop-portal/` actually falls under —
-    arrived in 1.17.1. On 1.17.0 exactly, the installed `sakura-portals.conf`
-    is therefore never opened, backend selection falls back to matching
-    `UseIn=` against `XDG_CURRENT_DESKTOP`, and since this desktop reports
-    itself as `Sakura` nothing matches — see
+    directories `${PREFIX}/share/xdg-desktop-portal/` normally falls under —
+    arrived in 1.17.1. Below that floor the installed `sakura-portals.conf` is
+    never opened, backend selection falls back to matching `UseIn=` against
+    `XDG_CURRENT_DESKTOP`, and since this desktop reports itself as `Sakura`
+    nothing matches — see
     [the desktop name](#the-desktop-name-and-why-screen-sharing-depends-on-it).
-    FreeBSD's `deskutils/xdg-desktop-portal` is well past this floor, so in
-    practice this bites only a hand-pinned 1.17.0.
+    Check what you actually have — `xdg-desktop-portal --version` — rather than
+    assuming: a distribution on an older stable release can package something
+    below this floor, and 1.17.0 is not the only version that misses the file.
+    FreeBSD's `deskutils/xdg-desktop-portal` is well past it.
+
+    **A non-default `PREFIX` needs one more thing.** Being new enough is
+    necessary, not sufficient: the portal looks in `$XDG_DATA_DIRS` and its own
+    build-time `datadir`, and `${PREFIX}/share` has to be one of those. The
+    default `PREFIX=/usr/local` is, because the XDG Base Directory
+    Specification makes `$XDG_DATA_DIRS` default to
+    `/usr/local/share/:/usr/share/`. Something like `PREFIX=/opt/hikari` is
+    not, so `sakura-portals.conf` lands where nothing looks and capture fails
+    exactly as if the file were missing. Either put `${PREFIX}/share` on
+    `$XDG_DATA_DIRS` **for the portal service's own environment** — it is
+    `xdg-desktop-portal` that reads the variable, not the compositor, so
+    exporting it only in your session is not enough if the service is
+    D-Bus-activated from a different environment — or install the map into a
+    directory already searched, such as
+    `${sysconfdir}/xdg-desktop-portal/sakura-portals.conf`.
   * `xdg-desktop-portal-wlr` — the `wlr` backend, which is what
     `sakura-portals.conf` pins Screenshot and ScreenCast to. It is the only
     backend that can capture from a wlroots compositor.
@@ -962,8 +979,10 @@ configuration errors and crash output can seem to vanish.
 
 **Check your display manager's session log first.** Some capture the session's
 streams to a file, in which case the compositor's output may already be sitting
-there. [`sakura`](https://github.com/orpheus497/sakura) writes one at
-`~/.local/state/sakura-session.log` for any entry not marked `Terminal=true`.
+there. [`sakura`](https://github.com/orpheus497/sakura) writes one for any entry
+not marked `Terminal=true`, at whatever its `session_log` option names —
+`~/.local/state/sakura-session.log` by default, a different path if configured,
+and no log at all when set to `null`.
 Whether a given manager captures standard *error* as well as standard output
 varies, though, and wlroots logs exclusively to the former — so if the messages
 are not in that file, that asymmetry is usually why.
