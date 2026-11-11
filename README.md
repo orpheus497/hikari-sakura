@@ -960,15 +960,18 @@ a null callback, which leaves wlroots' default `stderr` sink in place — and a
 session started from a display manager usually discards it, which is why
 configuration errors and crash output can seem to vanish.
 
-A display manager's own session log is worth a look, but do not assume it holds
-this. [`sakura`](https://github.com/orpheus497/sakura) is instructive: for an
-entry not marked `Terminal=true` it redirects the session's standard *output* to
-its `session_log` path, while standard error is pointed at the virtual terminal
-sakura inherited — so wlroots' messages, being on stderr, are not in that file.
+**Check your display manager's session log first.** Some capture the session's
+streams to a file, in which case the compositor's output may already be sitting
+there. [`sakura`](https://github.com/orpheus497/sakura) writes one at
+`~/.local/state/sakura-session.log` for any entry not marked `Terminal=true`.
+Whether a given manager captures standard *error* as well as standard output
+varies, though, and wlroots logs exclusively to the former — so if the messages
+are not in that file, that asymmetry is usually why.
 
 Set `HIKARI_LOG` to a writable file path and `start-hikari` redirects both of
-its own descriptors there before `exec`, which is what actually captures the
-compositor's diagnostics:
+its own descriptors there before `exec`, which captures the compositor's
+diagnostics whatever started the session. It is read by the wrapper alone, so it
+does nothing for the `Hikari Sakura` entry, which execs the binary directly:
 
 ```sh
 HIKARI_LOG=/tmp/hikari.log start-hikari
