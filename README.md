@@ -638,19 +638,18 @@ considered `unstable`.
 * XWayland (optional) — only for X11 clients
 * The portal stack (optional) — screen sharing and screenshots for applications
   that request them through the portal. All three pieces belong together:
-  * `xdg-desktop-portal` **1.18.0 or newer**. The version floor is not
-    incidental, and it is a release later than the one that introduced
-    `portals.conf`. 1.17 reads `DESKTOP-portals.conf`, but only from
-    `$XDG_CONFIG_HOME` and its own build-time `sysconfdir`; the search of
-    `$XDG_DATA_DIRS` and `datadir` — the directories
-    `${PREFIX}/share/xdg-desktop-portal/` actually falls under — arrived in
-    1.18.0. On 1.17 the installed `sakura-portals.conf` is therefore never
-    opened, backend selection falls back to matching `UseIn=` against
-    `XDG_CURRENT_DESKTOP`, and since this desktop reports itself as `Sakura`
-    nothing matches — see
+  * `xdg-desktop-portal` **1.17.1 or newer**, which is a patch release later
+    than the one that introduced `portals.conf`. 1.17.0 reads
+    `DESKTOP-portals.conf`, but only from `$XDG_CONFIG_HOME` and its own
+    build-time `sysconfdir`; the search of `$XDG_DATA_DIRS` and `datadir` — the
+    directories `${PREFIX}/share/xdg-desktop-portal/` actually falls under —
+    arrived in 1.17.1. On 1.17.0 exactly, the installed `sakura-portals.conf`
+    is therefore never opened, backend selection falls back to matching
+    `UseIn=` against `XDG_CURRENT_DESKTOP`, and since this desktop reports
+    itself as `Sakura` nothing matches — see
     [the desktop name](#the-desktop-name-and-why-screen-sharing-depends-on-it).
     FreeBSD's `deskutils/xdg-desktop-portal` is well past this floor, so in
-    practice this bites only a hand-pinned 1.17.
+    practice this bites only a hand-pinned 1.17.0.
   * `xdg-desktop-portal-wlr` — the `wlr` backend, which is what
     `sakura-portals.conf` pins Screenshot and ScreenCast to. It is the only
     backend that can capture from a wlroots compositor.
@@ -899,9 +898,13 @@ So:
 * **Where nothing provides it, pick `Hikari`.** A PAM stack that omits
   `pam_xdg`, Linux without logind, or a login manager that drops the variable.
 
-If you are unsure which case you are in, `Hikari` is the safe answer: the
-wrapper only adds fallbacks and checks, so it is never the reason a session
-fails to start.
+If you are unsure which case you are in, `Hikari` is the safer answer: it
+supplies what is missing rather than assuming it is there. It is not inert,
+though — the wrapper refuses to `exec` on a runtime directory that is not an
+absolute path, not a directory, or not owned by you and mode `0700`, on a
+`HIKARI_LOG` it cannot write, and when it cannot find the `hikari` binary. Each
+of those is a deliberate stop with a message on stderr, and each is a condition
+the other entry would instead carry into the compositor.
 
 Neither entry is required in order to start the compositor by hand from a TTY.
 
@@ -954,20 +957,18 @@ environment variable, written as `env.TERMINAL or "foot"` — so exporting
 
 `hikari` and wlroots both log to standard error — `wlr_log_init` is called with
 a null callback, which leaves wlroots' default `stderr` sink in place — and a
-session started from a display manager may discard it, which is why
+session started from a display manager usually discards it, which is why
 configuration errors and crash output can seem to vanish.
 
-**Check your display manager's session log before reaching for anything else.**
-Some capture that stream already, in which case the compositor's output is
-sitting there now. [`sakura`](https://github.com/orpheus497/sakura) does: for
-any entry that is not marked `Terminal=true` — and neither of the entries above
-is — it redirects the session's standard output and error to the path in its
-`session_log` option, `~/.local/state/sakura-session.log` by default. Setting
-`HIKARI_LOG` under such a manager does not add capture; it *moves* the output
-out of that file and into yours.
+A display manager's own session log is worth a look, but do not assume it holds
+this. [`sakura`](https://github.com/orpheus497/sakura) is instructive: for an
+entry not marked `Terminal=true` it redirects the session's standard *output* to
+its `session_log` path, while standard error is pointed at the virtual terminal
+sakura inherited — so wlroots' messages, being on stderr, are not in that file.
 
-Where the stream really is discarded, set `HIKARI_LOG` to a writable file path
-and `start-hikari` redirects its own descriptors there before `exec`:
+Set `HIKARI_LOG` to a writable file path and `start-hikari` redirects both of
+its own descriptors there before `exec`, which is what actually captures the
+compositor's diagnostics:
 
 ```sh
 HIKARI_LOG=/tmp/hikari.log start-hikari
@@ -1001,7 +1002,7 @@ logging.
 | `XDG_RUNTIME_DIR` | Wayland socket directory. Must be user-owned and mode `0700`; `start-hikari` creates and validates it. |
 | `XDG_CONFIG_HOME` | Configuration directory root. Falls back to `$HOME/.config`. |
 | `TERMINAL` | Terminal emulator used by the default configuration. |
-| `HIKARI_LOG` | File path for `start-hikari` to capture compositor output to. |
+| `HIKARI_LOG` | File path for `start-hikari` to capture compositor output to. Read by the wrapper only, so it has no effect on the `Hikari Sakura` entry, which runs the binary directly. `start-hikari` refuses to start if the path is not writable. |
 | `XKB_DEFAULT_LAYOUT`, `XKB_DEFAULT_MODEL`, `XKB_DEFAULT_OPTIONS`, `XKB_DEFAULT_RULES` | Fallback keyboard configuration for keyboards not configured in `hikari.lua`. Read once at startup. |
 | `XDG_CURRENT_DESKTOP` | This desktop's name, `Sakura`. Exported by `start-hikari`; also set by the compositor itself (without overwriting an existing value) so the binary session entry reports the same name. |
 | `XDG_SESSION_DESKTOP` | Same value, for the tools that read this one instead. |

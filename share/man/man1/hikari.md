@@ -2370,8 +2370,10 @@ FILES
   *UseIn=* field of **xdg-desktop-portal-wlr**'s portal file, which lists no
   Sakura name -- so screen sharing silently finds no provider. Its filename is
   derived from **XDG\_CURRENT\_DESKTOP**, lower-cased, and so is coupled to the
-  *DesktopNames* of both session entries. Requires xdg-desktop-portal 1.17 or
-  newer, where *portals.conf* was introduced.
+  *DesktopNames* of both session entries. Requires xdg-desktop-portal 1.17.1 or
+  newer: *portals.conf* arrived in 1.17.0, but the search of
+  **XDG\_DATA\_DIRS** and *datadir*, which is where this file is installed,
+  only in 1.17.1.
 
 * *${PREFIX}/share/backgrounds/hikari/hikari\_wallpaper.png*
 
