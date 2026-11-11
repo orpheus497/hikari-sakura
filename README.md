@@ -971,11 +971,22 @@ wrong.
 choice rather than an omission. The display variables arrive by accident, from
 whatever session started the login; `WLR_BACKENDS` only arrives because someone
 put it there, and clearing it would silently defeat the override they asked
-for. The consequence is worth knowing: if it is exported from a shell profile
-or a service manager's environment, a `Hikari` session nests, or fails, exactly
-as if the display variables had been inherited — and unsetting the three the
-wrapper does clear will not help. Unset `WLR_BACKENDS` as well, or stop
-exporting it, if a standalone session is what you want.
+for.
+
+What an exported `WLR_BACKENDS` does to a `Hikari` session depends entirely on
+what it names, and `attempt_backend_by_name` at `backend/backend.c:290` is the
+whole of it. `drm`, or `drm,libinput`, creates a session and drives the
+hardware (`:300`–`:315`) — that is a standalone session, and the right answer
+is to leave the variable alone. `wayland` or `x11` builds a nested backend
+(`:294`–`:297`) and needs a parent compositor or X server to nest inside.
+`headless` (`:298`) starts with no real output. A name wlroots does not
+recognise is refused at `:316` and fails `wlr_backend_autocreate` outright.
+
+So unset `WLR_BACKENDS`, or stop exporting it, only when what it names is not
+what you want for this session — not as a reflex. If it names `wayland` or
+`x11` and you wanted the hardware, note that clearing the three variables the
+wrapper does clear will not help: `WLR_BACKENDS` is read first and never
+reaches them.
 
 That cuts the other way if nesting is what you want. Running Hikari inside an
 existing graphical session needs those variables *kept*, which is exactly what
