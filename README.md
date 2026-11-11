@@ -656,13 +656,22 @@ considered `unstable`.
     inherit your session's environment — or be its build-time `datadir`. The
     default `PREFIX=/usr/local` satisfies that when `$XDG_DATA_DIRS` is unset
     or empty, the XDG Base Directory Specification defaulting it to
-    `/usr/local/share/:/usr/share/` — and on FreeBSD it goes on satisfying it
-    even if that variable is set to something narrower, because a portal package
-    built for `/usr/local` has `/usr/local/share` as its own `datadir`, and that
-    directory is searched last and regardless of the variable. So a narrow
-    `$XDG_DATA_DIRS` is not on its own enough to make this file unreadable. What
-    does fail is a prefix the portal knows nothing about, such as `/opt/hikari`,
-    with `${PREFIX}/share` absent from the service's `$XDG_DATA_DIRS`.
+    `/usr/local/share/:/usr/share/`.
+
+    Under a narrower `$XDG_DATA_DIRS` the answer depends on how the portal
+    itself was built, and this is where the two platforms part. On FreeBSD the
+    port is built for `/usr/local`, so `/usr/local/share` is the portal's own
+    `datadir` — searched last and regardless of the variable — and the file is
+    still found. On Linux the portal normally comes from the distribution with
+    `prefix=/usr`, making `/usr/share` its `datadir`, so `/usr/local/share` is
+    reachable *only* through `$XDG_DATA_DIRS`; there `$XDG_DATA_DIRS=/usr/share`
+    does make this file unreadable. That is the ordinary Linux arrangement — a
+    distribution portal with Hikari under `/usr/local` — so on Linux check the
+    service's `$XDG_DATA_DIRS` before concluding the version is at fault.
+
+    What fails under either build is a prefix the portal knows nothing about,
+    such as `/opt/hikari`, with `${PREFIX}/share` absent from the service's
+    `$XDG_DATA_DIRS`.
 
     `portals.conf(5)` lists every directory searched and in what order, which
     is worth reading before changing any of this, because the first match wins
@@ -944,14 +953,29 @@ runtime directory.
 The third difference decides which *display* the compositor tries to drive.
 `start-hikari` unsets `WAYLAND_DISPLAY`, `WAYLAND_SOCKET` and `DISPLAY` before
 exec'ing; the direct entry passes on whatever it was handed. That matters
-because wlroots picks its backend from those variables ahead of the hardware:
-`wlr_backend_autocreate` tests `WAYLAND_DISPLAY` and `WAYLAND_SOCKET` first and,
-if either is set, builds a *nested* Wayland backend and stops looking
-(`backend/backend.c:367` in wlroots 0.20.2); `DISPLAY` does the same for X11 at
-`:381`. Only when none of the three is set does it reach DRM and libinput.
-Neither path falls back, so a stale value inherited from the login path does
-not produce a session on a nested window — it makes the compositor fail to
-start at all, with a valid `XDG_RUNTIME_DIR` and nothing obviously wrong.
+because wlroots picks its backend from the environment ahead of the hardware.
+`wlr_backend_autocreate` reads `WLR_BACKENDS` first: when it is set, wlroots
+builds exactly the backends it names and stops, reaching neither the display
+variables nor the hardware (`backend/backend.c:340`–`:364` in wlroots 0.20.2).
+Only when `WLR_BACKENDS` is unset does it test `WAYLAND_DISPLAY` and
+`WAYLAND_SOCKET` and, if either is set, build a *nested* Wayland backend and
+stop looking (`:367`); `DISPLAY` does the same for X11 at `:381`. DRM and
+libinput come last, and only when none of those four is set.
+
+Neither path falls back, so a stale display variable inherited from the login
+path does not produce a session on a nested window — it makes the compositor
+fail to start at all, with a valid `XDG_RUNTIME_DIR` and nothing obviously
+wrong.
+
+`WLR_BACKENDS` is the one variable the wrapper leaves alone, and that is a
+choice rather than an omission. The display variables arrive by accident, from
+whatever session started the login; `WLR_BACKENDS` only arrives because someone
+put it there, and clearing it would silently defeat the override they asked
+for. The consequence is worth knowing: if it is exported from a shell profile
+or a service manager's environment, a `Hikari` session nests, or fails, exactly
+as if the display variables had been inherited — and unsetting the three the
+wrapper does clear will not help. Unset `WLR_BACKENDS` as well, or stop
+exporting it, if a standalone session is what you want.
 
 That cuts the other way if nesting is what you want. Running Hikari inside an
 existing graphical session needs those variables *kept*, which is exactly what
