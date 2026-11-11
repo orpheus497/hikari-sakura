@@ -90,8 +90,9 @@ if [ "$DIR_UID" != "$USER_UID" ] || [ "$DIR_PERMS" != "700" ]; then
 fi
 
 # [COMMENT] Action purpose: Detect ZFS-backed XDG_RUNTIME_DIR and warn the user.
-# posix_fallocate() fails on ZFS -- its vop_allocate is wired to VOP_EINVAL, so
-# the call returns EINVAL -- causing Wayland wl_shm buffer
+# posix_fallocate() fails on ZFS -- its vop_allocate is wired to VOP_EOPNOTSUPP
+# on FreeBSD 15, so the call returns EOPNOTSUPP (on 14.x it was VOP_EINVAL and
+# the error was EINVAL) -- causing Wayland wl_shm buffer
 # allocations to fail for clients. The fix is to mount tmpfs over the path or
 # disable ZFS automount for the dataset (e.g. zfs set canmount=noauto zroot/tmp).
 FS_TYPE=$(df -T "$XDG_RUNTIME_DIR" 2>/dev/null | awk 'NR==2{print $2}')

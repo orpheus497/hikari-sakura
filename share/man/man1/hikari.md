@@ -2380,10 +2380,15 @@ FILES
   not merely by the session, the service usually being D-Bus-activated -- or be
   its build-time *datadir*. The default */usr/local* satisfies that while
   **XDG\_DATA\_DIRS** is unset or empty, as it then defaults to
-  */usr/local/share/:/usr/share/*; a prefix such as */opt/hikari*, or a service
-  environment setting the variable to something narrower, does not, and this
-  file is then never read. See portals.conf(5) for every directory searched and
-  the order, in which the first match wins.
+  */usr/local/share/:/usr/share/* -- and it goes on satisfying it even if that
+  variable is set to something narrower, a portal package built for */usr/local*
+  having */usr/local/share* as its own *datadir*, which is searched last and
+  regardless of the variable. A narrow **XDG\_DATA\_DIRS** is therefore not on
+  its own enough to make this file unreadable. What does fail is a prefix the
+  portal knows nothing about, such as */opt/hikari*, with *${PREFIX}/share*
+  absent from the service's **XDG\_DATA\_DIRS**; this file is then never read.
+  See portals.conf(5) for every directory searched and the order, in which the
+  first match wins.
 
 * *${PREFIX}/share/backgrounds/hikari/hikari\_wallpaper.png*
 

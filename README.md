@@ -92,9 +92,11 @@ moused enable`. This requires setting `kern.evdev.rcpt_mask` to `3`.
 Wayland compositors require `XDG_RUNTIME_DIR` to be set to a user-owned
 directory with mode `0700`. Some Wayland clients (e.g. native Wayland `firefox`)
 require `posix_fallocate` to work in that directory. ZFS does not implement it —
-its `vop_allocate` is wired straight to `VOP_EINVAL`, so the call fails with
-`EINVAL` — while `tmpfs` and UFS both inherit the kernel's working
-`vop_stdallocate`.
+its `vop_allocate` is wired straight to `VOP_EOPNOTSUPP` on FreeBSD 15, so the
+call fails with `EOPNOTSUPP` ("Operation not supported"). On 14.x the same slot
+held `VOP_EINVAL` and the error was `EINVAL`, so older diagnostics and older
+systems show that instead. `tmpfs` and UFS both inherit the kernel's working
+`vop_stdallocate` either way.
 
 **Fix the directory you actually get, not `/tmp` by reflex.** Check it first:
 
@@ -138,12 +140,16 @@ tmpfs   /tmp   tmpfs   rw,mode=1777,size=256m   0   0
 > **Note:** Without step 1, ZFS automount will mount `zroot/tmp` *over* the
 > fstab tmpfs entry, and `/tmp` will still be ZFS despite the fstab line.
 
-On FreeBSD 15 this is already done for you. `pam_xdg(8)` is named in the default
-`system` policy that `/etc/pam.d/login` includes; it creates
-`/var/run/xdg/$USER` at mode `0700` and publishes the variable into the PAM
-environment, which is what a display manager hands on to the session. Linux does
-the same through `logind`. Neither needs `elogind`, and `seatd` has nothing to do
-with it — `seatd` arbitrates device access, not runtime directories.
+On FreeBSD 15 this is already done for you, as long as the login path in use
+reaches that policy. `pam_xdg(8)` is a `session` module in the default `system`
+policy, which `/etc/pam.d/login` pulls in via `session include system`; it
+creates `/var/run/xdg/$USER` at mode `0700` and publishes the variable into the
+PAM environment, which is what a display manager hands on to the session. A
+display manager authenticates under its own PAM service name rather than
+`login`, so it picks the module up only if its own policy includes `login` or
+`system`; `sakura`'s FreeBSD policy does. Linux does the same through `logind`.
+Neither needs `elogind`, and `seatd` has nothing to do with it — `seatd`
+arbitrates device access, not runtime directories.
 
 Where nothing provides it — a PAM stack that omits `pam_xdg`, Linux without
 logind, or starting the compositor by hand from a bare TTY — the `start-hikari`
@@ -650,8 +656,13 @@ considered `unstable`.
     inherit your session's environment — or be its build-time `datadir`. The
     default `PREFIX=/usr/local` satisfies that when `$XDG_DATA_DIRS` is unset
     or empty, the XDG Base Directory Specification defaulting it to
-    `/usr/local/share/:/usr/share/`; a prefix such as `/opt/hikari`, or a
-    service environment that sets the variable to something narrower, does not.
+    `/usr/local/share/:/usr/share/` — and on FreeBSD it goes on satisfying it
+    even if that variable is set to something narrower, because a portal package
+    built for `/usr/local` has `/usr/local/share` as its own `datadir`, and that
+    directory is searched last and regardless of the variable. So a narrow
+    `$XDG_DATA_DIRS` is not on its own enough to make this file unreadable. What
+    does fail is a prefix the portal knows nothing about, such as `/opt/hikari`,
+    with `${PREFIX}/share` absent from the service's `$XDG_DATA_DIRS`.
 
     `portals.conf(5)` lists every directory searched and in what order, which
     is worth reading before changing any of this, because the first match wins
@@ -723,7 +734,7 @@ specify `ETC_PREFIX`. `make uninstall` requires the same values for prefixes.
 > contain our entries.
 >
 > Two fixes, either is fine: add `/usr/local/share/wayland-sessions` to the
-> manager's search path, or build with `make PREFIX=/usr`. For `sakura`
+> manager's search path, or install Hikari under `/usr`. For `sakura`
 > specifically, whose `waylandsessions` option takes a colon-separated list and
 > defaults to `/usr/share/wayland-sessions` on Linux, the first looks like:
 >
@@ -731,7 +742,33 @@ specify `ETC_PREFIX`. `make uninstall` requires the same values for prefixes.
 > waylandsessions = /usr/share/wayland-sessions:/usr/local/share/wayland-sessions
 > ```
 >
-> On FreeBSD this cannot arise: both projects default to `/usr/local`.
+> The second takes three commands, not one, because `PREFIX` has to be set on
+> each of them and the tree cleaned first:
+>
+> ```sh
+> make clean
+> ```
+>
+> ```sh
+> make PREFIX=/usr
+> ```
+>
+> ```sh
+> sudo make install PREFIX=/usr
+> ```
+>
+> Both parts matter. The Makefile sets `PREFIX ?= /usr/local` afresh on every
+> invocation, so leaving it off the `install` line puts all the files back under
+> `/usr/local` no matter what the build used. And `PREFIX` is compiled into the
+> binaries through `-DHIKARI_PREFIX`, which `make` has no way to notice — it
+> compares file timestamps, not command-line variables — so without the clean,
+> objects built at the old prefix are reused and go on pointing at the old
+> helper paths.
+>
+> On FreeBSD this does not arise at the default prefixes, both projects using
+> `/usr/local`. It is a property of the defaults agreeing, not of the platform:
+> install Hikari under some other prefix and the same mismatch returns, because
+> the manager still scans `/usr/local/share/wayland-sessions`.
 
 ### Seeding a user configuration
 
@@ -883,16 +920,25 @@ greetd — offers both at the login screen:
 Both declare `DesktopNames=Sakura`, so the desktop is reported under the same
 name whichever is chosen.
 
-**Which one to pick comes down to `XDG_RUNTIME_DIR`**, and nothing else is
-load-bearing between them.
+**Two things differ: who supplies `XDG_RUNTIME_DIR`, and who supplies the
+session message bus.** Nothing else between them is load-bearing.
 
 `Hikari Sakura` starts the compositor binary directly, with `dbus-run-session`
-in front of it purely to provide the session message bus that portals, the
-system tray and notifications all need. It takes `XDG_RUNTIME_DIR` from
-whatever started it and does not check it. If that variable is absent the
-compositor cannot create its Wayland socket and exits immediately —
-`wl_display_add_socket_auto` fails outright when `XDG_RUNTIME_DIR` is unset or
-not absolute.
+in front of it to provide the session message bus that portals, the system tray
+and notifications all need. It takes `XDG_RUNTIME_DIR` from whatever started it
+and does not check it. If that variable is absent the compositor cannot create
+its Wayland socket and exits immediately — `wl_display_add_socket_auto` fails
+outright when `XDG_RUNTIME_DIR` is unset or not absolute.
+
+The `dbus-run-session` is the second difference, and it is unconditional: it
+always starts a *new* bus and overwrites `DBUS_SESSION_BUS_ADDRESS`, even when
+the display manager already provided one. Anything registered on the earlier
+bus is then invisible to the session, for the plain reason that it is a
+different bus. `start-hikari` starts a bus only when `DBUS_SESSION_BUS_ADDRESS`
+is empty, and otherwise keeps the one it was handed. So if your login path sets
+up a session bus you care about — a user-level service manager, an agent
+started at login — that is a reason to prefer `Hikari` quite apart from the
+runtime directory.
 
 `Hikari` runs the wrapper, which creates a runtime directory if nothing else
 did, verifies its owner and mode, warns when it sits on a filesystem where
@@ -901,12 +947,17 @@ itself. It also sets the session variables rather than inheriting them.
 
 So:
 
-* **On FreeBSD 15, and on Linux with logind, either entry works.** `pam_xdg(8)`
-  is part of the default `system` policy that `login` includes and publishes
-  `/var/run/xdg/$USER` into the PAM environment; `logind` does the equivalent
-  through `pam_systemd`/`pam_elogind`. A display manager passes that on, so the
-  variable is already set by the time either entry runs. `Hikari Sakura` is the
-  shorter path.
+* **Either entry works wherever the login path genuinely sets the variable.**
+  On FreeBSD 15 `pam_xdg(8)` is a `session` module in the default `system`
+  policy, which `/etc/pam.d/login` pulls in with `session include system`; it
+  creates `/var/run/xdg/$USER` and publishes the path into the PAM environment.
+  On Linux `logind` does the equivalent through `pam_systemd`/`pam_elogind`.
+  The catch is that a display manager authenticates under its *own* PAM service
+  name, not `login`, so it inherits `pam_xdg` only if its policy includes
+  `login` or `system`. `sakura`'s does — every facility in its FreeBSD policy
+  is `include login` — so with `sakura` on FreeBSD 15 either entry works and
+  `Hikari Sakura` is the shorter path. GDM, SDDM and greetd install policies of
+  their own; read the one in use before relying on this.
 * **Where nothing provides it, pick `Hikari`.** A PAM stack that omits
   `pam_xdg`, Linux without logind, or a login manager that drops the variable.
 
