@@ -955,11 +955,18 @@ So:
   The catch is that a display manager authenticates under its *own* PAM service
   name, not `login`, so it inherits `pam_xdg` only if its policy includes
   `login` or `system`. `sakura`'s does — every facility in its FreeBSD policy
-  is `include login` — so with `sakura` on FreeBSD 15 either entry works and
-  `Hikari Sakura` is the shorter path. GDM, SDDM and greetd install policies of
-  their own; read the one in use before relying on this.
+  is `include login` — so with `sakura` on FreeBSD 15 the runtime directory is
+  there for either entry, and `Hikari Sakura` is the shorter path. GDM, SDDM and
+  greetd install policies of their own; read the one in use before relying on
+  this.
 * **Where nothing provides it, pick `Hikari`.** A PAM stack that omits
   `pam_xdg`, Linux without logind, or a login manager that drops the variable.
+* **Where the login path sets up a session bus you rely on, pick `Hikari`.**
+  This is the second difference above, and it is independent of the runtime
+  directory: a user-level service manager or an agent started at login
+  registers itself on that bus, and `Hikari Sakura` starts a second one, which
+  leaves the first unreachable from the session. `Hikari` keeps the bus it was
+  handed.
 
 If you are unsure which case you are in, `Hikari` is the safer answer: it
 supplies what is missing rather than assuming it is there. It is not inert,
