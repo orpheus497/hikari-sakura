@@ -2370,8 +2370,33 @@ FILES
   *UseIn=* field of **xdg-desktop-portal-wlr**'s portal file, which lists no
   Sakura name -- so screen sharing silently finds no provider. Its filename is
   derived from **XDG\_CURRENT\_DESKTOP**, lower-cased, and so is coupled to the
-  *DesktopNames* of both session entries. Requires xdg-desktop-portal 1.17 or
-  newer, where *portals.conf* was introduced.
+  *DesktopNames* of both session entries. Requires xdg-desktop-portal 1.17.1 or
+  newer: *portals.conf* arrived in 1.17.0, but the search of
+  **XDG\_DATA\_DIRS** and *datadir*, which is where this file is installed,
+  only in 1.17.1.
+
+  That search is also why the install prefix matters: *${PREFIX}/share* must be
+  in the **XDG\_DATA\_DIRS** seen by the xdg-desktop-portal service itself --
+  not merely by the session, the service usually being D-Bus-activated -- or be
+  its build-time *datadir*. The default */usr/local* satisfies that while
+  **XDG\_DATA\_DIRS** is unset or empty, as it then defaults to
+  */usr/local/share/:/usr/share/*.
+
+  Under a narrower **XDG\_DATA\_DIRS** it depends on how the portal itself was
+  built, and the two common arrangements differ. A portal built for
+  */usr/local*, as the FreeBSD port is, has */usr/local/share* as its own
+  *datadir*, which 1.17.1 searches last and regardless of the variable; this
+  file is still found. A portal built with *prefix=/usr*, as a Linux
+  distribution package usually is, has */usr/share* as its *datadir*, and
+  */usr/local/share* is then reachable only through **XDG\_DATA\_DIRS** -- so
+  **XDG\_DATA\_DIRS**=*/usr/share* does make this file unreadable. That is the
+  ordinary Linux arrangement, a distribution portal with Hikari under
+  */usr/local*, not an exotic one.
+
+  What fails under either build is a prefix the portal knows nothing about, such
+  as */opt/hikari*, with *${PREFIX}/share* absent from the service's
+  **XDG\_DATA\_DIRS**; this file is then never read. See portals.conf(5) for
+  every directory searched and the order, in which the first match wins.
 
 * *${PREFIX}/share/backgrounds/hikari/hikari\_wallpaper.png*
 

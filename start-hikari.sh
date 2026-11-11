@@ -8,9 +8,26 @@
 # Usage (installed system): start-hikari [hikari options]
 # Usage (development tree):  ./start-hikari.sh [hikari options]
 
-# [COMMENT] Action purpose: Clear any leaked display variables that would cause
-# nested-compositor bugs.
+# [COMMENT] Action purpose: Clear every leaked display variable that would send
+# the compositor to a nested backend instead of the hardware.
+#
+# All three matter, and the list has to match what wlroots actually reads.
+# wlr_backend_autocreate tests WAYLAND_DISPLAY *and* WAYLAND_SOCKET before it
+# considers anything else, builds a nested Wayland backend if either is set, and
+# stops looking; DISPLAY does the same for X11; DRM and libinput are reached
+# only when none of the three is set. None of those branches falls back, so one
+# stale value does not produce a session in a window -- it stops the compositor
+# starting at all.
+#
+# WAYLAND_SOCKET was missing from this list, which left the wrapper's whole
+# purpose conditional: clearing two of the three still let an inherited
+# WAYLAND_SOCKET pick the nested backend.
+#
+# Anyone who *wants* Hikari nested inside an existing session should use the
+# hikari-sakura.desktop entry, or run the binary directly, rather than this
+# wrapper -- clearing these is the wrapper's job, not an obstacle to work round.
 unset WAYLAND_DISPLAY
+unset WAYLAND_SOCKET
 unset DISPLAY
 
 # [COMMENT] Action purpose: Export mandatory Wayland session environment
@@ -90,7 +107,9 @@ if [ "$DIR_UID" != "$USER_UID" ] || [ "$DIR_PERMS" != "700" ]; then
 fi
 
 # [COMMENT] Action purpose: Detect ZFS-backed XDG_RUNTIME_DIR and warn the user.
-# posix_fallocate() returns EOPNOTSUPP on ZFS, causing Wayland wl_shm buffer
+# posix_fallocate() fails on ZFS -- its vop_allocate is wired to VOP_EOPNOTSUPP
+# on FreeBSD 15, so the call returns EOPNOTSUPP (on 14.x it was VOP_EINVAL and
+# the error was EINVAL) -- causing Wayland wl_shm buffer
 # allocations to fail for clients. The fix is to mount tmpfs over the path or
 # disable ZFS automount for the dataset (e.g. zfs set canmount=noauto zroot/tmp).
 FS_TYPE=$(df -T "$XDG_RUNTIME_DIR" 2>/dev/null | awk 'NR==2{print $2}')

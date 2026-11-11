@@ -51,7 +51,7 @@ Hikari Sakura takes the second half of its name from its companion project:
 
 | Project | Written in | Role |
 | --- | --- | --- |
-| [**sakura**](https://github.com/orpheus497/sakura) | Zig | **The display manager.** A TUI login manager built exclusively for FreeBSD: it runs on a virtual terminal, talks to OpenPAM directly, and needs no graphical toolkit, session bus or login-manager framework. It comes first, and it is what hands the machine over to the compositor. |
+| [**sakura**](https://github.com/orpheus497/sakura) | Zig | **The display manager.** A TUI login manager that, like this compositor, treats FreeBSD as first-class and Linux as a supported second: it runs on a virtual terminal, talks to PAM directly, and needs no graphical toolkit, session bus or login-manager framework. It comes first, and it is what hands the machine over to the compositor. |
 
 `sakura` launches the session through whichever installed entry you pick, the
 same as any other display manager that reads
@@ -91,8 +91,28 @@ moused enable`. This requires setting `kern.evdev.rcpt_mask` to `3`.
 
 Wayland compositors require `XDG_RUNTIME_DIR` to be set to a user-owned
 directory with mode `0700`. Some Wayland clients (e.g. native Wayland `firefox`)
-require `posix_fallocate` to work in that directory. This is not supported by
-ZFS, therefore on ZFS-root systems you must ensure `/tmp` is backed by `tmpfs`:
+require `posix_fallocate` to work in that directory. ZFS does not implement it —
+its `vop_allocate` is wired straight to `VOP_EOPNOTSUPP` on FreeBSD 15, so the
+call fails with `EOPNOTSUPP` ("Operation not supported"). On 14.x the same slot
+held `VOP_EINVAL` and the error was `EINVAL`, so older diagnostics and older
+systems show that instead. `tmpfs` and UFS both inherit the kernel's working
+`vop_stdallocate` either way.
+
+**Fix the directory you actually get, not `/tmp` by reflex.** Check it first:
+
+```sh
+df -T "$XDG_RUNTIME_DIR"
+```
+
+If that reports `zfs`, the steps below apply to *that* path. On a stock
+ZFS-root install `bsdinstall` creates datasets for `/var/audit`, `/var/crash`,
+`/var/log`, `/var/mail` and `/var/tmp` but **not** `/var/run`, so a
+`pam_xdg`-provided `/var/run/xdg/$USER` sits in the root dataset and is on ZFS
+— and making `/tmp` a tmpfs does nothing for it. Either give that path its own
+tmpfs, or point `XDG_RUNTIME_DIR` at one.
+
+The `/tmp` recipe below is the right one when `XDG_RUNTIME_DIR` is unset and
+`start-hikari` is creating `/tmp/hikari-runtime-$UID` itself:
 
 1. Prevent the ZFS dataset from mounting over the tmpfs:
 
@@ -120,10 +140,21 @@ tmpfs   /tmp   tmpfs   rw,mode=1777,size=256m   0   0
 > **Note:** Without step 1, ZFS automount will mount `zroot/tmp` *over* the
 > fstab tmpfs entry, and `/tmp` will still be ZFS despite the fstab line.
 
-If your system does not set `XDG_RUNTIME_DIR` automatically (e.g. FreeBSD with
-`seatd` and no `elogind`), the `start-hikari` wrapper script will create one at
-`/tmp/hikari-runtime-$UID` with the correct permissions. You can also set it
-manually:
+On FreeBSD 15 this is already done for you, as long as the login path in use
+reaches that policy. `pam_xdg(8)` is a `session` module in the default `system`
+policy, which `/etc/pam.d/login` pulls in via `session include system`; it
+creates `/var/run/xdg/$USER` at mode `0700` and publishes the variable into the
+PAM environment, which is what a display manager hands on to the session. A
+display manager authenticates under its own PAM service name rather than
+`login`, so it picks the module up only if its own policy includes `login` or
+`system`; `sakura`'s FreeBSD policy does. Linux does the same through `logind`.
+Neither needs `elogind`, and `seatd` has nothing to do with it — `seatd`
+arbitrates device access, not runtime directories.
+
+Where nothing provides it — a PAM stack that omits `pam_xdg`, Linux without
+logind, or starting the compositor by hand from a bare TTY — the `start-hikari`
+wrapper creates one at `/tmp/hikari-runtime-$UID` with the correct permissions.
+You can also set it manually:
 
 ```sh
 export XDG_RUNTIME_DIR=/tmp/runtime-$(id -u)
@@ -555,7 +586,10 @@ inputs = {
 
 ## Building
 
-FreeBSD is the first-class target and Linux is a supported second-class one.
+FreeBSD 15.0 or newer is the first-class target and Linux is a supported
+second-class one. Older FreeBSD may well work and is not refused; it is simply
+not what this is written against or tested on.
+
 The asymmetry is deliberate and is not a staging post on the way to parity: no
 change may regress FreeBSD behaviour, performance or build ergonomics; where a
 portable spelling and a FreeBSD-native one are equally good the portable one
@@ -610,12 +644,44 @@ considered `unstable`.
 * XWayland (optional) — only for X11 clients
 * The portal stack (optional) — screen sharing and screenshots for applications
   that request them through the portal. All three pieces belong together:
-  * `xdg-desktop-portal` **1.17 or newer**. The version floor is not incidental:
-    `sakura-portals.conf` is a `portals.conf` drop-in, and that mechanism was
-    introduced in 1.17. On anything older the file is ignored, backend selection
-    falls back to matching `UseIn=` against `XDG_CURRENT_DESKTOP`, and since this
-    desktop reports itself as `Sakura` nothing matches — see
-    [the desktop name](#the-desktop-name-and-why-screen-sharing-depends-on-it).
+  * `xdg-desktop-portal` **1.17.1 or newer**. `portals.conf` itself arrived in
+    1.17.0, but the search of `$XDG_DATA_DIRS` and `datadir` — where
+    `${PREFIX}/share/xdg-desktop-portal/` is installed — came only in 1.17.1,
+    so anything earlier never opens the map at all.
+
+    **Being new enough is necessary, not sufficient: it also has to be
+    installed somewhere the portal searches.** `${PREFIX}/share` must be in the
+    `$XDG_DATA_DIRS` seen by the `xdg-desktop-portal` *service* — not by the
+    compositor, since the service is usually D-Bus-activated and need not
+    inherit your session's environment — or be its build-time `datadir`. The
+    default `PREFIX=/usr/local` satisfies that when `$XDG_DATA_DIRS` is unset
+    or empty, the XDG Base Directory Specification defaulting it to
+    `/usr/local/share/:/usr/share/`.
+
+    Under a narrower `$XDG_DATA_DIRS` the answer depends on how the portal
+    itself was built, and this is where the two platforms part. On FreeBSD the
+    port is built for `/usr/local`, so `/usr/local/share` is the portal's own
+    `datadir` — searched last and regardless of the variable — and the file is
+    still found. On Linux the portal normally comes from the distribution with
+    `prefix=/usr`, making `/usr/share` its `datadir`, so `/usr/local/share` is
+    reachable *only* through `$XDG_DATA_DIRS`; there `$XDG_DATA_DIRS=/usr/share`
+    does make this file unreadable. That is the ordinary Linux arrangement — a
+    distribution portal with Hikari under `/usr/local` — so on Linux check the
+    service's `$XDG_DATA_DIRS` before concluding the version is at fault.
+
+    What fails under either build is a prefix the portal knows nothing about,
+    such as `/opt/hikari`, with `${PREFIX}/share` absent from the service's
+    `$XDG_DATA_DIRS`.
+
+    `portals.conf(5)` lists every directory searched and in what order, which
+    is worth reading before changing any of this, because the first match wins
+    — a file under `~/.config/xdg-desktop-portal/` takes precedence over
+    anything installed system-wide. When capture finds no provider, check in
+    this order: which portal version is installed, which `portals.conf` files
+    exist and which of them wins, and whether `${PREFIX}/share` is on the
+    service's `$XDG_DATA_DIRS`. See also
+    [the desktop name](#the-desktop-name-and-why-screen-sharing-depends-on-it),
+    which has the same symptom for a different reason.
   * `xdg-desktop-portal-wlr` — the `wlr` backend, which is what
     `sakura-portals.conf` pins Screenshot and ScreenCast to. It is the only
     backend that can capture from a wlroots compositor.
@@ -662,6 +728,56 @@ the `PREFIX` when issuing `make`, since this information is also used to specify
 where Hikari Sakura can find the default configuration on your system and is
 needed during the compilation process. To override installation paths for `etc`
 specify `ETC_PREFIX`. `make uninstall` requires the same values for prefixes.
+
+> [!IMPORTANT]
+> **On Linux, check that your display manager scans `${PREFIX}/share/wayland-sessions`.**
+> `PREFIX` defaults to `/usr/local` on both platforms, which is where locally
+> built software belongs and which the XDG Base Directory Specification lists
+> in the default `$XDG_DATA_DIRS` (`/usr/local/share/:/usr/share/`). Managers
+> that walk `$XDG_DATA_DIRS` find the entries there with nothing to configure.
+> A manager with a single fixed sessions directory may not: Linux
+> distributions put their own session files in `/usr/share/wayland-sessions`,
+> and a manager built for `/usr` will look only there. The symptom is that the
+> compositor simply does not appear in the session list, with no error, because
+> nothing failed — the directory it scanned was readable and just did not
+> contain our entries.
+>
+> Two fixes, either is fine: add `/usr/local/share/wayland-sessions` to the
+> manager's search path, or install Hikari under `/usr`. For `sakura`
+> specifically, whose `waylandsessions` option takes a colon-separated list and
+> defaults to `/usr/share/wayland-sessions` on Linux, the first looks like:
+>
+> ```ini
+> waylandsessions = /usr/share/wayland-sessions:/usr/local/share/wayland-sessions
+> ```
+>
+> The second takes three commands, not one, because `PREFIX` has to be set on
+> each of them and the tree cleaned first:
+>
+> ```sh
+> make clean
+> ```
+>
+> ```sh
+> make PREFIX=/usr
+> ```
+>
+> ```sh
+> sudo make install PREFIX=/usr
+> ```
+>
+> Both parts matter. The Makefile sets `PREFIX ?= /usr/local` afresh on every
+> invocation, so leaving it off the `install` line puts all the files back under
+> `/usr/local` no matter what the build used. And `PREFIX` is compiled into the
+> binaries through `-DHIKARI_PREFIX`, which `make` has no way to notice — it
+> compares file timestamps, not command-line variables — so without the clean,
+> objects built at the old prefix are reused and go on pointing at the old
+> helper paths.
+>
+> On FreeBSD this does not arise at the default prefixes, both projects using
+> `/usr/local`. It is a property of the defaults agreeing, not of the platform:
+> install Hikari under some other prefix and the same mismatch returns, because
+> the manager still scans `/usr/local/share/wayland-sessions`.
 
 ### Seeding a user configuration
 
@@ -813,15 +929,116 @@ greetd — offers both at the login screen:
 Both declare `DesktopNames=Sakura`, so the desktop is reported under the same
 name whichever is chosen.
 
-**`Hikari Sakura` is the one to pick unless you need otherwise.** It starts the
-compositor binary directly, with `dbus-run-session` in front of it purely to
-provide the session message bus that portals, the system tray and notifications
-all need. Everything else the wrapper does is either already supplied by your
-login manager or is a fallback for systems that do not supply it.
+**Three things differ: who supplies `XDG_RUNTIME_DIR`, who supplies the
+session message bus, and what the compositor inherits in `WAYLAND_DISPLAY` and
+`DISPLAY`.**
 
-**`Hikari` runs the wrapper**, which is worth having when the environment needs
-setting up rather than merely inheriting — most notably on machines where the
-display has to be assigned deliberately.
+`Hikari Sakura` starts the compositor binary directly, with `dbus-run-session`
+in front of it to provide the session message bus that portals, the system tray
+and notifications all need. It takes `XDG_RUNTIME_DIR` from whatever started it
+and does not check it. If that variable is absent the compositor cannot create
+its Wayland socket and exits immediately — `wl_display_add_socket_auto` fails
+outright when `XDG_RUNTIME_DIR` is unset or not absolute.
+
+The `dbus-run-session` is the second difference, and it is unconditional: it
+always starts a *new* bus and overwrites `DBUS_SESSION_BUS_ADDRESS`, even when
+the display manager already provided one. Anything registered on the earlier
+bus is then invisible to the session, for the plain reason that it is a
+different bus. `start-hikari` starts a bus only when `DBUS_SESSION_BUS_ADDRESS`
+is empty, and otherwise keeps the one it was handed. So if your login path sets
+up a session bus you care about — a user-level service manager, an agent
+started at login — that is a reason to prefer `Hikari` quite apart from the
+runtime directory.
+
+The third difference decides which *display* the compositor tries to drive.
+`start-hikari` unsets `WAYLAND_DISPLAY`, `WAYLAND_SOCKET` and `DISPLAY` before
+exec'ing; the direct entry passes on whatever it was handed. That matters
+because wlroots picks its backend from the environment ahead of the hardware.
+`wlr_backend_autocreate` reads `WLR_BACKENDS` first: when it is set, wlroots
+builds exactly the backends it names and stops, reaching neither the display
+variables nor the hardware (`backend/backend.c:340`–`:364` in wlroots 0.20.2).
+Only when `WLR_BACKENDS` is unset does it test `WAYLAND_DISPLAY` and
+`WAYLAND_SOCKET` and, if either is set, build a *nested* Wayland backend and
+stop looking (`:367`); `DISPLAY` does the same for X11 at `:381`. DRM and
+libinput come last, and only when none of those four is set.
+
+Neither path falls back, so a stale display variable inherited from the login
+path does not produce a session on a nested window — it makes the compositor
+fail to start at all, with a valid `XDG_RUNTIME_DIR` and nothing obviously
+wrong.
+
+`WLR_BACKENDS` is the one variable the wrapper leaves alone, and that is a
+choice rather than an omission. The display variables arrive by accident, from
+whatever session started the login; `WLR_BACKENDS` only arrives because someone
+put it there, and clearing it would silently defeat the override they asked
+for.
+
+What an exported `WLR_BACKENDS` does to a `Hikari` session depends entirely on
+what it names, and `attempt_backend_by_name` at `backend/backend.c:290` is the
+whole of it. `drm`, or `drm,libinput`, creates a session and drives the
+hardware (`:300`–`:315`) — that is a standalone session, and the right answer
+is to leave the variable alone. `wayland` or `x11` builds a nested backend
+(`:294`–`:297`) and needs a parent compositor or X server to nest inside.
+`headless` (`:298`) starts with no real output. A name wlroots does not
+recognise is refused at `:316` and fails `wlr_backend_autocreate` outright.
+
+So unset `WLR_BACKENDS`, or stop exporting it, only when what it names is not
+what you want for this session — not as a reflex. If it names `wayland` or
+`x11` and you wanted the hardware, note that clearing the three variables the
+wrapper does clear will not help: `WLR_BACKENDS` is read first and never
+reaches them.
+
+That cuts the other way if nesting is what you want. Running Hikari inside an
+existing graphical session needs those variables *kept*, which is exactly what
+`start-hikari` removes — so for deliberate nesting use the `Hikari Sakura`
+entry, or the binary directly, rather than the wrapper.
+
+Nothing else between the two entries is load-bearing.
+
+`Hikari` runs the wrapper, which creates a runtime directory if nothing else
+did, verifies its owner and mode, warns when it sits on a filesystem where
+`posix_fallocate` does not work, and resolves the compositor binary relative to
+itself. It also sets the session variables rather than inheriting them.
+
+So:
+
+* **Either entry works wherever the login path genuinely sets the variable.**
+  On FreeBSD 15 `pam_xdg(8)` is a `session` module in the default `system`
+  policy, which `/etc/pam.d/login` pulls in with `session include system`; it
+  creates `/var/run/xdg/$USER` and publishes the path into the PAM environment.
+  On Linux `logind` does the equivalent through `pam_systemd`/`pam_elogind`.
+  The catch is that a display manager authenticates under its *own* PAM service
+  name, not `login`, so it inherits `pam_xdg` only if its policy includes
+  `login` or `system`. `sakura`'s does — every facility in its FreeBSD policy
+  is `include login` — so with `sakura` on FreeBSD 15 the runtime directory is
+  there for either entry, and `Hikari Sakura` is the shorter path. GDM, SDDM and
+  greetd install policies of their own; read the one in use before relying on
+  this.
+* **Where nothing provides it, pick `Hikari`.** A PAM stack that omits
+  `pam_xdg`, Linux without logind, or a login manager that drops the variable.
+* **For a standalone session where `WAYLAND_DISPLAY`, `WAYLAND_SOCKET` or
+  `DISPLAY` may be set, pick `Hikari`.** This is the third difference above. The
+  wrapper unsets all three; the direct entry inherits them, and wlroots then
+  chooses a nested backend over the hardware and does not fall back. A login
+  path that exports any of the three is the case to watch.
+* **To nest Hikari inside an existing graphical session, pick `Hikari Sakura`.**
+  The same clearing that makes the wrapper right for a standalone session makes
+  it wrong here: nesting needs those variables kept, and the wrapper removes
+  them. The direct entry passes them through.
+* **Where the login path sets up a session bus you rely on, pick `Hikari`.**
+  This is the second difference above, and it is independent of the runtime
+  directory: a user-level service manager or an agent started at login
+  registers itself on that bus, and `Hikari Sakura` starts a second one, which
+  leaves the first unreachable from the session. `Hikari` keeps the bus it was
+  handed.
+
+If you are unsure which case you are in, `Hikari` is the safer answer: it
+supplies what is missing rather than assuming it is there. It is not inert,
+though — the wrapper refuses to `exec` on a runtime directory that is not an
+absolute path, not a directory, or not owned by you and mode `0700`, on a
+`HIKARI_LOG` it cannot write, and when it cannot find the `hikari` binary. Each
+of those is a deliberate stop with a message on stderr, and each is a condition
+the other entry would instead carry into the compositor.
 
 Neither entry is required in order to start the compositor by hand from a TTY.
 
@@ -872,10 +1089,25 @@ environment variable, written as `env.TERMINAL or "foot"` — so exporting
 
 ### Logging and diagnostics
 
-`hikari` and wlroots both log to standard error, and a session started from a
-display manager usually discards it — which is why configuration errors and
-crash output can seem to vanish. Set `HIKARI_LOG` to a writable file path and
-`start-hikari` redirects its own descriptors there before `exec`:
+`hikari` and wlroots both log to standard error — `wlr_log_init` is called with
+a null callback, which leaves wlroots' default `stderr` sink in place — and a
+session started from a display manager usually discards it, which is why
+configuration errors and crash output can seem to vanish.
+
+**Check your display manager's session log first.** Some capture the session's
+streams to a file, in which case the compositor's output may already be sitting
+there. [`sakura`](https://github.com/orpheus497/sakura) writes one for any entry
+not marked `Terminal=true`, at whatever its `session_log` option names —
+`~/.local/state/sakura-session.log` by default, a different path if configured,
+and no log at all when set to `null`.
+Whether a given manager captures standard *error* as well as standard output
+varies, though, and wlroots logs exclusively to the former — so if the messages
+are not in that file, that asymmetry is usually why.
+
+Set `HIKARI_LOG` to a writable file path and `start-hikari` redirects both of
+its own descriptors there before `exec`, which captures the compositor's
+diagnostics whatever started the session. It is read by the wrapper alone, so it
+does nothing for the `Hikari Sakura` entry, which execs the binary directly:
 
 ```sh
 HIKARI_LOG=/tmp/hikari.log start-hikari
@@ -909,7 +1141,7 @@ logging.
 | `XDG_RUNTIME_DIR` | Wayland socket directory. Must be user-owned and mode `0700`; `start-hikari` creates and validates it. |
 | `XDG_CONFIG_HOME` | Configuration directory root. Falls back to `$HOME/.config`. |
 | `TERMINAL` | Terminal emulator used by the default configuration. |
-| `HIKARI_LOG` | File path for `start-hikari` to capture compositor output to. |
+| `HIKARI_LOG` | File path for `start-hikari` to capture compositor output to. Read by the wrapper only, so it has no effect on the `Hikari Sakura` entry, which runs the binary directly. `start-hikari` refuses to start if the path is not writable. |
 | `XKB_DEFAULT_LAYOUT`, `XKB_DEFAULT_MODEL`, `XKB_DEFAULT_OPTIONS`, `XKB_DEFAULT_RULES` | Fallback keyboard configuration for keyboards not configured in `hikari.lua`. Read once at startup. |
 | `XDG_CURRENT_DESKTOP` | This desktop's name, `Sakura`. Exported by `start-hikari`; also set by the compositor itself (without overwriting an existing value) so the binary session entry reports the same name. |
 | `XDG_SESSION_DESKTOP` | Same value, for the tools that read this one instead. |
