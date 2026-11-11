@@ -138,18 +138,17 @@ tmpfs   /tmp   tmpfs   rw,mode=1777,size=256m   0   0
 > **Note:** Without step 1, ZFS automount will mount `zroot/tmp` *over* the
 > fstab tmpfs entry, and `/tmp` will still be ZFS despite the fstab line.
 
-Most systems set `XDG_RUNTIME_DIR` for you. FreeBSD does from 14.1, where
-`pam_xdg(8)` is named in the default `system` policy that `/etc/pam.d/login`
-includes; it creates `/var/run/xdg/$USER` at mode `0700` and publishes the
-variable into the PAM environment, which is what a display manager passes on to
-the session. Linux does it through `logind`. Neither needs `elogind`, and
-`seatd` has nothing to do with it — `seatd` arbitrates device access, not
-runtime directories.
+On FreeBSD 15 this is already done for you. `pam_xdg(8)` is named in the default
+`system` policy that `/etc/pam.d/login` includes; it creates
+`/var/run/xdg/$USER` at mode `0700` and publishes the variable into the PAM
+environment, which is what a display manager hands on to the session. Linux does
+the same through `logind`. Neither needs `elogind`, and `seatd` has nothing to do
+with it — `seatd` arbitrates device access, not runtime directories.
 
-Where nothing provides it — FreeBSD 14.0 and earlier, a PAM stack that omits
-`pam_xdg`, or Linux without logind — the `start-hikari` wrapper creates one at
-`/tmp/hikari-runtime-$UID` with the correct permissions. You can also set it
-manually:
+Where nothing provides it — a PAM stack that omits `pam_xdg`, Linux without
+logind, or starting the compositor by hand from a bare TTY — the `start-hikari`
+wrapper creates one at `/tmp/hikari-runtime-$UID` with the correct permissions.
+You can also set it manually:
 
 ```sh
 export XDG_RUNTIME_DIR=/tmp/runtime-$(id -u)
@@ -581,7 +580,10 @@ inputs = {
 
 ## Building
 
-FreeBSD is the first-class target and Linux is a supported second-class one.
+FreeBSD 15.0 or newer is the first-class target and Linux is a supported
+second-class one. Older FreeBSD may well work and is not refused; it is simply
+not what this is written against or tested on.
+
 The asymmetry is deliberate and is not a staging post on the way to parity: no
 change may regress FreeBSD behaviour, performance or build ergonomics; where a
 portable spelling and a FreeBSD-native one are equally good the portable one
@@ -888,13 +890,14 @@ itself. It also sets the session variables rather than inheriting them.
 
 So:
 
-* **If your system already provides `XDG_RUNTIME_DIR`, either entry works** and
-  `Hikari Sakura` is the shorter path. FreeBSD does from 14.1, where
-  `pam_xdg(8)` is part of the default `system` policy that `login` includes and
-  publishes `/var/run/xdg/$USER` into the PAM environment; on Linux `logind`
-  does it through `pam_systemd`/`pam_elogind`.
-* **If it does not, pick `Hikari`.** That covers FreeBSD 14.0 and earlier,
-  any system whose PAM stack omits `pam_xdg`, and Linux without logind.
+* **On FreeBSD 15, and on Linux with logind, either entry works.** `pam_xdg(8)`
+  is part of the default `system` policy that `login` includes and publishes
+  `/var/run/xdg/$USER` into the PAM environment; `logind` does the equivalent
+  through `pam_systemd`/`pam_elogind`. A display manager passes that on, so the
+  variable is already set by the time either entry runs. `Hikari Sakura` is the
+  shorter path.
+* **Where nothing provides it, pick `Hikari`.** A PAM stack that omits
+  `pam_xdg`, Linux without logind, or a login manager that drops the variable.
 
 If you are unsure which case you are in, `Hikari` is the safe answer: the
 wrapper only adds fallbacks and checks, so it is never the reason a session
