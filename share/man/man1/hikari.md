@@ -45,10 +45,12 @@ configured independently:
   <https://github.com/orpheus497/sakura>
 
 It is not required: **hikari** runs on its own, any display manager works in its
-place, and so does starting it from a console login. Everything else on the
-session is an ordinary Wayland client -- panels, docks, launchers, notification
-daemons and wallpaper setters speak *wlr-layer-shell*; see **PANELS AND DOCKS**.
-The system status readout stays in this compositor's own top bar.
+place, and so does starting a session from a console login with the bundled
+**start-hikari** wrapper, which provides *XDG\_RUNTIME\_DIR* and a session bus
+when the login does not; see **FILES**. Everything else on the session is an
+ordinary Wayland client -- panels, docks, launchers, notification daemons and
+wallpaper setters speak *wlr-layer-shell*; see **PANELS AND DOCKS**. The system
+status readout stays in this compositor's own top bar.
 
 The following options are available:
 

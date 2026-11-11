@@ -58,8 +58,9 @@ same as any other display manager that reads
 `${PREFIX}/share/wayland-sessions` — see
 [The two session entries](#the-two-session-entries).
 
-It is optional. Hikari Sakura runs on its own, any display manager (GDM, SDDM,
-greetd) works in its place, and so does starting `hikari` from a console login.
+It is optional. Hikari Sakura runs on its own, and any display manager (GDM,
+SDDM, greetd) works in its place, as does starting a session from a console
+login with the bundled `start-hikari` wrapper — see [Launching](#launching).
 The two are built and installed independently, and neither requires the other at
 build time.
 
@@ -335,10 +336,6 @@ daemon, a portal, or anything else your session needs:
 waybar &
 mako &
 ```
-
-Run exactly one system tray host. Exactly one process on a session bus can own
-`org.kde.StatusNotifierWatcher`, so whichever starts second finds the name taken
-and its tray stays empty.
 
 `hikari -a <executable>` overrides the path for a single run.
 
