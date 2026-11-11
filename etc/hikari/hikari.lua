@@ -415,8 +415,8 @@ ui = {
 --
 --     the full output
 --   - the top bar's strip, always reserved, its height following `ui.font`
---   - every layer-shell exclusive zone on that output: a panel such as saber
---     or waybar, a dock, a status bar
+--   - every layer-shell exclusive zone on that output: a panel such as waybar,
+--     a dock, a status bar
 --   = what your layouts get
 --
 -- None of that is configured here. A panel asks for its own strip over the
@@ -435,8 +435,8 @@ ui = {
 -- Floating windows are never re-tiled in either case -- that is what floating
 -- means -- so a floating window can end up beneath a panel that appeared after
 -- it. Move it, or make it tiled. A panel that reserves nothing (an overlay
--- launcher such as sofi, whose exclusive zone is zero) draws over the layout on
--- purpose and changes none of this.
+-- launcher, whose exclusive zone is zero) draws over the layout on purpose and
+-- changes none of this.
 -- ---------------------------------------------------------------------------
 -- ===========================================================================
 layout = {
@@ -814,78 +814,6 @@ actions = {
 
   -- Capture selected area to Pictures folder
   screenclip = "mkdir -p ~/Pictures/Screenshots && grim -g \"$(slurp)\" ~/Pictures/Screenshots/$(date +%Y-%m-%d-%H%M%S).png",
-  -- =========================================================================
-  -- THE SHELL -- these four are sofi, the layer-shell companion this desktop
-  -- is built around: <https://github.com/orpheus497/sofi>. One binary, one
-  -- invocation per surface, no configuration file needed.
-  --
-  --   drun                  application menu, bottom centre
-  --   window                the control panel, a strip along the bottom -- one
-  --                         button per sofi surface, and the way to reach the
-  --                         ones with no key of their own (volume, network,
-  --                         keys, and the window switcher `windowlist`)
-  --   sheets                sheet switcher, a row of ten chips under this bar
-  --   notification-history  notification history, right edge
-  --
-  -- `sheets` is the one that is more than a launcher: it reads and drives this
-  -- compositor's sheets over the control socket at $XDG_RUNTIME_DIR/hikari.sock,
-  -- because no Wayland protocol expresses a sheet. See CONTROL SOCKET in
-  -- hikari(1).
-  --
-  -- sofi is NOT required. Without it these four bindings (L+Space, L+w, L+e,
-  -- L+n) simply do nothing -- so either install it, or point these actions at
-  -- whatever you use instead:
-  --
-  --   menu = "wofi --show drun",
-  --
-  -- Its notification daemon has no binding because it is a daemon; start it
-  -- from ~/.config/hikari/autostart:
-  --
-  --   sofi -notification-daemon &
-  --
-  -- `sofi -tray-daemon` is the OTHER daemon, and it is conditional: add it only
-  -- if you are NOT running saber, which owns the persistent tray. Running both
-  -- is the one mistake to avoid here -- see the saber block below.
-  -- =========================================================================
-  menu = "sofi -show drun",
-  windows = "sofi -show window",
-  sheets = "sofi -show sheets",
-  notifications = "sofi -show notification-history",
-
-  -- =========================================================================
-  -- THE PANEL -- these three drive saber, the other layer-shell companion:
-  -- <https://github.com/orpheus497/saber>. A persistent vertical launcher in
-  -- the tradition of the Unity 7 launcher, driven through its `saberctl`
-  -- control tool.
-  --
-  --   dash      the application grid
-  --   spread    the window spread, an exposé of everything open
-  --   panel     show/hide the panel column itself
-  --
-  -- saber and sofi do not overlap, and the difference is persistence: every
-  -- sofi surface appears on a keypress and dismisses on selection, whereas
-  -- saber is on screen for the whole session. That is also why saber has no
-  -- binding here to start it -- it is not summoned, it is running already.
-  -- Start it from ~/.config/hikari/autostart:
-  --
-  --   saber &
-  --
-  -- If you run saber, do NOT also run `sofi -tray-daemon`. Both are system
-  -- tray hosts, and exactly one process on a session bus can own
-  -- org.kde.StatusNotifierWatcher -- whichever starts second finds the name
-  -- taken and shows an empty tray. Notifications are unaffected;
-  -- `sofi -notification-daemon` should keep running either way.
-  --
-  -- Worth knowing about stacking, because it is not obvious and nothing warns
-  -- you: saber's panel sits on the layer-shell TOP layer, so a fullscreen
-  -- window covers it, while saber's dash and spread sit on OVERLAY and draw
-  -- ABOVE a fullscreen window. Both are hidden by the lock screen.
-  --
-  -- saber is NOT required. Without it these three bindings do nothing.
-  -- =========================================================================
-  dash = "saberctl dash",
-  spread = "saberctl spread",
-  panel = "saberctl toggle",
 
   -- Laptop Media Controls
   -- Volume goes through `pactl`, so these work unchanged wherever PulseAudio or
@@ -916,17 +844,6 @@ bindings = {
 
     -- launching
     ["L+Return"] = "action-terminal",
-    ["L+Space"] = "action-menu",
-    ["L+w"] = "action-windows",
-    ["L+e"] = "action-sheets",
-    ["L+n"] = "action-notifications",
-
-    -- the saber panel. Shifted counterparts of the sofi keys above, so the
-    -- two companions stay on one mental map: unshifted summons a sofi
-    -- surface, shifted drives the panel that is already on screen.
-    ["LS+d"] = "action-dash",
-    ["LS+e"] = "action-spread",
-    ["LS+p"] = "action-panel",
 
     -- laptop media keys (unmodified)
     ["0+XF86AudioRaiseVolume"]  = "action-vol-up",
@@ -1077,10 +994,10 @@ bindings = {
     -- SHEETS AND GROUPS. `sheet-show-*` reveals windows on the current sheet
     -- that are hidden or marked invisible; `workspace-*` acts across every
     -- sheet on the output.
-    -- `L+n` is taken by action-notifications above. Moved to the bracket pair
-    -- so both directions stay adjacent. (A key bound twice in this table is no
-    -- longer a warning and no longer keeps the first: Lua keeps the LAST
-    -- assignment, silently, so a stray duplicate quietly wins.)
+    -- The inhabited-sheet pair sits on the bracket keys so both directions
+    -- stay adjacent. (A key bound twice in this table is no longer a warning
+    -- and no longer keeps the first: Lua keeps the LAST assignment, silently,
+    -- so a stray duplicate quietly wins.)
     ["L+bracketright"] = "workspace-switch-to-sheet-next-inhabited",
     ["L+bracketleft"]  = "workspace-switch-to-sheet-prev-inhabited",
     ["LS+n"]          = "workspace-cycle-next",

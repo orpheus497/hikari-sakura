@@ -34,8 +34,8 @@ Besides managing windows, **hikari** draws its own top bar and its own screen
 locker in-process; both are themed from the same *palette* as everything else.
 See **TOP BAR** and the *Lock screen* section below.
 
-The desktop environment is completed by three sibling projects, each installed
-and configured independently:
+The desktop environment is completed by one sibling project, installed and
+configured independently:
 
 * **sakura** -- the display manager, and the source of the second half of the
   desktop's name. A FreeBSD-only TUI login manager that runs on a virtual
@@ -44,35 +44,14 @@ and configured independently:
   the two installed session entries; see **FILES**.
   <https://github.com/orpheus497/sakura>
 
-* **sofi** -- the shell, and everything summoned rather than always present. One
-  binary providing the control panel, application menu, sheet switcher, volume
-  and network panes, notification daemon and history, and message toasts. Under
-  this compositor each is a *zwlr\_layer\_shell\_v1* surface, bound at version 4;
-  sofi also has *xcb* and *xdg-shell* fallbacks for other environments. The
-  default configuration binds four keys to it -- the control panel on *L+w* is
-  the entry point to the surfaces that have no key of their own -- and its sheet
-  switcher is a client of the control socket described under **CONTROL SOCKET**.
-  <https://github.com/orpheus497/sofi>
-
-* **saber** -- the panel, and the one surface that is always there. A persistent
-  vertical launcher in the tradition of the Unity 7 launcher, carrying running
-  indicators, quicklists, an application dash, a window spread, the system tray
-  and session controls in one always-present column. It reserves an exclusive
-  zone, so views tile beside it rather than under it, and it reads the
-  compositor's sheets over the same control socket. FreeBSD only, and written
-  for this compositor alone. The default configuration binds three keys to it.
-  <https://github.com/orpheus497/saber>
-
-**sofi** and **saber** divide by persistence: every sofi surface is summoned,
-does one job and dismisses, reserving no space; saber stays for the whole
-session and reserves its column. The persistent system tray is saber's --
-**sofi -tray-daemon** is retained for sessions without saber and draws no
-surface of its own -- and since exactly one process on a session bus may own
-*org.kde.StatusNotifierWatcher*, run one tray host, not both. The system status
-readout stays in this compositor's own top bar and is duplicated by neither.
-
-Neither is required: **hikari** runs on its own, and any layer-shell client or
-display manager works in their place.
+It is not required: **hikari** runs on its own, any display manager works in its
+place, and so does starting a session from a console login with the bundled
+**start-hikari** wrapper, which provides *XDG\_RUNTIME\_DIR* when the login did
+not and, where **dbus-run-session** is installed, a session bus as well; see
+**FILES**. Everything else on the session is an ordinary Wayland client --
+panels, docks, launchers, notification daemons and wallpaper setters speak
+*wlr-layer-shell*; see **PANELS AND DOCKS**. The system status readout stays in
+this compositor's own top bar.
 
 The following options are available:
 
@@ -2020,11 +1999,12 @@ PANELS AND DOCKS
 ================
 
 Panels, docks, notification daemons and wallpaper setters are ordinary clients
-speaking *wlr-layer-shell* (**saber**, **waybar**, **mako**, **swaybg**). The
-protocol is compiled in with *WITH\_LAYERSHELL*, which is on by default. There
-is nothing to configure for them in *hikari.lua*: a layer-shell client asks for
-its position, its size and its share of the screen over the protocol, and the
-compositor honours the request.
+speaking *wlr-layer-shell* (**waybar**, **mako**, **swaybg**). The protocol is
+compiled in with *WITH\_LAYERSHELL*, which is on by default, and
+*zwlr\_layer\_shell\_v1* is offered at version 4. There is nothing to configure
+for them in *hikari.lua*: a layer-shell client asks for its position, its size
+and its share of the screen over the protocol, and the compositor honours the
+request.
 
 A layer surface names the output it wants and is placed there; one that names
 none is placed on the output holding the focused workspace. Each of the
@@ -2040,11 +2020,11 @@ above them. The band worth knowing about is **fullscreen**, which sits between
 the two upper layers: a view entering fullscreen is promoted into it, so it
 covers a panel on *top* but **not** a surface on *overlay*. A client picks its
 own layer, so that choice is what decides whether a fullscreen window covers it
--- **saber**, for instance, puts its panel on *top* and its dash and window
-spread on *overlay*, and is covered on one and not the other. X11
-override-redirect surfaces (menus, tooltips and dropdowns from XWayland
-clients) are promoted into the same band, above the fullscreen views within it,
-so a menu belonging to a fullscreen window is not buried under it.
+-- a panel normally sits on *top* and is covered, while a pop-up launcher or
+application grid normally sits on *overlay* and is not. X11 override-redirect
+surfaces (menus, tooltips and dropdowns from XWayland clients) are promoted into
+the same band, above the fullscreen views within it, so a menu belonging to a
+fullscreen window is not buried under it.
 
 Nothing from any layer is shown over the lock screen. Entering lock mode
 disables *bottom*, *views*, *top*, *fullscreen* and *overlay*, and disabling a
@@ -2068,9 +2048,9 @@ workspace it arrives at has nothing to focus -- so a tiled window is never
 placed under a panel, and a centred window is centred in what is actually
 visible.
 
-A surface with a zero exclusive zone -- what an overlay launcher such as
-**sofi** uses, and what a wallpaper setter uses -- reserves nothing and draws
-over the layout on purpose.
+A surface with a zero exclusive zone -- what an overlay launcher uses, and what
+a wallpaper setter uses -- reserves nothing and draws over the layout on
+purpose.
 
 Re-tiling when the reserved space changes
 -----------------------------------------
@@ -2240,8 +2220,6 @@ and nothing to call.
 The control socket is that missing surface, and is deliberately kept as small as
 it can be. It is not a general scripting interface and will not grow into one:
 anything expressible as a Wayland protocol belongs in a Wayland protocol.
-
-**sofi -show sheets** is its reference client.
 
 The socket lives at *$XDG\_RUNTIME\_DIR/hikari.sock* with mode **0600**, and is
 unlinked when the compositor exits. It is served from the compositor's own event
@@ -2495,10 +2473,8 @@ normal user and is not rejected.
 SEE ALSO
 ========
 
-**sofi**(1), cwm(1), libinput(1), xkeyboard-config(7), strftime(3),
-backlight(8), mixer(8), devd(8), acpi(4)
+cwm(1), libinput(1), xkeyboard-config(7), strftime(3), backlight(8), mixer(8),
+devd(8), acpi(4)
 
 * Hikari Sakura -- <https://github.com/orpheus497/hikari-sakura>
 * sakura, the display manager -- <https://github.com/orpheus497/sakura>
-* sofi, the shell -- <https://github.com/orpheus497/sofi>
-* saber, the panel -- <https://github.com/orpheus497/saber>
